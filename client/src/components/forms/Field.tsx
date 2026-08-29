@@ -15,6 +15,11 @@ export interface FieldShellProps {
   className?: string;
 }
 
+/** The id of a field's hint/error `<p>`, for wiring `aria-describedby`. */
+export function fieldMessageId(fieldId: string): string {
+  return `${fieldId}-message`;
+}
+
 export function FieldShell({
   label,
   htmlFor,
@@ -36,9 +41,15 @@ export function FieldShell({
       </label>
       {children}
       {error ? (
-        <p className="text-xs text-danger-700">{error}</p>
+        <p id={fieldMessageId(htmlFor)} className="text-xs text-danger-700">
+          {error}
+        </p>
       ) : (
-        hint && <p className="text-xs text-ink-muted">{hint}</p>
+        hint && (
+          <p id={fieldMessageId(htmlFor)} className="text-xs text-ink-muted">
+            {hint}
+          </p>
+        )
       )}
     </div>
   );
@@ -64,10 +75,48 @@ export function TextField({ label, hint, error, required, ...input }: TextFieldP
       <input
         id={id}
         aria-invalid={error ? true : undefined}
-        aria-describedby={undefined}
+        aria-describedby={error || hint ? fieldMessageId(id) : undefined}
         className={cn(CONTROL, error ? 'border-danger-200' : 'border-line')}
         required={required}
         {...input}
+      />
+    </FieldShell>
+  );
+}
+
+export interface TextAreaFieldProps
+  extends Omit<
+    React.TextareaHTMLAttributes<HTMLTextAreaElement>,
+    'id' | 'className'
+  > {
+  label: string;
+  hint?: ReactNode;
+  error?: ReactNode;
+}
+
+/** Multiline counterpart to TextField — same label/hint/error wiring. */
+export function TextAreaField({
+  label,
+  hint,
+  error,
+  required,
+  rows = 3,
+  ...textarea
+}: TextAreaFieldProps) {
+  const id = useId();
+  return (
+    <FieldShell label={label} htmlFor={id} hint={hint} error={error} required={required}>
+      <textarea
+        id={id}
+        rows={rows}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error || hint ? fieldMessageId(id) : undefined}
+        className={cn(
+          'w-full rounded-control border bg-card px-3 py-2 text-sm text-ink placeholder:text-ink-subtle disabled:opacity-50',
+          error ? 'border-danger-200' : 'border-line',
+        )}
+        required={required}
+        {...textarea}
       />
     </FieldShell>
   );
@@ -105,6 +154,7 @@ export function SelectField({
       <select
         id={id}
         aria-invalid={error ? true : undefined}
+        aria-describedby={error || hint ? fieldMessageId(id) : undefined}
         className={cn(CONTROL, error ? 'border-danger-200' : 'border-line')}
         required={required}
         {...select}

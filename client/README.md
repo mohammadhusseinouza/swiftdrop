@@ -97,6 +97,37 @@ calls, no business calculations, money is always a display string.
 
 ## Status
 
-Phase 10 complete (10.1 bootstrap · 10.2 router + layouts · 10.3 Redux store ·
-10.4 RTK Query · 10.5 auth bootstrap + guards · 10.6 shared UI + design
-system). Real pages (Phase 11+) come next.
+Phase 10 complete. Phase 11.1 (Login page), 11.2 (Management Shell), 11.3
+(Orders List, incl. its correction against the completed Phase 6.3 contract)
+and 11.4 (Create Order) complete. Phase 11.5 (Order Detail) next.
+
+Create Order (`src/pages/management/orders/create/`) posts the real
+`POST /api/v1/orders`; "Create & assign" then calls `POST /orders/:id/assign`
+(two non-atomic requests — a failed assignment leaves the created order and
+offers a retry that never re-POSTs). Money stays a string end-to-end; the
+"remaining / to collect" preview uses exact bigint-cents arithmetic
+(`createOrderFinancialPreview.ts`) and is display-only — the server recomputes
+every total. The shared server-backed picker `ServerSearchSelect` (+
+`FilterPopover`) now lives in `src/components/forms/`.
+
+The Orders list (`src/pages/management/orders/`) is fully backend-driven:
+URL search params are the source of truth for search / filters / sort / page
+(`ordersListParams.ts`); all querying — including the payment-method filter,
+the delivered/undelivered filter, and column sorting — is server-side via
+`useGetOrdersQuery`; nothing is filtered or sorted in the browser.
+`ordersUi.selectedOrderIds` holds only the current bulk selection.
+`createdFrom` / `createdTo` are passed as bare `YYYY-MM-DD` (the backend treats
+a bare `createdTo` as the whole UTC day); there is no client end-of-day math.
+
+The only remaining Orders workflow gap is the absence of an atomic bulk
+"mark ready" endpoint, so there is no bulk Mark Ready control (single-order
+ready lives in Order Detail, Phase 11.5).
+
+Forms use React Hook Form + Zod (`@hookform/resolvers`).
+
+The Management shell (`src/layouts/ManagementLayout.tsx`) composes the shared
+`AppSidebar` + `TopNavbar` + `UserMenu` with permission-aware navigation
+(`src/features/navigation/managementNavigation.ts` — one shared permission
+mapping, asserted equal to the route guards), the `ui` slice
+(`sidebarCollapsed` / `mobileNavigationOpen`), and `useLogout`. Route pages are
+still placeholders.

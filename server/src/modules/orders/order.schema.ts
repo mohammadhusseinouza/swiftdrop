@@ -29,6 +29,27 @@ export const OrderFinancialStatusSchema = z.enum(["PENDING", "FINALIZED", "REVIE
 // IS NULL. Never inferred from OrderStatus.
 export const AssignmentStatusSchema = z.enum(["ASSIGNED", "UNASSIGNED"]);
 
+// Coarse "has this Order been delivered?" filter (Phase 6.3 correction) —
+// DELIVERED means status === DELIVERED; UNDELIVERED means status !== DELIVERED
+// (every other status, INCLUDING CANCELLED / RETURNED_* — it is NOT a synonym
+// for "active"). Independent of, and AND-combinable with, the exact `status`
+// filter: status=DELIVERED&deliveryStatus=UNDELIVERED is a valid empty result.
+export const DeliveryStatusSchema = z.enum(["DELIVERED", "UNDELIVERED"]);
+
+// Server-side sort allowlist (Phase 6.3 correction). Only these fields may be
+// sorted; an unknown value is a 400, never passed to Prisma. Every entry maps
+// to a real orders scalar column in order.service.ts's buildOrderBy().
+export const OrderSortBySchema = z.enum([
+  "createdAt",
+  "orderNumber",
+  "status",
+  "orderAmount",
+  "deliveryFee",
+  "amountToCollect",
+  "deliveredAt",
+]);
+export const SortOrderSchema = z.enum(["asc", "desc"]);
+
 const uuid = z.string().uuid();
 
 // Same safe boolean-query pattern as Phase 5 (customers.isActive,
@@ -52,11 +73,15 @@ const ROLLOVER_CHECK_PATTERN = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}):(\d{
 // base Date parse. Non-UTC-offset datetime input (rare for this filter)
 // is intentionally left to the base check only — disambiguating a
 // timezone-shifted calendar day from true rollover is out of scope here.
-function parseStrictDate(raw: string, ctx: z.RefinementCtx): Date {
+// Validates (does NOT transform) — keeps the raw string so order.service.ts
+// can apply the correct boundary per input form (Phase 6.3 correction):
+//   bare "2026-08-01"  -> gte 2026-08-01T00:00:00Z  /  lt 2026-08-02T00:00:00Z
+//   explicit datetime  -> literal instant (unchanged approved contract)
+function validateStrictDate(raw: string, ctx: z.RefinementCtx): void {
   const date = new Date(raw);
   if (Number.isNaN(date.getTime())) {
     ctx.addIssue({ code: "custom", message: "Invalid date" });
-    return z.NEVER;
+    return;
   }
 
   const match = ROLLOVER_CHECK_PATTERN.exec(raw);
@@ -71,14 +96,11 @@ function parseStrictDate(raw: string, ctx: z.RefinementCtx): Date {
       (ss !== undefined && date.getUTCSeconds() !== Number(ss));
     if (rolledOver) {
       ctx.addIssue({ code: "custom", message: "Invalid calendar date" });
-      return z.NEVER;
     }
   }
-
-  return date;
 }
 
-const strictDateSchema = z.string().transform(parseStrictDate);
+const strictDateSchema = z.string().superRefine(validateStrictDate);
 
 export const ListOrdersQuerySchema = z
   .object({
@@ -94,17 +116,29 @@ export const ListOrdersQuerySchema = z
     customerId: uuid.optional(),
     driverId: uuid.optional(),
     areaId: uuid.optional(),
+    // Matches an Order when EITHER prepaid_payment_method_id OR
+    // collection_payment_method_id equals this id — "Orders involving this
+    // payment method" (Phase 6.3 correction; an Order legitimately has two
+    // independent method references per requirements.md §14).
+    paymentMethodId: uuid.optional(),
 
     needsFinancialReview: booleanQueryParam.optional(),
     assignmentStatus: AssignmentStatusSchema.optional(),
+    deliveryStatus: DeliveryStatusSchema.optional(),
 
     createdFrom: strictDateSchema.optional(),
     createdTo: strictDateSchema.optional(),
+
+    sortBy: OrderSortBySchema.optional(),
+    sortOrder: SortOrderSchema.optional().default("desc"),
   })
-  .refine((data) => !data.createdFrom || !data.createdTo || data.createdFrom.getTime() <= data.createdTo.getTime(), {
-    message: "createdFrom must be before or equal to createdTo",
-    path: ["createdFrom"],
-  });
+  .refine(
+    (data) =>
+      !data.createdFrom ||
+      !data.createdTo ||
+      new Date(data.createdFrom).getTime() <= new Date(data.createdTo).getTime(),
+    { message: "createdFrom must be before or equal to createdTo", path: ["createdFrom"] }
+  );
 
 export type ListOrdersQuery = z.infer<typeof ListOrdersQuerySchema>;
 

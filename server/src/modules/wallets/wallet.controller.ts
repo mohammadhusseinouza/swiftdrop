@@ -1,7 +1,21 @@
 import { RequestHandler } from "express";
-import { getWalletDetail, listWallets, listWalletTransactions } from "./wallet.service";
-import type { ListWalletsQuery, ListWalletTransactionsQuery } from "./wallet.schema";
-import type { WalletDetail, WalletSummary, WalletTransactionEntry } from "./wallet.types";
+import {
+  getWalletCustomerSummaries,
+  getWalletDetail,
+  listWallets,
+  listWalletTransactions,
+} from "./wallet.service";
+import type {
+  ListWalletsQuery,
+  ListWalletTransactionsQuery,
+  WalletCustomerSummariesQuery,
+} from "./wallet.schema";
+import type {
+  WalletCustomerSummaryEntry,
+  WalletDetail,
+  WalletSummary,
+  WalletTransactionEntry,
+} from "./wallet.types";
 import type { ApiListResponse, ApiSuccessResponse } from "../../shared/types/api-response";
 
 export const listWalletsController: RequestHandler<Record<string, never>, ApiListResponse<WalletSummary>> = async (
@@ -21,6 +35,19 @@ export const listWalletsController: RequestHandler<Record<string, never>, ApiLis
       data: items,
       meta: { page: query.page, limit: query.limit, total, totalPages },
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getWalletCustomerSummariesController: RequestHandler<
+  Record<string, never>,
+  ApiSuccessResponse<WalletCustomerSummaryEntry[]>
+> = async (req, res, next) => {
+  try {
+    const query = req.query as unknown as WalletCustomerSummariesQuery;
+    const data = await getWalletCustomerSummaries(query.customerIds);
+    res.json({ success: true, data });
   } catch (error) {
     next(error);
   }

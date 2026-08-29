@@ -8,6 +8,12 @@ export interface PageHeaderProps {
   eyebrow?: ReactNode;
   /** Primary + secondary action slot (stacks below the title on mobile). */
   actions?: ReactNode;
+  /**
+   * Title scale. `'md'` (default, `text-xl`) keeps every existing page
+   * unchanged; `'lg'` (`text-2xl`) is for landing/index pages that want a
+   * stronger heading (e.g. Orders).
+   */
+  size?: 'md' | 'lg';
   className?: string;
 }
 
@@ -17,6 +23,7 @@ export function PageHeader({
   description,
   eyebrow,
   actions,
+  size = 'md',
   className,
 }: PageHeaderProps) {
   return (
@@ -32,7 +39,14 @@ export function PageHeader({
             {eyebrow}
           </p>
         )}
-        <h1 className="truncate text-xl font-semibold text-ink">{title}</h1>
+        <h1
+          className={cn(
+            'truncate font-semibold tracking-tight text-ink',
+            size === 'lg' ? 'text-2xl' : 'text-xl',
+          )}
+        >
+          {title}
+        </h1>
         {description && (
           <p className="mt-1 text-sm text-ink-muted">{description}</p>
         )}

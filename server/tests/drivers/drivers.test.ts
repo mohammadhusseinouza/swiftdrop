@@ -220,8 +220,17 @@ describe("Drivers backend (Phase 5.2)", () => {
       assert.equal(res.body.data.isActive, true);
       assert.equal(res.body.data.user.id, linkable.id);
       assert.equal(res.body.data.user.email, linkable.email);
-      assert.ok(res.body.data.cashAccount, "expected a cash account to be created");
-      assert.equal(res.body.data.cashAccount.currentBalance, "0");
+      // Phase 11.7 correction: cash is NOT in the generic Driver DTO.
+      assert.equal("cashAccount" in res.body.data, false);
+      assert.deepEqual(Object.keys(res.body.data.operationalSummary).sort(), [
+        "activeOrders",
+        "completedToday",
+        "outForDelivery",
+      ]);
+      const account = await prisma.driver_cash_accounts.findUniqueOrThrow({
+        where: { driver_id: res.body.data.id },
+      });
+      assert.equal(account.current_balance.toString(), "0");
     });
 
     test("non-DRIVER-role user link rejected with 400", async () => {
@@ -459,7 +468,8 @@ describe("Drivers backend (Phase 5.2)", () => {
       const res = await request(app).get(`/api/v1/drivers/${created.body.data.id}`).set(auth(tokens.finance));
       assert.equal(res.status, 200);
       assert.equal(res.body.data.id, created.body.data.id);
-      assert.ok("cashAccount" in res.body.data);
+      assert.equal("cashAccount" in res.body.data, false);
+      assert.ok("operationalSummary" in res.body.data);
       assert.ok("user" in res.body.data);
     });
 
@@ -477,7 +487,7 @@ describe("Drivers backend (Phase 5.2)", () => {
       assert.equal(res.body.error.code, "VALIDATION_ERROR");
     });
 
-    test("response never exposes auth/private fields; user and cash summaries are safe", async () => {
+    test("response never exposes auth/private/financial fields; user + operational summaries only", async () => {
       const linkable = await newLinkableDriverUser();
       const created = await createDriverViaApi(tokens.admin, newDriverPayload(linkable.id));
       assert.equal(created.status, 201);
@@ -488,6 +498,9 @@ describe("Drivers backend (Phase 5.2)", () => {
       assert.doesNotMatch(serialized, /password_hash/i);
       assert.doesNotMatch(serialized, /refresh_token/i);
       assert.doesNotMatch(serialized, /auth_sessions/i);
+      // Phase 11.7 correction: no cash / balance in the generic Driver DTO.
+      assert.equal("cashAccount" in res.body.data, false);
+      assert.doesNotMatch(serialized, /currentBalance/i);
 
       assert.deepEqual(Object.keys(res.body.data.user).sort(), [
         "email",
@@ -497,7 +510,11 @@ describe("Drivers backend (Phase 5.2)", () => {
         "lastName",
         "phone",
       ]);
-      assert.deepEqual(Object.keys(res.body.data.cashAccount).sort(), ["currentBalance"]);
+      assert.deepEqual(Object.keys(res.body.data.operationalSummary).sort(), [
+        "activeOrders",
+        "completedToday",
+        "outForDelivery",
+      ]);
     });
   });
 
@@ -528,7 +545,7 @@ describe("Drivers backend (Phase 5.2)", () => {
       assert.equal(res.body.error.code, "VALIDATION_ERROR");
     });
 
-    test("immutable/internal fields cannot be changed via PATCH (driver_number, user link)", async () => {
+    test("immutable/internal fields in PATCH body are rejected (strict); driver_number + user link stay fixed", async () => {
       const linkable = await newLinkableDriverUser();
       const otherUser = await newLinkableDriverUser();
       const created = await createDriverViaApi(tokens.admin, newDriverPayload(linkable.id));
@@ -536,26 +553,38 @@ describe("Drivers backend (Phase 5.2)", () => {
       const driverId = created.body.data.id;
       const originalNumber = created.body.data.driverNumber;
 
-      const res = await request(app)
+      // Phase 11.7 correction: the update schema is strict — an unknown /
+      // protected key is a 400, never silently ignored.
+      for (const body of [
+        { driverNumber: "SHOULD-NOT-APPLY", isActive: false },
+        { userId: otherUser.id },
+        { id: "00000000-0000-0000-0000-000000000000" },
+        { roleCode: "ADMIN" },
+        { permissions: ["drivers.manage"] },
+        { password: "hunter2xyz" },
+        { passwordHash: "x" },
+        { cashBalance: "999.00" },
+      ]) {
+        const res = await request(app).patch(`/api/v1/drivers/${driverId}`).set(auth(tokens.admin)).send(body);
+        assert.equal(res.status, 400, `expected 400 for PATCH body ${JSON.stringify(body)}`);
+        assert.equal(res.body.error.code, "VALIDATION_ERROR");
+      }
+
+      // The one legitimate operational toggle still works.
+      const ok = await request(app)
         .patch(`/api/v1/drivers/${driverId}`)
         .set(auth(tokens.admin))
-        .send({
-          id: "00000000-0000-0000-0000-000000000000",
-          driverNumber: "SHOULD-NOT-APPLY",
-          userId: otherUser.id,
-          createdAt: "2000-01-01T00:00:00.000Z",
-          isActive: false,
-        });
+        .send({ isActive: false });
+      assert.equal(ok.status, 200);
+      assert.equal(ok.body.data.isActive, false);
+      assert.equal(ok.body.data.driverNumber, originalNumber);
 
-      assert.equal(res.status, 200);
-      assert.equal(res.body.data.id, driverId);
-      assert.equal(res.body.data.driverNumber, originalNumber, "driverNumber must remain immutable");
-      assert.equal(res.body.data.user.id, linkable.id, "user link must remain immutable");
-      assert.equal(res.body.data.isActive, false, "the one whitelisted field must still apply");
-
-      const row = await prisma.drivers.findUniqueOrThrow({ where: { id: driverId } });
+      const row = await prisma.drivers.findUniqueOrThrow({ where: { id: driverId }, include: { users: true } });
       assert.equal(row.driver_number, originalNumber);
       assert.equal(row.user_id, linkable.id);
+      // role escalation attempt never touched the linked user's role
+      const roleRow = await prisma.roles.findUniqueOrThrow({ where: { id: row.users.role_id } });
+      assert.equal(roleRow.code, "DRIVER");
     });
 
     test("nonexistent driver -> 404", async () => {

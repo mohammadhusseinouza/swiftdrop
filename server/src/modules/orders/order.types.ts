@@ -80,11 +80,76 @@ export interface OrderStatusHistoryEntry {
   createdAt: string;
 }
 
+// ============================================================
+// Authoritative per-Order financial allocation (Phase 11.5 correction).
+//
+// NET amounts computed from ORDER-SCOPED ledger rows only — NEVER derived
+// from orderType + amountToCollect + remaining amounts (that would be wrong
+// for prepayments, collection differences, reversals and adjustments):
+//   companyAmount        = SUM(company_financial_transactions.amount) WHERE order_id
+//                          (amount is SIGNED — a REVERSAL row is the negated
+//                          original; an order-linked ADJUSTMENT is signed too —
+//                          so a plain SUM nets correctly, exactly like
+//                          finance-summary.service.ts's getCompanyRevenueFlow)
+//   customerWalletAmount = SUM(credit - debit) over wallet_transactions WHERE order_id
+//                          (ORDER_CREDIT adds; its REVERSAL — which copies the
+//                          original's order_id — subtracts; customer-level
+//                          manual ADJUSTMENT rows carry no order_id and are
+//                          correctly excluded)
+//
+// Both are money strings. "0" means "no ledger row has been posted for this
+// Order yet" — ledgers are only written at delivery finalization / collection-
+// difference resolution, so a not-yet-delivered Order, or an all-prepaid
+// exact delivery (which legitimately posts NO wallet/company rows), both
+// report "0". These are the authoritative LEDGER-POSTED amounts for the
+// Order, not a theoretical lifetime-ownership projection.
+// ============================================================
+export interface OrderFinancialAllocation {
+  companyAmount: string;
+  customerWalletAmount: string;
+}
+
+export type OrderFinancialEventLedger = "DRIVER_CASH" | "WALLET" | "COMPANY_FINANCE";
+
+export interface OrderFinancialEventActor {
+  id: string;
+  firstName: string;
+  lastName: string;
+}
+
+// One normalized entry per persisted order-scoped ledger row. Raw ledger
+// internals (idempotency keys, running account balances) are deliberately
+// never included. `ledger` values are safe symbolic names — never the
+// underlying table names.
+export interface OrderFinancialEvent {
+  id: string;
+  ledger: OrderFinancialEventLedger;
+  // COLLECTION | ORDER_CREDIT | DELIVERY_FEE_REVENUE |
+  // COMPANY_ORDER_PRODUCT_REVENUE | ADJUSTMENT | REVERSAL
+  type: string;
+  // Normalized net effect on that ledger for this Order.
+  direction: "CREDIT" | "DEBIT";
+  // Positive magnitude.
+  amount: string;
+  // Signed net effect (negative for a DEBIT). A REVERSAL row carries a
+  // DEBIT direction + the negated magnitude, so "wallet credit reversed" /
+  // "company revenue reversed" render from `type` + `direction` + `amount`
+  // alone — the internal reversal_of_id relation stays backend-only.
+  signedAmount: string;
+  actor: OrderFinancialEventActor | null;
+  notes: string | null;
+  occurredAt: string;
+}
+
 export interface OrderDetail {
   id: string;
   orderNumber: string;
   trackingCode: string;
   orderType: string;
+  // Payment TYPE (CASH_ON_DELIVERY / ALREADY_PAID / PARTIALLY_PAID) — additive
+  // in the Phase 11.5 correction. The list DTO (OrderSummary) already carried
+  // it; the detail DTO now does too. Distinct from payment METHOD.
+  paymentType: string;
   status: string;
   financialStatus: string;
 
@@ -92,6 +157,9 @@ export interface OrderDetail {
   receiver: OrderReceiverSnapshot;
   package: OrderPackageInfo;
   financial: OrderFinancialSummary;
+
+  // Authoritative order-scoped ledger allocation (see the type comment above).
+  financialAllocation: OrderFinancialAllocation;
 
   prepaidPaymentMethod: OrderPaymentMethodSummary | null;
   collectionPaymentMethod: OrderPaymentMethodSummary | null;
@@ -120,6 +188,14 @@ export interface OrderDetail {
   // attemptNumber ascending (Phase 7.4) — empty for any Order that has
   // never gone OUT_FOR_DELIVERY, including every pre-Phase-7.4 Order.
   deliveryAttempts: DeliveryAttemptEntry[];
+
+  // Order-scoped financial ledger events (Driver Cash collection, Customer
+  // Wallet credit/reversal, Company revenue/reversal/adjustment), oldest-first
+  // — same chronological convention as statusHistory/assignmentHistory.
+  // One entry per persisted ledger row; empty until the Order is financially
+  // finalized. Composed by the frontend into the operational Order Timeline
+  // alongside status/assignment/attempt events (page-structure §6.7).
+  financialEvents: OrderFinancialEvent[];
 }
 
 // ============================================================
@@ -223,6 +299,11 @@ export interface OrderSummary {
   orderType: string;
   status: string;
   financialStatus: string;
+  // Payment TYPE (CASH_ON_DELIVERY / ALREADY_PAID / PARTIALLY_PAID) for the
+  // approved Management Orders "Payment Type" column (Phase 6.3 correction).
+  // Distinct from payment METHOD — the list DTO deliberately does NOT carry
+  // the prepaid/collection payment-method objects.
+  paymentType: string;
 
   customer: OrderSummaryCustomer;
 

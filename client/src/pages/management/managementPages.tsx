@@ -9,18 +9,16 @@ const mgmt = (title: string, phase: string) => (
 );
 
 export const ManagementDashboardPage = () => mgmt('Dashboard', 'Phase 11.11');
-export const ManagementOrdersPage = () => mgmt('Orders', 'Phase 11.3');
-export const ManagementOrderCreatePage = () => mgmt('Create Order', 'Phase 11.4');
-export const ManagementOrderDetailPage = () => mgmt('Order Detail', 'Phase 11.5');
-export const ManagementCustomersPage = () => mgmt('Customers', 'Phase 11.6');
-export const ManagementCustomerDetailPage = () =>
-  mgmt('Customer Detail', 'Phase 11.6');
-export const ManagementDriversPage = () => mgmt('Drivers', 'Phase 11.7');
-export const ManagementDriverDetailPage = () =>
-  mgmt('Driver Detail', 'Phase 11.7');
-export const ManagementWalletsPage = () => mgmt('Customer Wallets', 'Phase 11.8');
-export const ManagementWalletDetailPage = () =>
-  mgmt('Customer Wallet Detail', 'Phase 11.8');
+// Create Order (`/management/orders/new`) is a real page — see
+// pages/management/orders/create/CreateOrderPage.tsx (Phase 11.4).
+// Order Detail (`/management/orders/:id`) is a real page — see
+// pages/management/orders/detail/OrderDetailPage.tsx (Phase 11.5).
+// Customers + Customer Detail are real pages — see
+// pages/management/customers/ (Phase 11.6).
+// Drivers + Driver Detail are real pages — see
+// pages/management/drivers/ (Phase 11.7).
+// Customer Wallets + Wallet Detail are real pages — see
+// pages/management/wallets/ (Phase 11.8).
 export const ManagementPayoutsPage = () => mgmt('Customer Payouts', 'Phase 11.9');
 export const ManagementDriverSettlementsPage = () =>
   mgmt('Driver Settlements', 'Phase 11.10');

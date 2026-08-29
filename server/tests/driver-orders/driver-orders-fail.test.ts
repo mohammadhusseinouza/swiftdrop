@@ -682,7 +682,17 @@ describe("Driver Portal — Failed Delivery (Phase 7.4)", () => {
       assert.doesNotMatch(serialized, /password_hash/i);
       assert.doesNotMatch(serialized, /auth_sessions/i);
       assert.doesNotMatch(serialized, /driver_cash_account/i);
-      assert.doesNotMatch(serialized, /wallet/i); // 69
+      // 69 — no RAW ledger rows / ledger internals leak into the Management
+      // OrderDetail. The Phase 11.5 correction deliberately adds authoritative
+      // order-scoped `financialAllocation.customerWalletAmount` /
+      // `financialAllocation.companyAmount` + normalized `financialEvents`
+      // (requirements §6.4 "Customer Wallet Amount" / "Company Amount"), so a
+      // bare /wallet/i substring match is no longer the right assertion —
+      // guard the actual leak surface instead (matches orders.test.ts #58).
+      assert.doesNotMatch(serialized, /wallet_transactions/i);
+      assert.doesNotMatch(serialized, /company_financial_transactions/i);
+      assert.doesNotMatch(serialized, /idempotency/i);
+      assert.doesNotMatch(serialized, /balance_before|balanceBefore|balance_after|balanceAfter/i);
     });
   });
 

@@ -776,12 +776,19 @@ describe("Orders list backend (Phase 6.3 — List / Search / Filters / Paginatio
           "orderAmount",
           "orderNumber",
           "orderType",
+          "paymentType",
           "receiverArea",
           "receiverName",
           "receiverPhone",
           "status",
           "trackingCode",
         ]
+      );
+
+      // paymentType is a plain enum string, not a payment-method object.
+      assert.equal(typeof row.paymentType, "string");
+      assert.ok(
+        ["CASH_ON_DELIVERY", "ALREADY_PAID", "PARTIALLY_PAID"].includes(row.paymentType)
       );
 
       // 54. money as strings

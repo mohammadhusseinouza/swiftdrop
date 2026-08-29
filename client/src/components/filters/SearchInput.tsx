@@ -10,6 +10,11 @@ export interface SearchInputProps {
   disabled?: boolean;
   /** Accessible label (visually hidden). */
   label?: string;
+  /**
+   * `'md'` (default) is the standard `h-10` field. `'lg'` is a taller, sunken
+   * field for a page's primary search (e.g. the Orders list).
+   */
+  size?: 'md' | 'lg';
   className?: string;
 }
 
@@ -24,16 +29,21 @@ export function SearchInput({
   placeholder = 'Search…',
   disabled = false,
   label = 'Search',
+  size = 'md',
   className,
 }: SearchInputProps) {
   const id = useId();
+  const large = size === 'lg';
   return (
     <div className={cn('relative', className)}>
       <label htmlFor={id} className="sr-only">
         {label}
       </label>
       <Search
-        className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-subtle"
+        className={cn(
+          'pointer-events-none absolute top-1/2 size-4 -translate-y-1/2 text-ink-subtle',
+          large ? 'left-3.5' : 'left-3',
+        )}
         aria-hidden="true"
       />
       <input
@@ -44,8 +54,9 @@ export function SearchInput({
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
         className={cn(
-          'h-10 w-full rounded-control border border-line bg-card pl-9 pr-9 text-sm',
+          'w-full rounded-control border border-line pr-9 text-sm',
           'text-ink placeholder:text-ink-subtle disabled:opacity-50',
+          large ? 'h-11 bg-sunken pl-10' : 'h-10 bg-card pl-9',
         )}
       />
       {value !== '' && (

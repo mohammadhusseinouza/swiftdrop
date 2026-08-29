@@ -173,8 +173,13 @@ describe("Customers backend (Phase 5.1)", () => {
       assert.equal(res.body.data.primaryPhone, payload.primaryPhone);
       assert.equal(res.body.data.email, payload.email);
       assert.equal(res.body.data.isActive, true);
-      assert.ok(res.body.data.wallet, "expected a wallet to be created");
-      assert.equal(res.body.data.wallet.availableBalance, "0");
+      // Phase 11.6 correction: the generic Customer DTO is management-safe
+      // OPERATIONAL data only — NO wallet balance (that is wallets.read-gated
+      // via GET /wallets/:customerId). The wallet still exists in the DB.
+      assert.ok(!("wallet" in res.body.data), "CustomerDetail must not expose wallet balance");
+      assert.deepEqual(res.body.data.orderSummary, { activeOrders: 0, deliveredOrders: 0, totalOrders: 0 });
+      const walletRow = await prisma.customer_wallets.findUnique({ where: { customer_id: res.body.data.id } });
+      assert.ok(walletRow && walletRow.available_balance.toString() === "0", "wallet still created atomically at balance 0");
     });
 
     test("created_by_id is derived from the authenticated actor and cannot be overridden by the client", async () => {
@@ -388,7 +393,13 @@ describe("Customers backend (Phase 5.1)", () => {
       assert.equal(res.status, 200);
       assert.equal(res.body.data.id, created.body.data.id);
       assert.ok("notes" in res.body.data);
-      assert.ok("wallet" in res.body.data);
+      // Phase 11.6 correction: no wallet field; an operational orderSummary instead.
+      assert.ok(!("wallet" in res.body.data));
+      assert.ok("orderSummary" in res.body.data);
+      assert.deepEqual(
+        Object.keys(res.body.data.orderSummary).sort(),
+        ["activeOrders", "deliveredOrders", "totalOrders"].sort()
+      );
     });
 
     test("nonexistent UUID -> 404", async () => {

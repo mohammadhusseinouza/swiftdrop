@@ -57,6 +57,14 @@ export interface WalletDetail {
   wallet: WalletAccountDetail;
 }
 
+// GET /api/v1/wallets/customer-summaries (Phase 11.6 correction) — one
+// entry per requested customerId that has a wallet. Money as strings.
+export interface WalletCustomerSummaryEntry {
+  customerId: string;
+  availableBalance: string;
+  pendingAmount: string;
+}
+
 export interface WalletTransactionOrderSummary {
   id: string;
   orderNumber: string;

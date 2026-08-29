@@ -63,7 +63,10 @@ export const updateCustomerController: RequestHandler<
   UpdateCustomerInput
 > = async (req, res, next) => {
   try {
-    const customer = await updateCustomer(req.params.id, req.body);
+    if (!req.actor) {
+      throw new AppError({ statusCode: 401, code: "UNAUTHORIZED", message: "Authentication required" });
+    }
+    const customer = await updateCustomer(req.params.id, req.body, req.actor.userId);
     res.json({ success: true, data: customer });
   } catch (error) {
     next(error);

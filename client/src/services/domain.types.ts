@@ -34,6 +34,8 @@ export interface OrderSummary {
   orderType: string;
   status: string;
   financialStatus: string;
+  /** CASH_ON_DELIVERY | ALREADY_PAID | PARTIALLY_PAID (Phase 6.3 correction). */
+  paymentType: string;
   customer: OrderCustomerSummary;
   receiverName: string;
   receiverPhone: string;
@@ -123,17 +125,45 @@ export interface DeliveryAttemptEntry {
   completedAt: string | null;
   createdAt: string;
 }
+/**
+ * Authoritative NET order-scoped ledger allocation (Phase 11.5 correction) —
+ * computed backend-side from order_id-linked ledger rows, NEVER derived from
+ * orderType + amountToCollect. Money strings; "0" means "no ledger row posted
+ * for this order yet" (an all-prepaid exact delivery legitimately posts none).
+ */
+export interface OrderFinancialAllocation {
+  companyAmount: string;
+  customerWalletAmount: string;
+}
+
+/** One normalized order-scoped ledger event (Phase 11.5 correction). */
+export interface OrderFinancialEvent {
+  id: string;
+  ledger: 'DRIVER_CASH' | 'WALLET' | 'COMPANY_FINANCE';
+  /** COLLECTION | ORDER_CREDIT | DELIVERY_FEE_REVENUE | COMPANY_ORDER_PRODUCT_REVENUE | ADJUSTMENT | REVERSAL */
+  type: string;
+  direction: 'CREDIT' | 'DEBIT';
+  amount: string;
+  signedAmount: string;
+  actor: { id: string; firstName: string; lastName: string } | null;
+  notes: string | null;
+  occurredAt: string;
+}
+
 export interface OrderDetail {
   id: string;
   orderNumber: string;
   trackingCode: string;
   orderType: string;
+  /** CASH_ON_DELIVERY | ALREADY_PAID | PARTIALLY_PAID (Phase 11.5 correction). */
+  paymentType: string;
   status: string;
   financialStatus: string;
   customer: OrderCustomerSummary & { isActive: boolean };
   receiver: OrderReceiverSnapshot;
   package: OrderPackageInfo;
   financial: OrderFinancialSummary;
+  financialAllocation: OrderFinancialAllocation;
   prepaidPaymentMethod: PaymentMethodRef | null;
   collectionPaymentMethod: PaymentMethodRef | null;
   currentDriver: { id: string; driverNumber: string; isActive: boolean } | null;
@@ -147,6 +177,7 @@ export interface OrderDetail {
   statusHistory: OrderStatusHistoryEntry[];
   assignmentHistory: OrderAssignmentHistoryEntry[];
   deliveryAttempts: DeliveryAttemptEntry[];
+  financialEvents: OrderFinancialEvent[];
 }
 export interface OrderHistoryResponse {
   orderId: string;
@@ -230,12 +261,30 @@ export interface CustomerSummary {
   area: { id: string; name: string } | null;
   hasPortalAccount: boolean;
   isActive: boolean;
+  /** Non-terminal orders for this customer (batched server-side, never N+1). */
+  activeOrders: number;
   createdAt: string;
   updatedAt: string;
 }
+export interface CustomerOrderSummary {
+  activeOrders: number;
+  deliveredOrders: number;
+  totalOrders: number;
+}
+/**
+ * Management-safe OPERATIONAL data only. Wallet balance / pending / ledger
+ * data is NOT here (Phase 11.6 correction) — it comes exclusively from the
+ * `wallets.read`-gated `GET /wallets/:customerId`.
+ */
 export interface CustomerDetail extends CustomerSummary {
   notes: string | null;
-  wallet: { availableBalance: string } | null;
+  orderSummary: CustomerOrderSummary;
+}
+/** `GET /wallets/customer-summaries` (wallets.read) — one entry per requested id with a wallet. */
+export interface WalletCustomerSummary {
+  customerId: string;
+  availableBalance: string;
+  pendingAmount: string;
 }
 
 /* ============================ Drivers ============================ */
@@ -248,16 +297,75 @@ export interface DriverUserSummary {
   phone: string | null;
   isActive: boolean;
 }
+/**
+ * Authoritative server-side operational counts (Phase 11.7 correction) —
+ * identical shape/semantics in the list and the detail DTO. The client never
+ * counts orders.
+ *   activeOrders   — current_driver = driver AND status in ORDER_ACTIVE_STATUSES
+ *   outForDelivery — current_driver = driver AND status = OUT_FOR_DELIVERY
+ *   completedToday — successful delivery ATTEMPTS today (delivery_attempts
+ *                    .driver_id — historical, survives a later reassignment)
+ */
+export interface DriverOperationalSummary {
+  activeOrders: number;
+  outForDelivery: number;
+  completedToday: number;
+}
 export interface DriverSummary {
   id: string;
   driverNumber: string;
   isActive: boolean;
   user: DriverUserSummary;
+  operationalSummary: DriverOperationalSummary;
   createdAt: string;
   updatedAt: string;
 }
-export interface DriverDetail extends DriverSummary {
-  cashAccount: { currentBalance: string } | null;
+/**
+ * Management-safe operational/profile data ONLY. Cash balance / ledger is NOT
+ * here (Phase 11.7 correction) — it comes exclusively from the `finance.read`
+ * gated `GET /finance/driver-cash/:driverId(/transactions)`.
+ */
+export type DriverDetail = DriverSummary;
+
+/** `GET /finance/driver-cash/:driverId` (finance.read). */
+export interface ManagementDriverCashDetail {
+  driverId: string;
+  currentBalance: string;
+}
+/** `GET /finance/driver-cash/summaries?driverIds=…` (finance.read). */
+export interface ManagementDriverCashSummary {
+  driverId: string;
+  currentBalance: string;
+}
+/** One row of `GET /finance/driver-cash/:driverId/transactions` (finance.read). */
+export interface ManagementDriverCashTransactionEntry {
+  id: string;
+  type: string;
+  direction: 'CREDIT' | 'DEBIT';
+  amount: string;
+  balanceBefore: string;
+  balanceAfter: string;
+  order: { id: string; orderNumber: string } | null;
+  settlement: { id: string; settlementNumber: string } | null;
+  paymentMethod: { id: string; code: string; name: string } | null;
+  actor: { id: string; firstName: string; lastName: string } | null;
+  notes: string | null;
+  createdAt: string;
+}
+/** One row of `GET /drivers/:id/delivery-history` (orders.read). */
+export interface DriverDeliveryHistoryRow {
+  attemptId: string;
+  attemptNumber: number;
+  outcome: string;
+  order: { id: string; orderNumber: string; status: string };
+  receiverName: string;
+  area: string | null;
+  expectedCollection: string;
+  actualCollection: string | null;
+  failedReason: { id: string; name: string } | null;
+  notes: string | null;
+  startedAt: string;
+  completedAt: string | null;
 }
 
 /* ============================ Wallets ============================ */

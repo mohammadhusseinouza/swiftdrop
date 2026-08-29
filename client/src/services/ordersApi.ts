@@ -33,19 +33,38 @@ import type {
 
 /* ------------------------------- args ------------------------------- */
 
+/** Backend `OrderSortBySchema` allowlist (server/src/modules/orders/order.schema.ts). */
+export type OrderSortBy =
+  | 'createdAt'
+  | 'orderNumber'
+  | 'status'
+  | 'orderAmount'
+  | 'deliveryFee'
+  | 'amountToCollect'
+  | 'deliveredAt';
+
+export type OrderSortOrder = 'asc' | 'desc';
+
 export interface ListOrdersParams extends PaginationParams {
   search?: string;
   status?: string;
   orderType?: string;
   paymentType?: string;
+  /** Matches an Order whose prepaid OR collection payment method is this id. */
+  paymentMethodId?: string;
+  /** DELIVERED -> status === DELIVERED; UNDELIVERED -> status !== DELIVERED. */
+  deliveryStatus?: 'DELIVERED' | 'UNDELIVERED';
   financialStatus?: string;
   customerId?: string;
   driverId?: string;
   areaId?: string;
   needsFinancialReview?: boolean;
   assignmentStatus?: 'ASSIGNED' | 'UNASSIGNED';
+  /** Bare YYYY-MM-DD -> whole UTC day; the backend applies the boundaries. */
   createdFrom?: string;
   createdTo?: string;
+  sortBy?: OrderSortBy;
+  sortOrder?: OrderSortOrder;
 }
 
 export interface CreateOrderRequest {
@@ -63,7 +82,12 @@ export interface CreateOrderRequest {
   description: string;
   packageCount?: number;
   quantity?: number;
-  weightKg?: number;
+  /**
+   * Sent as a plain decimal string (e.g. "1.25"); the backend coerces it
+   * (`z.coerce.number()` on a NUMERIC(10,3) column). A number is still
+   * accepted for backward compatibility.
+   */
+  weightKg?: number | string;
   packageNotes?: string;
   orderAmount: string;
   deliveryFee: string;
@@ -73,17 +97,37 @@ export interface CreateOrderRequest {
   collectionPaymentMethodId?: string | null;
 }
 
-export type UpdateOrderRequest = Partial<
-  Omit<CreateOrderRequest, 'orderType'>
-> & {
+/**
+ * PATCH /api/v1/orders/:id body — mirrors `OrderUpdateSchema`
+ * (server/src/modules/orders/order.schema.ts). Every field is optional (a
+ * PATCH is partial); an omitted field is left unchanged. `null` explicitly
+ * CLEARS a nullable field. `orderType` / status / driver / server-owned totals
+ * are intentionally absent — they are never editable through this endpoint.
+ */
+export interface UpdateOrderRequest {
+  customerId?: string;
+  paymentType?: string;
+  receiverName?: string;
+  receiverPhone?: string;
   receiverAltPhone?: string | null;
+  receiverAreaId?: string;
+  receiverAddress?: string;
   receiverBuildingFloor?: string | null;
   receiverMapLink?: string | null;
   receiverInstructions?: string | null;
+  description?: string;
+  packageCount?: number;
   quantity?: number | null;
-  weightKg?: number | null;
+  /** Decimal string (kept as text end-to-end), a number, or null to clear. */
+  weightKg?: number | string | null;
   packageNotes?: string | null;
-};
+  orderAmount?: string;
+  deliveryFee?: string;
+  prepaidOrderAmount?: string;
+  prepaidDeliveryFee?: string;
+  prepaidPaymentMethodId?: string | null;
+  collectionPaymentMethodId?: string | null;
+}
 
 export interface ResolveCollectionDifferenceRequest {
   customerWalletCredit: string;

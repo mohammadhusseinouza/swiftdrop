@@ -132,11 +132,20 @@ export async function cleanupTestCustomerRecord(customerId: string): Promise<voi
   // be cleared before customer_wallets/customers themselves. A single
   // deleteMany on wallet_transactions here also clears any self-referencing
   // reversal_of_id pairs for this customer together.
-  await prisma.wallet_transactions.deleteMany({ where: { customer_id: customerId } });
-  // Phase 8.5 is the first suite to create real customer_payouts rows.
-  await prisma.customer_payouts.deleteMany({ where: { customer_id: customerId } });
-  await prisma.customer_wallets.deleteMany({ where: { customer_id: customerId } });
-  await prisma.customers.deleteMany({ where: { id: customerId } });
+  //
+  // Wrapped in one transaction so a CONCURRENT test file's `GET /wallets`
+  // (which throws 500 if a customer on the page has no wallet row) can never
+  // observe the intermediate "customer exists, wallet already deleted" state.
+  await prisma.$transaction([
+    prisma.wallet_transactions.deleteMany({ where: { customer_id: customerId } }),
+    // Phase 8.5 is the first suite to create real customer_payouts rows.
+    prisma.customer_payouts.deleteMany({ where: { customer_id: customerId } }),
+    prisma.customer_wallets.deleteMany({ where: { customer_id: customerId } }),
+    prisma.customers.deleteMany({ where: { id: customerId } }),
+    // Phase 11.6 correction — customer mutations now emit CUSTOMER audit rows
+    // (polymorphic entity_type/entity_id, no FK) — clear them or they orphan.
+    prisma.audit_logs.deleteMany({ where: { entity_type: "CUSTOMER", entity_id: customerId } }),
+  ]);
 }
 
 export interface SeededDriverOverrides {
@@ -176,6 +185,9 @@ export async function cleanupTestDriverRecord(driverId: string): Promise<void> {
   await prisma.driver_settlements.deleteMany({ where: { driver_id: driverId } });
   await prisma.driver_cash_accounts.deleteMany({ where: { driver_id: driverId } });
   await prisma.drivers.deleteMany({ where: { id: driverId } });
+  // Phase 11.7 correction — driver mutations now emit DRIVER audit rows
+  // (polymorphic entity_type/entity_id, no FK) — clear them or they orphan.
+  await prisma.audit_logs.deleteMany({ where: { entity_type: "DRIVER", entity_id: driverId } });
 }
 
 // Deletes every row this suite may have created for a given user, in
@@ -188,9 +200,13 @@ export async function cleanupTestUser(userId: string): Promise<void> {
     await prisma.driver_cash_transactions.deleteMany({ where: { driver_id: driver.id } });
     await prisma.driver_settlements.deleteMany({ where: { driver_id: driver.id } });
     await prisma.driver_cash_accounts.deleteMany({ where: { driver_id: driver.id } });
+    await prisma.audit_logs.deleteMany({ where: { entity_type: "DRIVER", entity_id: driver.id } });
   }
   await prisma.drivers.deleteMany({ where: { user_id: userId } });
   await prisma.employees.deleteMany({ where: { user_id: userId } });
+  // Phase 11.7 correction — a driver create/update audit row references the
+  // acting management user; clear this user's authored audit rows too.
+  await prisma.audit_logs.deleteMany({ where: { actor_user_id: userId } });
   await prisma.users.deleteMany({ where: { id: userId } });
 }
 

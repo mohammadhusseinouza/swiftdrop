@@ -19,6 +19,16 @@ import {
 } from "./finance-correction.controller";
 import { FinanceDateRangeQuerySchema, FinanceTransactionsQuerySchema } from "./finance-read.schema";
 import { getFinanceSummaryController, getFinanceTransactionsController } from "./finance-read.controller";
+import {
+  DriverCashDriverIdParamSchema,
+  DriverCashSummariesQuerySchema,
+  DriverCashTransactionsQuerySchema,
+} from "./driver-cash-read.schema";
+import {
+  getDriverCashDetailController,
+  getDriverCashSummariesController,
+  getDriverCashTransactionsController,
+} from "./driver-cash-read.controller";
 
 // Mounted at /api/v1/finance. Management/Finance only — never exposed to
 // Driver/Customer self-service. Phase 8.8's correction (adjust/reverse)
@@ -42,6 +52,36 @@ financeRouter.get(
   authorize("finance.read"),
   validate({ query: FinanceTransactionsQuerySchema }),
   getFinanceTransactionsController
+);
+
+// ============================================================
+// Management-safe Driver Cash READ contract (Phase 11.7 correction) — all
+// finance.read (ADMIN + FINANCE; DISPATCHER -> 403). The static
+// /driver-cash/summaries route is declared BEFORE the dynamic
+// /driver-cash/:driverId route so "summaries" is never parsed as a driverId.
+// ============================================================
+financeRouter.get(
+  "/driver-cash/summaries",
+  authenticate,
+  authorize("finance.read"),
+  validate({ query: DriverCashSummariesQuerySchema }),
+  getDriverCashSummariesController
+);
+
+financeRouter.get(
+  "/driver-cash/:driverId",
+  authenticate,
+  authorize("finance.read"),
+  validate({ params: DriverCashDriverIdParamSchema }),
+  getDriverCashDetailController
+);
+
+financeRouter.get(
+  "/driver-cash/:driverId/transactions",
+  authenticate,
+  authorize("finance.read"),
+  validate({ params: DriverCashDriverIdParamSchema, query: DriverCashTransactionsQuerySchema }),
+  getDriverCashTransactionsController
 );
 
 financeRouter.post(

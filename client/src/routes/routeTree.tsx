@@ -16,20 +16,11 @@ import RequirePermission from './guards/RequirePermission';
 
 import NotFoundPage from '../pages/NotFoundPage';
 import UnauthorizedPage from '../pages/UnauthorizedPage';
-import LoginPlaceholderPage from '../pages/auth/LoginPlaceholderPage';
+import LoginPage from '../pages/auth/LoginPage';
 import TrackingPlaceholderPage from '../pages/public/TrackingPlaceholderPage';
 import { PERMISSIONS as P } from '../features/auth/permissions';
 import {
   ManagementDashboardPage,
-  ManagementOrdersPage,
-  ManagementOrderCreatePage,
-  ManagementOrderDetailPage,
-  ManagementCustomersPage,
-  ManagementCustomerDetailPage,
-  ManagementDriversPage,
-  ManagementDriverDetailPage,
-  ManagementWalletsPage,
-  ManagementWalletDetailPage,
   ManagementPayoutsPage,
   ManagementDriverSettlementsPage,
   ManagementFinancePage,
@@ -39,6 +30,15 @@ import {
   ManagementAuditLogsPage,
   ManagementSettingsPage,
 } from '../pages/management/managementPages';
+import OrdersListPage from '../pages/management/orders/OrdersListPage';
+import CreateOrderPage from '../pages/management/orders/create/CreateOrderPage';
+import OrderDetailPage from '../pages/management/orders/detail/OrderDetailPage';
+import CustomersListPage from '../pages/management/customers/CustomersListPage';
+import CustomerDetailPage from '../pages/management/customers/CustomerDetailPage';
+import DriversListPage from '../pages/management/drivers/DriversListPage';
+import DriverDetailPage from '../pages/management/drivers/DriverDetailPage';
+import WalletsListPage from '../pages/management/wallets/WalletsListPage';
+import WalletDetailPage from '../pages/management/wallets/WalletDetailPage';
 import {
   DriverOrdersPage,
   DriverOrderDetailPage,
@@ -99,17 +99,17 @@ function permitted(
 const managementChildren: RouteObject[] = [
   { index: true, element: <Navigate to="/management/dashboard" replace /> },
   { path: 'dashboard', ...permitted(P.DASHBOARD_READ, <ManagementDashboardPage />) },
-  { path: 'orders', ...permitted(P.ORDERS_READ, <ManagementOrdersPage />) },
+  { path: 'orders', ...permitted(P.ORDERS_READ, <OrdersListPage />) },
   // Static `orders/new` before dynamic `orders/:id` (React Router also ranks
   // the static segment higher regardless of declaration order).
-  { path: 'orders/new', ...permitted(P.ORDERS_CREATE, <ManagementOrderCreatePage />) },
-  { path: 'orders/:id', ...permitted(P.ORDERS_READ, <ManagementOrderDetailPage />) },
-  { path: 'customers', ...permitted(P.CUSTOMERS_READ, <ManagementCustomersPage />) },
-  { path: 'customers/:id', ...permitted(P.CUSTOMERS_READ, <ManagementCustomerDetailPage />) },
-  { path: 'drivers', ...permitted(P.DRIVERS_READ, <ManagementDriversPage />) },
-  { path: 'drivers/:id', ...permitted(P.DRIVERS_READ, <ManagementDriverDetailPage />) },
-  { path: 'wallets', ...permitted(P.WALLETS_READ, <ManagementWalletsPage />) },
-  { path: 'wallets/:customerId', ...permitted(P.WALLETS_READ, <ManagementWalletDetailPage />) },
+  { path: 'orders/new', ...permitted(P.ORDERS_CREATE, <CreateOrderPage />) },
+  { path: 'orders/:id', ...permitted(P.ORDERS_READ, <OrderDetailPage />) },
+  { path: 'customers', ...permitted(P.CUSTOMERS_READ, <CustomersListPage />) },
+  { path: 'customers/:id', ...permitted(P.CUSTOMERS_READ, <CustomerDetailPage />) },
+  { path: 'drivers', ...permitted(P.DRIVERS_READ, <DriversListPage />) },
+  { path: 'drivers/:id', ...permitted(P.DRIVERS_READ, <DriverDetailPage />) },
+  { path: 'wallets', ...permitted(P.WALLETS_READ, <WalletsListPage />) },
+  { path: 'wallets/:customerId', ...permitted(P.WALLETS_READ, <WalletDetailPage />) },
   { path: 'payouts', ...permitted(P.PAYOUTS_READ, <ManagementPayoutsPage />) },
   { path: 'driver-settlements', ...permitted(P.SETTLEMENTS_READ, <ManagementDriverSettlementsPage />) },
   { path: 'finance', ...permitted(P.FINANCE_READ, <ManagementFinancePage />) },
@@ -156,7 +156,7 @@ export const routeTree: RouteObject[] = [
             element: <AuthLayout />,
             children: [
               { index: true, element: <Navigate to="/auth/login" replace /> },
-              { path: 'login', element: <LoginPlaceholderPage /> },
+              { path: 'login', element: <LoginPage /> },
             ],
           },
         ],

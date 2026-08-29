@@ -6,9 +6,9 @@ import type { RootState } from '../../app/store';
  * purpose: server Order entities, lists, pagination, loading and error state all
  * belong to RTK Query (Phase 10.4) — never here.
  *
- * Scope for Phase 10.3: bulk-selection ids for the future Orders List
- * (Phase 11.3). List filters are intentionally deferred — most will live in the
- * URL search params, and the Orders API filter contract is a Phase 11.3 concern.
+ * Scope: bulk-selection ids for the Orders List (Phase 11.3). All list state —
+ * search, every filter, sort and page — lives in the URL search params
+ * (`pages/management/orders/ordersListParams.ts`), never in this slice.
  */
 export interface OrdersUiState {
   selectedOrderIds: string[];

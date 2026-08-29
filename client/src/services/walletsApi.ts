@@ -9,6 +9,7 @@ import type {
 } from './apiTypes';
 import type {
   LedgerCorrectionResult,
+  WalletCustomerSummary,
   WalletDetail,
   WalletSummary,
   WalletTransactionEntry,
@@ -68,6 +69,24 @@ export const walletsApi = api.injectEndpoints({
       ],
     }),
 
+    /**
+     * Batched balance + pending for a page of Customers (wallets.read). The
+     * `wallets.read`-gated financial source for the Management Customer List —
+     * one request per page, never per row.
+     */
+    getWalletCustomerSummaries: builder.query<
+      WalletCustomerSummary[],
+      { customerIds: string[] }
+    >({
+      query: ({ customerIds }) => ({
+        url: '/wallets/customer-summaries',
+        params: { customerIds: customerIds.join(',') },
+      }),
+      transformResponse: (r: ApiSuccessResponse<WalletCustomerSummary[]>) =>
+        unwrapData(r),
+      providesTags: [{ type: 'Wallet', id: 'LIST' }],
+    }),
+
     getWalletTransactions: builder.query<
       Paginated<WalletTransactionEntry>,
       { customerId: string; params?: ListWalletTransactionsParams }
@@ -117,6 +136,7 @@ export const walletsApi = api.injectEndpoints({
 export const {
   useGetWalletsQuery,
   useGetWalletQuery,
+  useGetWalletCustomerSummariesQuery,
   useGetWalletTransactionsQuery,
   useAdjustWalletMutation,
   useReverseWalletTransactionMutation,

@@ -13,6 +13,7 @@
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
     "admin:create": "tsx src/bootstrap/create-first-admin.ts",
+    "seed:visual": "tsx src/bootstrap/seed-visual-users.ts",
     "test": "tsx --test \"tests/**/*.test.ts\"",
     "test:auth": "tsx --test \"tests/auth/**/*.test.ts\"",
     "test:customers": "tsx --test \"tests/customers/**/*.test.ts\""

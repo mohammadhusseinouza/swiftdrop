@@ -42,6 +42,16 @@ export function formatMoney(
   return `${sign}${currency}${grouped}.${frac}`;
 }
 
+/**
+ * True when a backend decimal money string represents zero ("0", "0.00",
+ * "0.0000", "-0", …). Pure string inspection — no `Number()` / `parseFloat`.
+ * A non-numeric or empty string is NOT treated as zero.
+ */
+export function isZeroMoney(value: string | null | undefined): boolean {
+  if (value == null) return false;
+  return /^-?0+(\.0+)?$/.test(value.trim());
+}
+
 /** Format an ISO timestamp for display; returns `fallback` on bad input. */
 export function formatDateTime(
   iso: string | null | undefined,

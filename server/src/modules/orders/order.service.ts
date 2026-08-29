@@ -14,6 +14,7 @@ import type {
 } from "../../generated/prisma/client";
 import { prisma } from "../../db/prisma";
 import { AppError } from "../../shared/errors/app-error";
+import { nextUtcDay, parseUtcCalendarDate } from "../../shared/date/day-boundary";
 import { calculateCollectionDifference, calculateOrderFinancials, validatePaymentTypeConsistency } from "./order-financial.service";
 import { creditWalletForOrder } from "../wallets/wallet-ledger.service";
 import { recordCompanyOrderProductRevenue, recordDeliveryFeeRevenue } from "../company-finance/company-finance-ledger.service";
@@ -25,6 +26,9 @@ import type {
   DeliveryAttemptEntry,
   OrderAssignmentHistoryEntry,
   OrderDetail,
+  OrderFinancialAllocation,
+  OrderFinancialEvent,
+  OrderFinancialEventLedger,
   OrderHistoryResponse,
   OrderStatusHistoryEntry,
   OrderSummary,
@@ -198,11 +202,201 @@ async function loadDeliveryAttempts(tx: Prisma.TransactionClient, orderId: strin
   });
 }
 
+// ============================================================
+// Authoritative per-Order financial allocation + events (Phase 11.5
+// correction). Both read ONLY order_id-scoped ledger rows — never derived
+// from orderType/amountToCollect. The ledger sign conventions reused here
+// are the exact ones finance-summary.service.ts / dashboard.service.ts
+// already established:
+//   - company_financial_transactions.amount is SIGNED (REVERSAL = negated
+//     original) -> plain SUM(amount) nets correctly
+//   - wallet_transactions.credit/debit are POSITIVE MAGNITUDES -> net is
+//     SUM(credit - debit); a REVERSAL of an ORDER_CREDIT copies the
+//     original's order_id and posts a DEBIT, so it subtracts here
+//   - driver_cash rows are NOT part of company/wallet allocation (mandatory
+//     Customer Wallet != Driver Cash != Company Revenue invariant) — they
+//     appear only as financial EVENTS ("Amount collected"), never in the
+//     allocation totals
+// ============================================================
+
+const FINANCIAL_EVENT_ACTOR_SELECT = { select: { id: true, first_name: true, last_name: true } } as const;
+
+async function loadOrderFinancialAllocation(
+  client: Prisma.TransactionClient,
+  orderId: string
+): Promise<OrderFinancialAllocation> {
+  const walletAgg = await client.wallet_transactions.aggregate({
+    where: { order_id: orderId },
+    _sum: { credit: true, debit: true },
+  });
+  const companyAgg = await client.company_financial_transactions.aggregate({
+    where: { order_id: orderId },
+    _sum: { amount: true },
+  });
+
+  const walletCredit = walletAgg._sum.credit ?? new Prisma.Decimal(0);
+  const walletDebit = walletAgg._sum.debit ?? new Prisma.Decimal(0);
+  const companyAmount = companyAgg._sum.amount ?? new Prisma.Decimal(0);
+
+  return {
+    companyAmount: companyAmount.toString(),
+    customerWalletAmount: walletCredit.minus(walletDebit).toString(),
+  };
+}
+
+function toFinancialEventActor(
+  user: { id: string; first_name: string; last_name: string } | null
+): OrderFinancialEvent["actor"] {
+  return user ? { id: user.id, firstName: user.first_name, lastName: user.last_name } : null;
+}
+
+const FINANCIAL_EVENT_LEDGER_ORDER: Record<OrderFinancialEventLedger, number> = {
+  DRIVER_CASH: 0,
+  WALLET: 1,
+  COMPANY_FINANCE: 2,
+};
+
+async function loadOrderFinancialEvents(
+  client: Prisma.TransactionClient,
+  orderId: string
+): Promise<OrderFinancialEvent[]> {
+  const cashRows = await client.driver_cash_transactions.findMany({
+    where: { order_id: orderId },
+    select: {
+      id: true,
+      type: true,
+      amount: true,
+      balance_before: true,
+      balance_after: true,
+      notes: true,
+      created_at: true,
+      users: FINANCIAL_EVENT_ACTOR_SELECT,
+    },
+    orderBy: { created_at: "asc" },
+  });
+  const walletRows = await client.wallet_transactions.findMany({
+    where: { order_id: orderId },
+    select: {
+      id: true,
+      type: true,
+      credit: true,
+      debit: true,
+      notes: true,
+      created_at: true,
+      users: FINANCIAL_EVENT_ACTOR_SELECT,
+    },
+    orderBy: { created_at: "asc" },
+  });
+  const companyRows = await client.company_financial_transactions.findMany({
+    where: { order_id: orderId },
+    select: {
+      id: true,
+      type: true,
+      amount: true,
+      notes: true,
+      created_at: true,
+      users: FINANCIAL_EVENT_ACTOR_SELECT,
+    },
+    orderBy: { created_at: "asc" },
+  });
+
+  const wrapped: { event: OrderFinancialEvent; at: number; ledgerRank: number }[] = [];
+
+  for (const row of cashRows) {
+    // Driver Cash stores a positive magnitude + expresses direction via the
+    // balance delta (Phase 8.1). Never a stored negative amount.
+    const signed = row.balance_after.minus(row.balance_before);
+    wrapped.push({
+      event: {
+        id: row.id,
+        ledger: "DRIVER_CASH",
+        type: row.type,
+        direction: signed.isNegative() ? "DEBIT" : "CREDIT",
+        amount: row.amount.toString(),
+        signedAmount: signed.toString(),
+        actor: toFinancialEventActor(row.users),
+        notes: row.notes,
+        occurredAt: row.created_at.toISOString(),
+      },
+      at: row.created_at.getTime(),
+      ledgerRank: FINANCIAL_EVENT_LEDGER_ORDER.DRIVER_CASH,
+    });
+  }
+  for (const row of walletRows) {
+    const signed = row.credit.minus(row.debit);
+    wrapped.push({
+      event: {
+        id: row.id,
+        ledger: "WALLET",
+        type: row.type,
+        direction: signed.isNegative() ? "DEBIT" : "CREDIT",
+        amount: signed.abs().toString(),
+        signedAmount: signed.toString(),
+        actor: toFinancialEventActor(row.users),
+        notes: row.notes,
+        occurredAt: row.created_at.toISOString(),
+      },
+      at: row.created_at.getTime(),
+      ledgerRank: FINANCIAL_EVENT_LEDGER_ORDER.WALLET,
+    });
+  }
+  for (const row of companyRows) {
+    // company_financial_transactions.amount is already SIGNED.
+    const signed = row.amount;
+    wrapped.push({
+      event: {
+        id: row.id,
+        ledger: "COMPANY_FINANCE",
+        type: row.type,
+        direction: signed.isNegative() ? "DEBIT" : "CREDIT",
+        amount: signed.abs().toString(),
+        signedAmount: signed.toString(),
+        actor: toFinancialEventActor(row.users),
+        notes: row.notes,
+        occurredAt: row.created_at.toISOString(),
+      },
+      at: row.created_at.getTime(),
+      ledgerRank: FINANCIAL_EVENT_LEDGER_ORDER.COMPANY_FINANCE,
+    });
+  }
+
+  // Oldest-first (matches every other Order history array). Deterministic
+  // tie-break for identical timestamps: ledger order (cash -> wallet ->
+  // company, roughly the /deliver posting sequence), then id.
+  wrapped.sort(
+    (a, b) =>
+      a.at - b.at ||
+      a.ledgerRank - b.ledgerRank ||
+      (a.event.id < b.event.id ? -1 : a.event.id > b.event.id ? 1 : 0)
+  );
+
+  return wrapped.map((w) => w.event);
+}
+
+// Assembles a full OrderDetail: the rich order row + the five history/
+// financial collections. Used by every endpoint that returns an OrderDetail
+// EXCEPT createOrder (a brand-new Order provably has none of these). `client`
+// may be the base prisma client (getOrderById) or an open transaction client
+// (every mutation) — the load helpers accept both.
+async function assembleOrderDetail(
+  client: Prisma.TransactionClient,
+  order: OrderWithRelations
+): Promise<OrderDetail> {
+  const statusHistory = await loadStatusHistory(client, order.id);
+  const assignmentHistory = await loadAssignmentHistory(client, order.id);
+  const deliveryAttempts = await loadDeliveryAttempts(client, order.id);
+  const financialAllocation = await loadOrderFinancialAllocation(client, order.id);
+  const financialEvents = await loadOrderFinancialEvents(client, order.id);
+  return toOrderDetail(order, statusHistory, assignmentHistory, deliveryAttempts, financialAllocation, financialEvents);
+}
+
 function toOrderDetail(
   order: OrderWithRelations,
   statusHistory: StatusHistoryWithActor[],
   assignmentHistory: AssignmentWithRelations[],
-  deliveryAttempts: DeliveryAttemptWithRelations[]
+  deliveryAttempts: DeliveryAttemptWithRelations[],
+  financialAllocation: OrderFinancialAllocation,
+  financialEvents: OrderFinancialEvent[]
 ): OrderDetail {
   const prepaidMethod = order.payment_methods_orders_prepaid_payment_method_idTopayment_methods;
   const collectionMethod = order.payment_methods_orders_collection_payment_method_idTopayment_methods;
@@ -212,6 +406,7 @@ function toOrderDetail(
     orderNumber: order.order_number,
     trackingCode: order.tracking_code,
     orderType: order.order_type,
+    paymentType: order.payment_type,
     status: order.status,
     financialStatus: order.financial_status,
 
@@ -256,6 +451,8 @@ function toOrderDetail(
       needsFinancialReview: order.needs_financial_review,
     },
 
+    financialAllocation,
+
     prepaidPaymentMethod: prepaidMethod
       ? { id: prepaidMethod.id, code: prepaidMethod.code, name: prepaidMethod.name }
       : null,
@@ -278,6 +475,7 @@ function toOrderDetail(
     statusHistory: statusHistory.map(toStatusHistoryEntry),
     assignmentHistory: assignmentHistory.map(toAssignmentHistoryEntry),
     deliveryAttempts: deliveryAttempts.map(toDeliveryAttemptEntry),
+    financialEvents,
   };
 }
 
@@ -294,13 +492,14 @@ const orderDetailInclude = {
 // receiver instructions/package notes/payment-method objects/history.
 // ============================================================
 
-const orderSummarySelect = {
+export const orderSummarySelect = {
   id: true,
   order_number: true,
   tracking_code: true,
   order_type: true,
   status: true,
   financial_status: true,
+  payment_type: true,
   receiver_name: true,
   receiver_phone: true,
   receiver_area: true,
@@ -324,9 +523,9 @@ const orderSummarySelect = {
   },
 } satisfies Prisma.ordersSelect;
 
-type OrderSummaryRow = Prisma.ordersGetPayload<{ select: typeof orderSummarySelect }>;
+export type OrderSummaryRow = Prisma.ordersGetPayload<{ select: typeof orderSummarySelect }>;
 
-function toOrderSummary(row: OrderSummaryRow): OrderSummary {
+export function toOrderSummary(row: OrderSummaryRow): OrderSummary {
   return {
     id: row.id,
     orderNumber: row.order_number,
@@ -334,6 +533,7 @@ function toOrderSummary(row: OrderSummaryRow): OrderSummary {
     orderType: row.order_type,
     status: row.status,
     financialStatus: row.financial_status,
+    paymentType: row.payment_type,
 
     customer: {
       id: row.customers.id,
@@ -548,9 +748,16 @@ export async function createOrder(input: OrderCreateFoundationInput, actorUserId
           include: statusHistoryInclude,
         });
 
-        // A brand-new Order can never have an assignment or delivery
-        // attempt yet.
-        return toOrderDetail(order, [historyRow], [], []);
+        // A brand-new Order can never have an assignment, a delivery attempt,
+        // or any financial ledger row yet — no reload needed for those.
+        return toOrderDetail(
+          order,
+          [historyRow],
+          [],
+          [],
+          { companyAmount: "0", customerWalletAmount: "0" },
+          []
+        );
       });
     } catch (error) {
       if (isIdentifierConflict(error)) {
@@ -589,11 +796,7 @@ export async function getOrderById(id: string): Promise<OrderDetail> {
     throw new AppError({ statusCode: 404, code: "NOT_FOUND", message: "Order not found" });
   }
 
-  const statusHistory = await loadStatusHistory(prisma, id);
-  const assignmentHistory = await loadAssignmentHistory(prisma, id);
-  const deliveryAttempts = await loadDeliveryAttempts(prisma, id);
-
-  return toOrderDetail(order, statusHistory, assignmentHistory, deliveryAttempts);
+  return assembleOrderDetail(prisma, order);
 }
 
 // ============================================================
@@ -790,12 +993,10 @@ export async function updateOrder(id: string, input: OrderUpdateInput): Promise<
     // No order_status_history row is written — status is not changing, and
     // status history is not a general edit-audit log (deferred to the
     // Audit infrastructure phase, same decision as Phases 5.1/5.2).
-    // Assignment history is untouched by a generic edit but still returned.
-    const statusHistory = await loadStatusHistory(tx, id);
-    const assignmentHistory = await loadAssignmentHistory(tx, id);
-    const deliveryAttempts = await loadDeliveryAttempts(tx, id);
-
-    return toOrderDetail(updated, statusHistory, assignmentHistory, deliveryAttempts);
+    // Assignment history / financial ledgers are untouched by a generic edit
+    // (an editable Order is pre-DELIVERED, so its financialAllocation is "0"
+    // and financialEvents is empty) but the full DTO is still assembled.
+    return assembleOrderDetail(tx, updated);
   });
 }
 
@@ -808,20 +1009,62 @@ export interface ListOrdersResult {
   total: number;
 }
 
+// created_at range from the validated query strings. A BARE YYYY-MM-DD is an
+// inclusive UTC calendar day: from -> gte 00:00:00Z of that day; to -> lt
+// 00:00:00Z of the NEXT day (Phase 6.3 correction — fixes "to" excluding the
+// rest of that day). An explicit UTC datetime keeps its literal, already-
+// approved meaning (gte / lte the exact instant). Mirrors Finance/Reports'
+// day-boundary convention (shared/date/day-boundary.ts).
+function buildCreatedAtRange(
+  from: string | undefined,
+  to: string | undefined
+): Prisma.DateTimeFilter | undefined {
+  if (!from && !to) return undefined;
+  const range: Prisma.DateTimeFilter = {};
+  if (from) {
+    range.gte = parseUtcCalendarDate(from) ?? new Date(from);
+  }
+  if (to) {
+    const bareTo = parseUtcCalendarDate(to);
+    if (bareTo) range.lt = nextUtcDay(bareTo);
+    else range.lte = new Date(to);
+  }
+  return range;
+}
+
+// Server-side sort — an explicit allowlist mapped to real scalar columns
+// (Phase 6.3 correction). No dynamic property access, no raw SQL. Every
+// branch appends an `id: desc` tiebreaker for deterministic pagination.
+// delivered_at is nullable -> NULLS LAST in both directions (delivered
+// Orders sort together; undelivered Orders always trail).
+function buildOrderBy(
+  sortBy: ListOrdersQuery["sortBy"],
+  sortOrder: "asc" | "desc"
+): Prisma.ordersOrderByWithRelationInput[] {
+  const tie: Prisma.ordersOrderByWithRelationInput = { id: "desc" };
+  switch (sortBy) {
+    case "createdAt":
+      return [{ created_at: sortOrder }, tie];
+    case "orderNumber":
+      return [{ order_number: sortOrder }, tie];
+    case "status":
+      return [{ status: sortOrder }, tie];
+    case "orderAmount":
+      return [{ order_amount: sortOrder }, tie];
+    case "deliveryFee":
+      return [{ delivery_fee: sortOrder }, tie];
+    case "amountToCollect":
+      return [{ amount_to_collect: sortOrder }, tie];
+    case "deliveredAt":
+      return [{ delivered_at: { sort: sortOrder, nulls: "last" } }, tie];
+    default:
+      // No sortBy supplied — preserve the historical default.
+      return [{ created_at: "desc" }, tie];
+  }
+}
+
 export async function listOrders(query: ListOrdersQuery): Promise<ListOrdersResult> {
   const where: Prisma.ordersWhereInput = {};
-
-  if (query.search) {
-    where.OR = [
-      { order_number: { contains: query.search, mode: "insensitive" } },
-      { tracking_code: { contains: query.search, mode: "insensitive" } },
-      { receiver_name: { contains: query.search, mode: "insensitive" } },
-      { receiver_phone: { contains: query.search, mode: "insensitive" } },
-      { customers: { customer_number: { contains: query.search, mode: "insensitive" } } },
-      { customers: { name: { contains: query.search, mode: "insensitive" } } },
-      { customers: { primary_phone: { contains: query.search, mode: "insensitive" } } },
-    ];
-  }
 
   if (query.status) where.status = query.status;
   if (query.orderType) where.order_type = query.orderType;
@@ -831,47 +1074,75 @@ export async function listOrders(query: ListOrdersQuery): Promise<ListOrdersResu
   if (query.areaId) where.receiver_area_id = query.areaId;
   if (query.needsFinancialReview !== undefined) where.needs_financial_review = query.needsFinancialReview;
 
-  // driverId and assignmentStatus both target current_driver_id and must
-  // compose with AND semantics — neither may be silently dropped when both
-  // are supplied (Phase 6.3 review cleanup). Each supplied condition is
-  // pushed as its own where.AND entry rather than written to the same
-  // current_driver_id key twice (which would just overwrite), so:
-  //   driverId only              -> current_driver_id = X
-  //   ASSIGNED only               -> current_driver_id IS NOT NULL
-  //   UNASSIGNED only             -> current_driver_id IS NULL
-  //   driverId + ASSIGNED         -> both conditions hold simultaneously;
-  //                                  "= X" already implies "IS NOT NULL",
-  //                                  so this naturally behaves as "= X"
-  //   driverId + UNASSIGNED       -> "= X" AND "IS NULL" can never both be
-  //                                  true — a valid, empty (200 []) result,
-  //                                  not a special-cased branch or a 400
-  const driverConditions: Prisma.ordersWhereInput[] = [];
-  if (query.driverId) {
-    driverConditions.push({ current_driver_id: query.driverId });
-  }
-  if (query.assignmentStatus === "ASSIGNED") {
-    driverConditions.push({ current_driver_id: { not: null } });
-  } else if (query.assignmentStatus === "UNASSIGNED") {
-    driverConditions.push({ current_driver_id: null });
-  }
-  if (driverConditions.length > 0) {
-    where.AND = driverConditions;
+  // Every remaining condition composes with AND at the outer level so no
+  // filter can silently overwrite another (search + payment-method both need
+  // their own OR sub-clause; driverId + assignmentStatus both target
+  // current_driver_id).
+  const and: Prisma.ordersWhereInput[] = [];
+
+  if (query.search) {
+    and.push({
+      OR: [
+        { order_number: { contains: query.search, mode: "insensitive" } },
+        { tracking_code: { contains: query.search, mode: "insensitive" } },
+        { receiver_name: { contains: query.search, mode: "insensitive" } },
+        { receiver_phone: { contains: query.search, mode: "insensitive" } },
+        { customers: { customer_number: { contains: query.search, mode: "insensitive" } } },
+        { customers: { name: { contains: query.search, mode: "insensitive" } } },
+        { customers: { primary_phone: { contains: query.search, mode: "insensitive" } } },
+      ],
+    });
   }
 
-  if (query.createdFrom || query.createdTo) {
-    where.created_at = {
-      ...(query.createdFrom ? { gte: query.createdFrom } : {}),
-      ...(query.createdTo ? { lte: query.createdTo } : {}),
-    };
+  // Payment method: an Order matches if EITHER the prepaid OR the collection
+  // method is this id (requirements.md §14 — the two are independent). A
+  // single Order that uses the same method for both is still ONE row.
+  if (query.paymentMethodId) {
+    and.push({
+      OR: [
+        { prepaid_payment_method_id: query.paymentMethodId },
+        { collection_payment_method_id: query.paymentMethodId },
+      ],
+    });
   }
+
+  // Coarse delivered-vs-not filter — independent of the exact `status`
+  // filter; both compose with AND.
+  if (query.deliveryStatus === "DELIVERED") {
+    and.push({ status: "DELIVERED" });
+  } else if (query.deliveryStatus === "UNDELIVERED") {
+    and.push({ status: { not: "DELIVERED" } });
+  }
+
+  // driverId and assignmentStatus both target current_driver_id and must
+  // compose with AND — neither may be silently dropped when both are
+  // supplied (Phase 6.3 review cleanup):
+  //   driverId only        -> current_driver_id = X
+  //   ASSIGNED only         -> current_driver_id IS NOT NULL
+  //   UNASSIGNED only       -> current_driver_id IS NULL
+  //   driverId + ASSIGNED   -> "= X" already implies IS NOT NULL
+  //   driverId + UNASSIGNED -> "= X" AND IS NULL -> valid empty (200 []) result
+  if (query.driverId) {
+    and.push({ current_driver_id: query.driverId });
+  }
+  if (query.assignmentStatus === "ASSIGNED") {
+    and.push({ current_driver_id: { not: null } });
+  } else if (query.assignmentStatus === "UNASSIGNED") {
+    and.push({ current_driver_id: null });
+  }
+
+  if (and.length > 0) where.AND = and;
+
+  const createdAt = buildCreatedAtRange(query.createdFrom, query.createdTo);
+  if (createdAt) where.created_at = createdAt;
+
+  const orderBy = buildOrderBy(query.sortBy, query.sortOrder);
 
   const [rows, total] = await Promise.all([
     prisma.orders.findMany({
       where,
       select: orderSummarySelect,
-      // created_at DESC with an id DESC tiebreaker — deterministic even
-      // when multiple orders share an identical created_at timestamp.
-      orderBy: [{ created_at: "desc" }, { id: "desc" }],
+      orderBy,
       skip: (query.page - 1) * query.limit,
       take: query.limit,
     }),
@@ -960,11 +1231,7 @@ export async function assignOrder(orderId: string, driverId: string, actorUserId
     });
 
     const updated = await tx.orders.findUniqueOrThrow({ where: { id: orderId }, include: orderDetailInclude });
-    const statusHistory = await loadStatusHistory(tx, orderId);
-    const assignmentHistory = await loadAssignmentHistory(tx, orderId);
-    const deliveryAttempts = await loadDeliveryAttempts(tx, orderId);
-
-    return toOrderDetail(updated, statusHistory, assignmentHistory, deliveryAttempts);
+    return assembleOrderDetail(tx, updated);
   });
 }
 
@@ -1068,11 +1335,7 @@ export async function reassignOrder(
     }
 
     const updated = await tx.orders.findUniqueOrThrow({ where: { id: orderId }, include: orderDetailInclude });
-    const statusHistory = await loadStatusHistory(tx, orderId);
-    const assignmentHistory = await loadAssignmentHistory(tx, orderId);
-    const deliveryAttempts = await loadDeliveryAttempts(tx, orderId);
-
-    return toOrderDetail(updated, statusHistory, assignmentHistory, deliveryAttempts);
+    return assembleOrderDetail(tx, updated);
   });
 }
 
@@ -1251,11 +1514,7 @@ export async function readyOrder(orderId: string, actorUserId: string): Promise<
     });
 
     const updated = await tx.orders.findUniqueOrThrow({ where: { id: orderId }, include: orderDetailInclude });
-    const statusHistory = await loadStatusHistory(tx, orderId);
-    const assignmentHistory = await loadAssignmentHistory(tx, orderId);
-    const deliveryAttempts = await loadDeliveryAttempts(tx, orderId);
-
-    return toOrderDetail(updated, statusHistory, assignmentHistory, deliveryAttempts);
+    return assembleOrderDetail(tx, updated);
   });
 }
 
@@ -1314,11 +1573,7 @@ export async function rescheduleOrder(
     });
 
     const updated = await tx.orders.findUniqueOrThrow({ where: { id: orderId }, include: orderDetailInclude });
-    const statusHistory = await loadStatusHistory(tx, orderId);
-    const assignmentHistory = await loadAssignmentHistory(tx, orderId);
-    const deliveryAttempts = await loadDeliveryAttempts(tx, orderId);
-
-    return toOrderDetail(updated, statusHistory, assignmentHistory, deliveryAttempts);
+    return assembleOrderDetail(tx, updated);
   });
 }
 
@@ -1420,11 +1675,7 @@ export async function cancelOrder(
     });
 
     const updated = await tx.orders.findUniqueOrThrow({ where: { id: orderId }, include: orderDetailInclude });
-    const statusHistory = await loadStatusHistory(tx, orderId);
-    const assignmentHistory = await loadAssignmentHistory(tx, orderId);
-    const deliveryAttempts = await loadDeliveryAttempts(tx, orderId);
-
-    return toOrderDetail(updated, statusHistory, assignmentHistory, deliveryAttempts);
+    return assembleOrderDetail(tx, updated);
   });
 }
 
@@ -1611,11 +1862,7 @@ export async function resolveCollectionDifference(
     });
 
     const updated = await tx.orders.findUniqueOrThrow({ where: { id: orderId }, include: orderDetailInclude });
-    const statusHistory = await loadStatusHistory(tx, orderId);
-    const assignmentHistory = await loadAssignmentHistory(tx, orderId);
-    const deliveryAttempts = await loadDeliveryAttempts(tx, orderId);
-
-    return toOrderDetail(updated, statusHistory, assignmentHistory, deliveryAttempts);
+    return assembleOrderDetail(tx, updated);
   });
 }
 

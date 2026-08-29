@@ -1,9 +1,10 @@
 import { Prisma } from "../../generated/prisma/client";
 import { prisma } from "../../db/prisma";
 import { AppError } from "../../shared/errors/app-error";
-import type { OrderStatus } from "../../generated/prisma/client";
+import { ORDER_ACTIVE_STATUSES } from "../orders/order-lifecycle";
 import type { ListWalletsQuery, ListWalletTransactionsQuery } from "./wallet.schema";
 import type {
+  WalletCustomerSummaryEntry,
   WalletDetail,
   WalletSummary,
   WalletTransactionEntry,
@@ -26,15 +27,12 @@ import type {
 // a DELIVERED order contributes nothing to pending (CLAUDE.md's "Pending Is
 // Not Available" rule) and nothing to available_balance either.
 // ============================================================
-const PENDING_ACTIVE_STATUSES: OrderStatus[] = [
-  "RECEIVED",
-  "READY_FOR_PICKUP",
-  "ASSIGNED",
-  "PICKED_UP",
-  "OUT_FOR_DELIVERY",
-  "FAILED_DELIVERY",
-  "RESCHEDULED",
-];
+// Pending money is only ever attributable to a NON-TERMINAL order (a
+// terminal order's remaining amount is either finalized or void). Reuses the
+// single shared lifecycle definition (Phase 11.6 correction) rather than
+// re-listing the statuses — the pending calculation additionally narrows to
+// DELIVERY_ONLY in the queries below.
+const PENDING_ACTIVE_STATUSES = [...ORDER_ACTIVE_STATUSES];
 
 export async function getPendingAmountForCustomer(customerId: string): Promise<Prisma.Decimal> {
   const result = await prisma.orders.aggregate({
@@ -155,6 +153,34 @@ export async function listWallets(query: ListWalletsQuery): Promise<ListWalletsR
   });
 
   return { items, total };
+}
+
+// ============================================================
+// GET /api/v1/wallets/customer-summaries?customerIds=...
+//
+// Batched balance + pending for a page of Customers — the wallets.read-gated
+// financial source for the Management Customer List (Phase 11.6 correction).
+// Reuses getPendingAmountsForCustomers (the approved Phase 8.2 pending rule)
+// verbatim — no second pending calculation. Returns an entry only for a
+// requested id that has a wallet; unknown ids are simply absent.
+// ============================================================
+
+export async function getWalletCustomerSummaries(customerIds: string[]): Promise<WalletCustomerSummaryEntry[]> {
+  if (customerIds.length === 0) return [];
+
+  const [wallets, pendingMap] = await Promise.all([
+    prisma.customer_wallets.findMany({
+      where: { customer_id: { in: customerIds } },
+      select: { customer_id: true, available_balance: true },
+    }),
+    getPendingAmountsForCustomers(customerIds),
+  ]);
+
+  return wallets.map((w) => ({
+    customerId: w.customer_id,
+    availableBalance: w.available_balance.toString(),
+    pendingAmount: (pendingMap.get(w.customer_id) ?? new Prisma.Decimal(0)).toString(),
+  }));
 }
 
 // ============================================================

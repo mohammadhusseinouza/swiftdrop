@@ -1,13 +1,14 @@
 import { Outlet } from 'react-router-dom';
 
 /**
- * Phase 10.2 routing boundary for unauthenticated / auth pages.
- * The real Login Page is Phase 11.1. No auth logic here.
+ * Routing boundary for unauthenticated / auth pages (Phase 10.2). Kept
+ * deliberately minimal — it centres a single auth surface (the Login page,
+ * Phase 11.1). No application chrome, no sidebar/navbar.
  */
 export default function AuthLayout() {
   return (
-    <div className="min-h-screen bg-slate-100 dark:bg-slate-950">
-      <main className="flex min-h-screen items-center justify-center p-6">
+    <div className="min-h-screen bg-canvas">
+      <main className="flex min-h-screen items-center justify-center p-4 sm:p-6">
         <Outlet />
       </main>
     </div>

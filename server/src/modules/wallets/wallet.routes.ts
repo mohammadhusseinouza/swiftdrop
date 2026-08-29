@@ -6,9 +6,15 @@ import {
   ListWalletsQuerySchema,
   ListWalletTransactionsQuerySchema,
   WalletCustomerIdParamSchema,
+  WalletCustomerSummariesQuerySchema,
 } from "./wallet.schema";
 import { AdjustWalletBodySchema } from "./wallet-correction.schema";
-import { getWalletDetailController, listWalletsController, listWalletTransactionsController } from "./wallet.controller";
+import {
+  getWalletCustomerSummariesController,
+  getWalletDetailController,
+  listWalletsController,
+  listWalletTransactionsController,
+} from "./wallet.controller";
 import { adjustWalletController } from "./wallet-correction.controller";
 
 // Mounted at /api/v1/wallets (see src/routes/index.ts). Management/Finance
@@ -16,6 +22,16 @@ import { adjustWalletController } from "./wallet-correction.controller";
 export const walletRouter = Router();
 
 walletRouter.get("/", authenticate, authorize("wallets.read"), validate({ query: ListWalletsQuerySchema }), listWalletsController);
+
+// MUST be registered before "/:customerId" — a literal path segment that the
+// dynamic route would otherwise capture (and reject as a non-UUID).
+walletRouter.get(
+  "/customer-summaries",
+  authenticate,
+  authorize("wallets.read"),
+  validate({ query: WalletCustomerSummariesQuerySchema }),
+  getWalletCustomerSummariesController
+);
 
 walletRouter.get(
   "/:customerId",

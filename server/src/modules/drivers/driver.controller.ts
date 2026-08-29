@@ -1,7 +1,11 @@
 import { RequestHandler } from "express";
+import { AppError } from "../../shared/errors/app-error";
 import { createDriver, getDriverById, listDrivers, updateDriver } from "./driver.service";
-import type { CreateDriverInput, ListDriversQuery, UpdateDriverInput } from "./driver.schema";
+import { listDriverCurrentOrders, listDriverDeliveryHistory } from "./driver-work.service";
+import type { CreateDriverInput, DriverWorkListQuery, ListDriversQuery, UpdateDriverInput } from "./driver.schema";
 import type { DriverDetail, DriverSummary } from "./driver.types";
+import type { DriverDeliveryHistoryRow } from "./driver-work.types";
+import type { OrderSummary } from "../orders/order.types";
 import type { ApiListResponse, ApiSuccessResponse } from "../../shared/types/api-response";
 
 export const listDriversController: RequestHandler<
@@ -33,7 +37,10 @@ export const createDriverController: RequestHandler<
   CreateDriverInput
 > = async (req, res, next) => {
   try {
-    const driver = await createDriver(req.body);
+    if (!req.actor) {
+      throw new AppError({ statusCode: 401, code: "UNAUTHORIZED", message: "Authentication required" });
+    }
+    const driver = await createDriver(req.body, req.actor.userId);
     res.status(201).json({ success: true, data: driver });
   } catch (error) {
     next(error);
@@ -58,8 +65,47 @@ export const updateDriverController: RequestHandler<
   UpdateDriverInput
 > = async (req, res, next) => {
   try {
-    const driver = await updateDriver(req.params.id, req.body);
+    if (!req.actor) {
+      throw new AppError({ statusCode: 401, code: "UNAUTHORIZED", message: "Authentication required" });
+    }
+    const driver = await updateDriver(req.params.id, req.body, req.actor.userId);
     res.json({ success: true, data: driver });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const listDriverCurrentOrdersController: RequestHandler<
+  { id: string },
+  ApiListResponse<OrderSummary>
+> = async (req, res, next) => {
+  try {
+    const query = req.query as unknown as DriverWorkListQuery;
+    const { items, total } = await listDriverCurrentOrders(req.params.id, query);
+    const totalPages = Math.ceil(total / query.limit);
+    res.json({
+      success: true,
+      data: items,
+      meta: { page: query.page, limit: query.limit, total, totalPages },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const listDriverDeliveryHistoryController: RequestHandler<
+  { id: string },
+  ApiListResponse<DriverDeliveryHistoryRow>
+> = async (req, res, next) => {
+  try {
+    const query = req.query as unknown as DriverWorkListQuery;
+    const { items, total } = await listDriverDeliveryHistory(req.params.id, query);
+    const totalPages = Math.ceil(total / query.limit);
+    res.json({
+      success: true,
+      data: items,
+      meta: { page: query.page, limit: query.limit, total, totalPages },
+    });
   } catch (error) {
     next(error);
   }

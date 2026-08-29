@@ -390,7 +390,10 @@ describe("Phase 5.4 — Core Management Data Integration", () => {
       const customerId = res.body.data.id;
       cleanup.customerIds.push(customerId);
 
-      assert.equal(res.body.data.wallet.availableBalance, "0");
+      // Phase 11.6 correction: the Customer DTO no longer carries a wallet
+      // balance (wallets.read owns that). The wallet row is still created
+      // atomically — verified against the DB below.
+      assert.ok(!("wallet" in res.body.data));
 
       const wallets = await prisma.customer_wallets.findMany({ where: { customer_id: customerId } });
       assert.equal(wallets.length, 1);
@@ -400,7 +403,7 @@ describe("Phase 5.4 — Core Management Data Integration", () => {
       assert.equal(txCount, 0);
     });
 
-    test("customer detail wallet balance always matches the stored DB row", async () => {
+    test("GET /wallets/:customerId balance always matches the stored DB row (customers.read cannot reach it)", async () => {
       const res = await request(app)
         .post("/api/v1/customers")
         .set(auth(tokens.dispatcher))
@@ -412,17 +415,20 @@ describe("Phase 5.4 — Core Management Data Integration", () => {
       const customerId = res.body.data.id;
       cleanup.customerIds.push(customerId);
 
-      // Simulate a wallet balance change the way a future Finance module
-      // would (direct ledger write) — Customer APIs themselves expose no
-      // way to do this; see the "cannot mutate wallet" test below.
       await prisma.customer_wallets.update({
         where: { customer_id: customerId },
         data: { available_balance: 42.5 },
       });
 
-      const detail = await request(app).get(`/api/v1/customers/${customerId}`).set(auth(tokens.admin));
-      assert.equal(detail.status, 200);
-      assert.equal(detail.body.data.wallet.availableBalance, "42.5");
+      // Phase 11.6 correction: wallet balance is served only by the
+      // wallets.read-gated endpoint, never the customers.read Customer DTO.
+      const customerDetail = await request(app).get(`/api/v1/customers/${customerId}`).set(auth(tokens.admin));
+      assert.equal(customerDetail.status, 200);
+      assert.doesNotMatch(JSON.stringify(customerDetail.body), /availableBalance/i);
+
+      const walletDetail = await request(app).get(`/api/v1/wallets/${customerId}`).set(auth(tokens.admin));
+      assert.equal(walletDetail.status, 200);
+      assert.equal(walletDetail.body.data.wallet.availableBalance, "42.5");
     });
 
     test("update/deactivation never creates a wallet_transactions row", async () => {
@@ -464,7 +470,11 @@ describe("Phase 5.4 — Core Management Data Integration", () => {
         });
       assert.equal(res.status, 201);
       cleanup.customerIds.push(res.body.data.id);
-      assert.equal(res.body.data.wallet.availableBalance, "0");
+      // The injected wallet/availableBalance fields are stripped and have no
+      // effect — the DTO carries no wallet, and the DB wallet stays at 0.
+      assert.ok(!("wallet" in res.body.data));
+      const walletRow = await prisma.customer_wallets.findUniqueOrThrow({ where: { customer_id: res.body.data.id } });
+      assert.equal(walletRow.available_balance.toString(), "0");
     });
 
     test("concurrent duplicate customerNumber creates: exactly one succeeds, exactly one customer + one wallet exist", async () => {
@@ -511,7 +521,9 @@ describe("Phase 5.4 — Core Management Data Integration", () => {
       const driverId = res.body.data.id;
       cleanup.driverIds.push(driverId);
 
-      assert.equal(res.body.data.cashAccount.currentBalance, "0");
+      // Phase 11.7 correction: cash is no longer in the generic Driver DTO —
+      // verified directly against the DB below instead.
+      assert.equal("cashAccount" in res.body.data, false);
 
       const accounts = await prisma.driver_cash_accounts.findMany({ where: { driver_id: driverId } });
       assert.equal(accounts.length, 1);
@@ -1040,13 +1052,18 @@ describe("Phase 5.4 — Core Management Data Integration", () => {
       });
       assert.ok(!("walletBalance" in pollutedCustomerUpdate));
 
-      const pollutedDriverUpdate = UpdateDriverSchema.parse({
+      // Phase 11.7 correction: UpdateDriverSchema is strict — a cash/balance
+      // field is a hard parse failure, not a silently-stripped key.
+      const pollutedDriverUpdate = UpdateDriverSchema.safeParse({
         isActive: true,
         cashAccount: { currentBalance: "999999" },
         currentBalance: "999999",
       });
-      assert.ok(!("cashAccount" in pollutedDriverUpdate));
-      assert.ok(!("currentBalance" in pollutedDriverUpdate));
+      assert.equal(pollutedDriverUpdate.success, false);
+
+      const cleanDriverUpdate = UpdateDriverSchema.parse({ isActive: true });
+      assert.ok(!("cashAccount" in cleanDriverUpdate));
+      assert.ok(!("currentBalance" in cleanDriverUpdate));
     });
 
     test("summary: id/createdAt/created_by_id/customerNumber survive a PATCH attempt unchanged (Customer)", async () => {
@@ -1090,7 +1107,8 @@ describe("Phase 5.4 — Core Management Data Integration", () => {
       const driverId = created.body.data.id;
       cleanup.driverIds.push(driverId);
 
-      const res = await request(app)
+      // Phase 11.7 correction: strict schema rejects the protected keys.
+      const rejected = await request(app)
         .patch(`/api/v1/drivers/${driverId}`)
         .set(auth(tokens.admin))
         .send({
@@ -1100,12 +1118,20 @@ describe("Phase 5.4 — Core Management Data Integration", () => {
           createdAt: "2000-01-01T00:00:00.000Z",
           isActive: false,
         });
+      assert.equal(rejected.status, 400);
+      assert.equal(rejected.body.error.code, "VALIDATION_ERROR");
+
+      const res = await request(app)
+        .patch(`/api/v1/drivers/${driverId}`)
+        .set(auth(tokens.admin))
+        .send({ isActive: false });
       assert.equal(res.status, 200);
       assert.equal(res.body.data.driverNumber, created.body.data.driverNumber);
       assert.equal(res.body.data.user.id, linkable.id);
 
       const row = await prisma.drivers.findUniqueOrThrow({ where: { id: driverId } });
       assert.equal(row.user_id, linkable.id);
+      assert.equal(row.driver_number, created.body.data.driverNumber);
     });
   });
 
