@@ -48,6 +48,10 @@ export const selectAuthStatus = (state: RootState): AuthStatus =>
 export const selectIsAuthenticated = (state: RootState): boolean =>
   state.auth.status === 'authenticated';
 
+/** Authenticated role code (e.g. "ADMIN", "DRIVER"), or null when not hydrated. */
+export const selectRoleCode = (state: RootState): string | null =>
+  state.auth.user?.role.code ?? null;
+
 /** Permission codes from the hydrated identity — never synthesised from role. */
 export const selectPermissions = (state: RootState): string[] =>
   state.auth.user?.permissions ?? [];

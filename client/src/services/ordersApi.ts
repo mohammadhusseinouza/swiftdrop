@@ -1,0 +1,427 @@
+import { api } from './api';
+import { cleanParams } from './queryParams';
+import { unwrapData, unwrapList, unwrapObjectWithMeta } from './unwrap';
+import type {
+  ApiListResponse,
+  ApiObjectWithMeta,
+  ApiSuccessResponse,
+  Paginated,
+  PaginationParams,
+} from './apiTypes';
+import type {
+  BulkAssignResult,
+  DriverCashOverview,
+  DriverOrderDetail,
+  DriverOrderSummary,
+  OrderDetail,
+  OrderHistoryResponse,
+  OrderSummary,
+} from './domain.types';
+
+/**
+ * Orders (Phase 6) + Driver self-service order workflow (Phase 7 / 8.1).
+ * All backend routes verified against server/src/modules/{orders,driver-orders,
+ * driver-cash}.
+ *
+ * Invalidation respects the Phase 8 ledger model:
+ *   - a successful delivery touches Order + DriverCash + (DELIVERY_ONLY) Wallet
+ *     + Finance + Dashboard + Report
+ *   - resolve-collection-difference is a cross-ledger Finance action (Wallet
+ *     and/or Company revenue) — never Driver Cash
+ *   - failed delivery creates NO financial credit (requirements §19)
+ */
+
+/* ------------------------------- args ------------------------------- */
+
+export interface ListOrdersParams extends PaginationParams {
+  search?: string;
+  status?: string;
+  orderType?: string;
+  paymentType?: string;
+  financialStatus?: string;
+  customerId?: string;
+  driverId?: string;
+  areaId?: string;
+  needsFinancialReview?: boolean;
+  assignmentStatus?: 'ASSIGNED' | 'UNASSIGNED';
+  createdFrom?: string;
+  createdTo?: string;
+}
+
+export interface CreateOrderRequest {
+  customerId: string;
+  orderType: string;
+  paymentType: string;
+  receiverName: string;
+  receiverPhone: string;
+  receiverAltPhone?: string;
+  receiverAreaId: string;
+  receiverAddress: string;
+  receiverBuildingFloor?: string;
+  receiverMapLink?: string;
+  receiverInstructions?: string;
+  description: string;
+  packageCount?: number;
+  quantity?: number;
+  weightKg?: number;
+  packageNotes?: string;
+  orderAmount: string;
+  deliveryFee: string;
+  prepaidOrderAmount?: string;
+  prepaidDeliveryFee?: string;
+  prepaidPaymentMethodId?: string | null;
+  collectionPaymentMethodId?: string | null;
+}
+
+export type UpdateOrderRequest = Partial<
+  Omit<CreateOrderRequest, 'orderType'>
+> & {
+  receiverAltPhone?: string | null;
+  receiverBuildingFloor?: string | null;
+  receiverMapLink?: string | null;
+  receiverInstructions?: string | null;
+  quantity?: number | null;
+  weightKg?: number | null;
+  packageNotes?: string | null;
+};
+
+export interface ResolveCollectionDifferenceRequest {
+  customerWalletCredit: string;
+  companyProductRevenue: string;
+  companyDeliveryFeeRevenue: string;
+  resolutionNotes: string;
+}
+
+export interface ListDriverOrdersParams extends PaginationParams {
+  search?: string;
+  status?: string;
+}
+
+export interface DeliverDriverOrderRequest {
+  actualAmountCollected: string;
+  collectionDifferenceReason?: string;
+}
+
+export interface FailDriverOrderRequest {
+  failedReasonId: string;
+  notes?: string;
+}
+
+/* --------------------- shared invalidation sets --------------------- */
+
+const FINANCIAL_VIEWS = [
+  { type: 'Finance', id: 'SUMMARY' },
+  { type: 'Finance', id: 'TRANSACTIONS' },
+  { type: 'Dashboard', id: 'ROOT' },
+  { type: 'Report', id: 'LIST' },
+] as const;
+
+export const ordersApi = api.injectEndpoints({
+  endpoints: (builder) => ({
+    /* ===================== Management: Orders ===================== */
+
+    getOrders: builder.query<Paginated<OrderSummary>, ListOrdersParams | void>({
+      query: (params) => ({
+        url: '/orders',
+        params: cleanParams({ ...(params ?? {}) }),
+      }),
+      transformResponse: (r: ApiListResponse<OrderSummary>) => unwrapList(r),
+      providesTags: [{ type: 'Order', id: 'LIST' }],
+    }),
+
+    getOrder: builder.query<OrderDetail, string>({
+      query: (id) => ({ url: `/orders/${id}` }),
+      transformResponse: (r: ApiSuccessResponse<OrderDetail>) => unwrapData(r),
+      providesTags: (_res, _err, id) => [{ type: 'Order', id }],
+    }),
+
+    getOrderHistory: builder.query<OrderHistoryResponse, string>({
+      query: (id) => ({ url: `/orders/${id}/history` }),
+      transformResponse: (r: ApiSuccessResponse<OrderHistoryResponse>) =>
+        unwrapData(r),
+      // Shares the per-order tag: any status/assignment mutation refetches it.
+      providesTags: (_res, _err, id) => [{ type: 'Order', id }],
+    }),
+
+    createOrder: builder.mutation<OrderDetail, CreateOrderRequest>({
+      query: (body) => ({ url: '/orders', method: 'POST', body }),
+      transformResponse: (r: ApiSuccessResponse<OrderDetail>) => unwrapData(r),
+      invalidatesTags: [
+        { type: 'Order', id: 'LIST' },
+        { type: 'Dashboard', id: 'ROOT' },
+        { type: 'Report', id: 'LIST' },
+      ],
+    }),
+
+    updateOrder: builder.mutation<
+      OrderDetail,
+      { id: string; body: UpdateOrderRequest }
+    >({
+      query: ({ id, body }) => ({ url: `/orders/${id}`, method: 'PATCH', body }),
+      transformResponse: (r: ApiSuccessResponse<OrderDetail>) => unwrapData(r),
+      invalidatesTags: (_res, _err, { id }) => [
+        { type: 'Order', id },
+        { type: 'Order', id: 'LIST' },
+        { type: 'Dashboard', id: 'ROOT' },
+        { type: 'Report', id: 'LIST' },
+      ],
+    }),
+
+    assignOrder: builder.mutation<
+      OrderDetail,
+      { id: string; driverId: string }
+    >({
+      query: ({ id, driverId }) => ({
+        url: `/orders/${id}/assign`,
+        method: 'POST',
+        body: { driverId },
+      }),
+      transformResponse: (r: ApiSuccessResponse<OrderDetail>) => unwrapData(r),
+      invalidatesTags: (_res, _err, { id }) => [
+        { type: 'Order', id },
+        { type: 'Order', id: 'LIST' },
+        { type: 'Driver', id: 'LIST' },
+        { type: 'DriverOrder', id: 'LIST' },
+        { type: 'Dashboard', id: 'ROOT' },
+        { type: 'Report', id: 'LIST' },
+      ],
+    }),
+
+    reassignOrder: builder.mutation<
+      OrderDetail,
+      { id: string; driverId: string; reason: string }
+    >({
+      query: ({ id, driverId, reason }) => ({
+        url: `/orders/${id}/reassign`,
+        method: 'POST',
+        body: { driverId, reason },
+      }),
+      transformResponse: (r: ApiSuccessResponse<OrderDetail>) => unwrapData(r),
+      invalidatesTags: (_res, _err, { id }) => [
+        { type: 'Order', id },
+        { type: 'Order', id: 'LIST' },
+        { type: 'Driver', id: 'LIST' },
+        { type: 'DriverOrder', id: 'LIST' },
+        { type: 'Dashboard', id: 'ROOT' },
+        { type: 'Report', id: 'LIST' },
+      ],
+    }),
+
+    bulkAssignOrders: builder.mutation<
+      BulkAssignResult,
+      { orderIds: string[]; driverId: string }
+    >({
+      query: (body) => ({ url: '/orders/bulk-assign', method: 'POST', body }),
+      transformResponse: (r: ApiSuccessResponse<BulkAssignResult>) =>
+        unwrapData(r),
+      invalidatesTags: [
+        { type: 'Order', id: 'LIST' },
+        { type: 'Driver', id: 'LIST' },
+        { type: 'DriverOrder', id: 'LIST' },
+        { type: 'Dashboard', id: 'ROOT' },
+        { type: 'Report', id: 'LIST' },
+      ],
+    }),
+
+    readyOrder: builder.mutation<OrderDetail, string>({
+      query: (id) => ({ url: `/orders/${id}/ready`, method: 'POST' }),
+      transformResponse: (r: ApiSuccessResponse<OrderDetail>) => unwrapData(r),
+      invalidatesTags: (_res, _err, id) => [
+        { type: 'Order', id },
+        { type: 'Order', id: 'LIST' },
+        { type: 'Dashboard', id: 'ROOT' },
+      ],
+    }),
+
+    rescheduleOrder: builder.mutation<
+      OrderDetail,
+      { id: string; reason: string; notes?: string }
+    >({
+      query: ({ id, ...body }) => ({
+        url: `/orders/${id}/reschedule`,
+        method: 'POST',
+        body,
+      }),
+      transformResponse: (r: ApiSuccessResponse<OrderDetail>) => unwrapData(r),
+      invalidatesTags: (_res, _err, { id }) => [
+        { type: 'Order', id },
+        { type: 'Order', id: 'LIST' },
+        { type: 'Dashboard', id: 'ROOT' },
+        { type: 'Report', id: 'LIST' },
+      ],
+    }),
+
+    cancelOrder: builder.mutation<
+      OrderDetail,
+      { id: string; reason: string; notes?: string }
+    >({
+      query: ({ id, ...body }) => ({
+        url: `/orders/${id}/cancel`,
+        method: 'POST',
+        body,
+      }),
+      transformResponse: (r: ApiSuccessResponse<OrderDetail>) => unwrapData(r),
+      invalidatesTags: (_res, _err, { id }) => [
+        { type: 'Order', id },
+        { type: 'Order', id: 'LIST' },
+        { type: 'Dashboard', id: 'ROOT' },
+        { type: 'Report', id: 'LIST' },
+      ],
+    }),
+
+    // Phase 8.7 cross-ledger Finance action — can create Customer Wallet
+    // liability and/or Company revenue. Never touches Driver Cash.
+    resolveCollectionDifference: builder.mutation<
+      OrderDetail,
+      { id: string; body: ResolveCollectionDifferenceRequest }
+    >({
+      query: ({ id, body }) => ({
+        url: `/orders/${id}/resolve-collection-difference`,
+        method: 'POST',
+        body,
+      }),
+      transformResponse: (r: ApiSuccessResponse<OrderDetail>) => unwrapData(r),
+      invalidatesTags: (_res, _err, { id }) => [
+        { type: 'Order', id },
+        { type: 'Order', id: 'LIST' },
+        { type: 'Wallet', id: 'LIST' },
+        { type: 'WalletTransaction', id: 'LIST' },
+        ...FINANCIAL_VIEWS,
+      ],
+    }),
+
+    /* ================= Driver self-service (Phase 7) ================= */
+
+    getDriverOrders: builder.query<
+      Paginated<DriverOrderSummary>,
+      ListDriverOrdersParams | void
+    >({
+      query: (params) => ({
+        url: '/driver/me/orders',
+        params: cleanParams({ ...(params ?? {}) }),
+      }),
+      transformResponse: (r: ApiListResponse<DriverOrderSummary>) =>
+        unwrapList(r),
+      providesTags: [{ type: 'DriverOrder', id: 'LIST' }],
+    }),
+
+    getDriverOrder: builder.query<DriverOrderDetail, string>({
+      query: (id) => ({ url: `/driver/me/orders/${id}` }),
+      transformResponse: (r: ApiSuccessResponse<DriverOrderDetail>) =>
+        unwrapData(r),
+      providesTags: (_res, _err, id) => [{ type: 'DriverOrder', id }],
+    }),
+
+    getDriverCash: builder.query<
+      { data: DriverCashOverview; meta: Paginated<never>['meta'] },
+      { page?: number; limit?: number; type?: string } | void
+    >({
+      query: (params) => ({
+        url: '/driver/me/cash',
+        params: cleanParams({ ...(params ?? {}) }),
+      }),
+      transformResponse: (r: ApiObjectWithMeta<DriverCashOverview>) =>
+        unwrapObjectWithMeta(r),
+      providesTags: [{ type: 'DriverCash', id: 'ME' }],
+    }),
+
+    pickupDriverOrder: builder.mutation<DriverOrderDetail, string>({
+      query: (id) => ({ url: `/driver/orders/${id}/pickup`, method: 'POST' }),
+      transformResponse: (r: ApiSuccessResponse<DriverOrderDetail>) =>
+        unwrapData(r),
+      invalidatesTags: (_res, _err, id) => [
+        { type: 'DriverOrder', id },
+        { type: 'DriverOrder', id: 'LIST' },
+        { type: 'Order', id },
+        { type: 'Order', id: 'LIST' },
+        { type: 'Dashboard', id: 'ROOT' },
+      ],
+    }),
+
+    startDriverOrderDelivery: builder.mutation<DriverOrderDetail, string>({
+      query: (id) => ({
+        url: `/driver/orders/${id}/start-delivery`,
+        method: 'POST',
+      }),
+      transformResponse: (r: ApiSuccessResponse<DriverOrderDetail>) =>
+        unwrapData(r),
+      invalidatesTags: (_res, _err, id) => [
+        { type: 'DriverOrder', id },
+        { type: 'DriverOrder', id: 'LIST' },
+        { type: 'Order', id },
+        { type: 'Order', id: 'LIST' },
+        { type: 'Dashboard', id: 'ROOT' },
+      ],
+    }),
+
+    failDriverOrder: builder.mutation<
+      DriverOrderDetail,
+      { id: string; body: FailDriverOrderRequest }
+    >({
+      query: ({ id, body }) => ({
+        url: `/driver/orders/${id}/fail`,
+        method: 'POST',
+        body,
+      }),
+      transformResponse: (r: ApiSuccessResponse<DriverOrderDetail>) =>
+        unwrapData(r),
+      // No financial credit on failure (requirements §19).
+      invalidatesTags: (_res, _err, { id }) => [
+        { type: 'DriverOrder', id },
+        { type: 'DriverOrder', id: 'LIST' },
+        { type: 'Order', id },
+        { type: 'Order', id: 'LIST' },
+        { type: 'Dashboard', id: 'ROOT' },
+        { type: 'Report', id: 'LIST' },
+      ],
+    }),
+
+    deliverDriverOrder: builder.mutation<
+      DriverOrderDetail,
+      { id: string; body: DeliverDriverOrderRequest }
+    >({
+      query: ({ id, body }) => ({
+        url: `/driver/orders/${id}/deliver`,
+        method: 'POST',
+        body,
+      }),
+      transformResponse: (r: ApiSuccessResponse<DriverOrderDetail>) =>
+        unwrapData(r),
+      // Delivery: Driver Cash always; Customer Wallet for DELIVERY_ONLY;
+      // Company delivery-fee revenue; plus Dashboard/Reports. Never a
+      // Settlement (that is a separate cash-handover action).
+      invalidatesTags: (_res, _err, { id }) => [
+        { type: 'DriverOrder', id },
+        { type: 'DriverOrder', id: 'LIST' },
+        { type: 'Order', id },
+        { type: 'Order', id: 'LIST' },
+        { type: 'DriverCash', id: 'ME' },
+        { type: 'Wallet', id: 'LIST' },
+        { type: 'WalletTransaction', id: 'LIST' },
+        ...FINANCIAL_VIEWS,
+      ],
+    }),
+  }),
+});
+
+export const {
+  useGetOrdersQuery,
+  useGetOrderQuery,
+  useGetOrderHistoryQuery,
+  useCreateOrderMutation,
+  useUpdateOrderMutation,
+  useAssignOrderMutation,
+  useReassignOrderMutation,
+  useBulkAssignOrdersMutation,
+  useReadyOrderMutation,
+  useRescheduleOrderMutation,
+  useCancelOrderMutation,
+  useResolveCollectionDifferenceMutation,
+  useGetDriverOrdersQuery,
+  useGetDriverOrderQuery,
+  useGetDriverCashQuery,
+  usePickupDriverOrderMutation,
+  useStartDriverOrderDeliveryMutation,
+  useFailDriverOrderMutation,
+  useDeliverDriverOrderMutation,
+} = ordersApi;

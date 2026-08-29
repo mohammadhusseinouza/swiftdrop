@@ -1,17 +1,86 @@
 @import 'tailwindcss';
 
 /*
- * Phase 10.1 base styles only.
- * The full design-token system and shared component styles are Phase 10.6.
+ * SwiftDrop design tokens (Phase 10.6).
+ *
+ * Consolidated from the approved SwiftDrop / Claude Design visual reference.
+ * Tailwind v4 CSS-first theme — every token below is exposed as a utility
+ * (e.g. --color-brand-600 -> bg-brand-600 / text-brand-600, --radius-card ->
+ * rounded-card, --shadow-card -> shadow-card).
+ *
+ * V1 is a LIGHT operational UI with a dark management sidebar (the `chrome`
+ * family). No theme toggle, no separate dark design system.
  */
 @theme {
-  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica,
-    Arial, sans-serif;
+  --font-sans:
+    'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial,
+    sans-serif;
+
+  /* Brand */
+  --color-brand-50: #eef1fe;
+  --color-brand-100: #d5ddfc;
+  --color-brand-500: #3a56e8;
   --color-brand-600: #2b49e5;
+  --color-brand-700: #2138be;
+
+  /* Text ("ink") */
+  --color-ink: #101319;
+  --color-ink-secondary: #39404e;
+  --color-ink-muted: #6e7686;
+  --color-ink-subtle: #9aa1ae;
+  --color-ink-inverse: #f5f6f8;
+
+  /* Hairlines */
+  --color-line: #e6e8ec;
+  --color-line-subtle: #f0f1f4;
+  --color-line-strong: #d6d9e0;
+
+  /* Surfaces */
+  --color-canvas: #f5f6f8;
+  --color-card: #ffffff;
+  --color-sunken: #f7f8fa;
+
+  /* Dark management chrome (sidebar) */
+  --color-chrome: #0e1524;
+  --color-chrome-deep: #111a2c;
+  --color-chrome-line: #1b2437;
+  --color-chrome-ink: #9aa1ae;
+  --color-chrome-ink-strong: #ffffff;
+
+  /* Semantic status tones (bg / border / text) */
+  --color-success-50: #edf9f1;
+  --color-success-200: #ccebd7;
+  --color-success-700: #15803d;
+
+  --color-warning-50: #fef6e7;
+  --color-warning-200: #f7e2b8;
+  --color-warning-700: #b45309;
+
+  --color-danger-50: #fdf0f0;
+  --color-danger-200: #f8dada;
+  --color-danger-700: #b91c1c;
+
+  --color-info-50: #eef1fe;
+  --color-info-200: #d5ddfc;
+  --color-info-700: #2138be;
+
+  --color-neutral-50: #f0f1f4;
+  --color-neutral-200: #e6e8ec;
+  --color-neutral-700: #39404e;
+
+  /* Radii */
+  --radius-badge: 0.5rem; /* 8px  */
+  --radius-control: 0.625rem; /* 10px */
+  --radius-card: 0.75rem; /* 12px */
+
+  /* Shadows */
+  --shadow-card: 0 1px 3px rgba(16, 19, 25, 0.06), 0 1px 2px rgba(16, 19, 25, 0.04);
+  --shadow-raised: 0 8px 24px rgba(16, 19, 25, 0.1);
+  --shadow-overlay: 0 16px 40px rgba(16, 19, 25, 0.18);
 }
 
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
 }
 
 html {
@@ -21,7 +90,16 @@ html {
 body {
   margin: 0;
   min-height: 100vh;
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+/* Consistent, visible keyboard focus for every interactive element. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-brand-600);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
