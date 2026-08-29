@@ -1,0 +1,43 @@
+{
+  "name": "swiftdrop-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SwiftDrop delivery management system backend",
+  "main": "dist/server.js",
+  "engines": {
+    "node": "^20.19.0 || ^22.12.0 || ^24.0.0"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
+    "admin:create": "tsx src/bootstrap/create-first-admin.ts",
+    "test": "tsx --test \"tests/**/*.test.ts\"",
+    "test:auth": "tsx --test \"tests/auth/**/*.test.ts\"",
+    "test:customers": "tsx --test \"tests/customers/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.9.1",
+    "@prisma/client": "^7.9.1",
+    "bcrypt": "^6.0.0",
+    "cookie-parser": "^1.4.7",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.3",
+    "pg": "^8.23.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^6.0.0",
+    "@types/cookie-parser": "^1.4.10",
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^22.10.2",
+    "@types/pg": "^8.23.1",
+    "@types/supertest": "^7.2.1",
+    "prisma": "^7.9.1",
+    "supertest": "^7.2.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

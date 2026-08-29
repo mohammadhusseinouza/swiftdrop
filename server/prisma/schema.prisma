@@ -1,0 +1,544 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model areas {
+  id         String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name       String      @unique @db.VarChar(150)
+  is_active  Boolean     @default(true)
+  sort_order Int         @default(0)
+  created_at DateTime    @default(now()) @db.Timestamptz(3)
+  updated_at DateTime    @default(now()) @db.Timestamptz(3)
+  customers  customers[]
+  orders     orders[]
+
+  @@index([is_active, sort_order])
+}
+
+model audit_logs {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  actor_user_id   String?  @db.Uuid
+  action          String   @db.VarChar(100)
+  entity_type     String   @db.VarChar(100)
+  entity_id       String   @db.VarChar(100)
+  previous_values Json?
+  new_values      Json?
+  metadata        Json?
+  created_at      DateTime @default(now()) @db.Timestamptz(3)
+  users           users?   @relation(fields: [actor_user_id], references: [id], onUpdate: NoAction)
+
+  @@index([action, created_at])
+  @@index([actor_user_id, created_at])
+  @@index([entity_type, entity_id, created_at])
+}
+
+model company_financial_transactions {
+  id                                   String                           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  order_id                             String?                          @db.Uuid
+  type                                 CompanyFinancialTransactionType
+  amount                               Decimal                          @db.Decimal(14, 2)
+  payment_method_id                    String?                          @db.Uuid
+  created_by_id                        String?                          @db.Uuid
+  notes                                String?
+  reversal_of_id                       String?                          @db.Uuid
+  idempotency_key                      String?                          @unique @db.VarChar(200)
+  created_at                           DateTime                         @default(now()) @db.Timestamptz(3)
+  users                                users?                           @relation(fields: [created_by_id], references: [id], onUpdate: NoAction)
+  orders                               orders?                          @relation(fields: [order_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  payment_methods                      payment_methods?                 @relation(fields: [payment_method_id], references: [id], onUpdate: NoAction)
+  company_financial_transactions       company_financial_transactions?  @relation("company_financial_transactionsTocompany_financial_transactions", fields: [reversal_of_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  other_company_financial_transactions company_financial_transactions[] @relation("company_financial_transactionsTocompany_financial_transactions")
+
+  @@index([created_at])
+  @@index([order_id])
+  @@index([type, created_at])
+}
+
+model customer_payouts {
+  id                  String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  payout_number       String               @unique @db.VarChar(50)
+  customer_id         String               @db.Uuid
+  amount              Decimal              @db.Decimal(14, 2)
+  payment_method_id   String               @db.Uuid
+  status              PayoutStatus         @default(COMPLETED)
+  processed_by_id     String               @db.Uuid
+  notes               String?
+  created_at          DateTime             @default(now()) @db.Timestamptz(3)
+  updated_at          DateTime             @default(now()) @db.Timestamptz(3)
+  customers           customers            @relation(fields: [customer_id], references: [id], onUpdate: NoAction)
+  payment_methods     payment_methods      @relation(fields: [payment_method_id], references: [id], onUpdate: NoAction)
+  users               users                @relation(fields: [processed_by_id], references: [id], onUpdate: NoAction)
+  wallet_transactions wallet_transactions?
+
+  @@index([customer_id, created_at])
+  @@index([status, created_at])
+}
+
+model customer_wallets {
+  id                  String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customer_id         String                @unique @db.Uuid
+  available_balance   Decimal               @default(0) @db.Decimal(14, 2)
+  created_at          DateTime              @default(now()) @db.Timestamptz(3)
+  updated_at          DateTime              @default(now()) @db.Timestamptz(3)
+  customers           customers             @relation(fields: [customer_id], references: [id], onUpdate: NoAction)
+  wallet_transactions wallet_transactions[]
+}
+
+model customers {
+  id                                    String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  portal_user_id                        String?               @unique @db.Uuid
+  customer_number                       String                @unique @db.VarChar(50)
+  name                                  String                @db.VarChar(200)
+  primary_phone                         String                @db.VarChar(30)
+  secondary_phone                       String?               @db.VarChar(30)
+  email                                 String?               @db.VarChar(255)
+  default_address                       String?               @db.VarChar(500)
+  default_area_id                       String?               @db.Uuid
+  notes                                 String?
+  is_active                             Boolean               @default(true)
+  created_by_id                         String                @db.Uuid
+  created_at                            DateTime              @default(now()) @db.Timestamptz(3)
+  updated_at                            DateTime              @default(now()) @db.Timestamptz(3)
+  customer_payouts                      customer_payouts[]
+  customer_wallets                      customer_wallets?
+  users_customers_created_by_idTousers  users                 @relation("customers_created_by_idTousers", fields: [created_by_id], references: [id], onUpdate: NoAction)
+  areas                                 areas?                @relation(fields: [default_area_id], references: [id], onUpdate: NoAction)
+  users_customers_portal_user_idTousers users?                @relation("customers_portal_user_idTousers", fields: [portal_user_id], references: [id], onUpdate: NoAction)
+  orders                                orders[]
+  wallet_transactions                   wallet_transactions[]
+
+  @@index([default_area_id])
+  @@index([is_active])
+  @@index([name])
+  @@index([primary_phone])
+}
+
+model delivery_attempts {
+  id                      String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  order_id                String                   @db.Uuid
+  driver_id               String                   @db.Uuid
+  attempt_number          Int
+  expected_collection     Decimal                  @db.Decimal(14, 2)
+  actual_collection       Decimal?                 @db.Decimal(14, 2)
+  outcome                 DeliveryAttemptOutcome
+  failed_reason_id        String?                  @db.Uuid
+  notes                   String?
+  started_at              DateTime                 @default(now()) @db.Timestamptz(3)
+  completed_at            DateTime?                @db.Timestamptz(3)
+  created_at              DateTime                 @default(now()) @db.Timestamptz(3)
+  drivers                 drivers                  @relation(fields: [driver_id], references: [id], onUpdate: NoAction)
+  failed_delivery_reasons failed_delivery_reasons? @relation(fields: [failed_reason_id], references: [id], onUpdate: NoAction)
+  orders                  orders                   @relation(fields: [order_id], references: [id], onUpdate: NoAction)
+
+  @@unique([order_id, attempt_number])
+  @@index([driver_id, started_at])
+  @@index([outcome, completed_at])
+}
+
+model driver_cash_accounts {
+  id                       String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  driver_id                String                     @unique @db.Uuid
+  current_balance          Decimal                    @default(0) @db.Decimal(14, 2)
+  created_at               DateTime                   @default(now()) @db.Timestamptz(3)
+  updated_at               DateTime                   @default(now()) @db.Timestamptz(3)
+  drivers                  drivers                    @relation(fields: [driver_id], references: [id], onUpdate: NoAction)
+  driver_cash_transactions driver_cash_transactions[]
+}
+
+model driver_cash_transactions {
+  id                             String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  account_id                     String                     @db.Uuid
+  driver_id                      String                     @db.Uuid
+  order_id                       String?                    @db.Uuid
+  settlement_id                  String?                    @unique @db.Uuid
+  type                           DriverCashTransactionType
+  amount                         Decimal                    @db.Decimal(14, 2)
+  balance_before                 Decimal                    @db.Decimal(14, 2)
+  balance_after                  Decimal                    @db.Decimal(14, 2)
+  created_by_id                  String?                    @db.Uuid
+  notes                          String?
+  reversal_of_id                 String?                    @db.Uuid
+  idempotency_key                String?                    @unique @db.VarChar(200)
+  created_at                     DateTime                   @default(now()) @db.Timestamptz(3)
+  driver_cash_accounts           driver_cash_accounts       @relation(fields: [account_id], references: [id], onUpdate: NoAction)
+  users                          users?                     @relation(fields: [created_by_id], references: [id], onUpdate: NoAction)
+  drivers                        drivers                    @relation(fields: [driver_id], references: [id], onUpdate: NoAction)
+  orders                         orders?                    @relation(fields: [order_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  driver_cash_transactions       driver_cash_transactions?  @relation("driver_cash_transactionsTodriver_cash_transactions", fields: [reversal_of_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  other_driver_cash_transactions driver_cash_transactions[] @relation("driver_cash_transactionsTodriver_cash_transactions")
+  driver_settlements             driver_settlements?        @relation(fields: [settlement_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([account_id, created_at])
+  @@index([driver_id, created_at])
+  @@index([order_id])
+  @@index([type, created_at])
+}
+
+model driver_settlements {
+  id                       String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  settlement_number        String                    @unique @db.VarChar(50)
+  driver_id                String                    @db.Uuid
+  balance_before           Decimal                   @db.Decimal(14, 2)
+  amount_received          Decimal                   @db.Decimal(14, 2)
+  balance_after            Decimal                   @db.Decimal(14, 2)
+  payment_method_id        String                    @db.Uuid
+  received_by_id           String                    @db.Uuid
+  notes                    String?
+  created_at               DateTime                  @default(now()) @db.Timestamptz(3)
+  driver_cash_transactions driver_cash_transactions?
+  drivers                  drivers                   @relation(fields: [driver_id], references: [id], onUpdate: NoAction)
+  payment_methods          payment_methods           @relation(fields: [payment_method_id], references: [id], onUpdate: NoAction)
+  users                    users                     @relation(fields: [received_by_id], references: [id], onUpdate: NoAction)
+
+  @@index([driver_id, created_at])
+}
+
+model drivers {
+  id                       String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id                  String                     @unique @db.Uuid
+  driver_number            String                     @unique @db.VarChar(50)
+  is_active                Boolean                    @default(true)
+  created_at               DateTime                   @default(now()) @db.Timestamptz(3)
+  updated_at               DateTime                   @default(now()) @db.Timestamptz(3)
+  delivery_attempts        delivery_attempts[]
+  driver_cash_accounts     driver_cash_accounts?
+  driver_cash_transactions driver_cash_transactions[]
+  driver_settlements       driver_settlements[]
+  users                    users                      @relation(fields: [user_id], references: [id], onUpdate: NoAction)
+  order_assignments        order_assignments[]
+  orders                   orders[]
+
+  @@index([is_active])
+}
+
+model employees {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id         String   @unique @db.Uuid
+  employee_number String   @unique @db.VarChar(50)
+  created_at      DateTime @default(now()) @db.Timestamptz(3)
+  updated_at      DateTime @default(now()) @db.Timestamptz(3)
+  users           users    @relation(fields: [user_id], references: [id], onUpdate: NoAction)
+}
+
+model failed_delivery_reasons {
+  id                String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name              String              @unique @db.VarChar(150)
+  requires_notes    Boolean             @default(false)
+  is_active         Boolean             @default(true)
+  sort_order        Int                 @default(0)
+  created_at        DateTime            @default(now()) @db.Timestamptz(3)
+  updated_at        DateTime            @default(now()) @db.Timestamptz(3)
+  delivery_attempts delivery_attempts[]
+
+  @@index([is_active, sort_order])
+}
+
+model order_assignments {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  order_id       String    @db.Uuid
+  driver_id      String    @db.Uuid
+  assigned_by_id String    @db.Uuid
+  assigned_at    DateTime  @default(now()) @db.Timestamptz(3)
+  ended_at       DateTime? @db.Timestamptz(3)
+  end_reason     String?   @db.VarChar(500)
+  is_current     Boolean   @default(true)
+  users          users     @relation(fields: [assigned_by_id], references: [id], onUpdate: NoAction)
+  drivers        drivers   @relation(fields: [driver_id], references: [id], onUpdate: NoAction)
+  orders         orders    @relation(fields: [order_id], references: [id], onUpdate: NoAction)
+
+  @@index([assigned_at])
+  @@index([driver_id, is_current])
+  @@index([order_id, is_current])
+}
+
+model order_status_history {
+  id            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  order_id      String       @db.Uuid
+  from_status   OrderStatus?
+  to_status     OrderStatus
+  changed_by_id String       @db.Uuid
+  reason        String?      @db.VarChar(500)
+  notes         String?
+  created_at    DateTime     @default(now()) @db.Timestamptz(3)
+  users         users        @relation(fields: [changed_by_id], references: [id], onUpdate: NoAction)
+  orders        orders       @relation(fields: [order_id], references: [id], onUpdate: NoAction)
+
+  @@index([order_id, created_at])
+  @@index([to_status, created_at])
+}
+
+model orders {
+  id                                                                   String                           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  order_number                                                         String                           @unique @db.VarChar(50)
+  tracking_code                                                        String                           @unique @db.VarChar(100)
+  customer_id                                                          String                           @db.Uuid
+  created_by_id                                                        String                           @db.Uuid
+  order_type                                                           OrderType
+  status                                                               OrderStatus                      @default(RECEIVED)
+  financial_status                                                     OrderFinancialStatus             @default(PENDING)
+  receiver_name                                                        String                           @db.VarChar(200)
+  receiver_phone                                                       String                           @db.VarChar(30)
+  receiver_alt_phone                                                   String?                          @db.VarChar(30)
+  receiver_area_id                                                     String?                          @db.Uuid
+  receiver_area                                                        String                           @db.VarChar(150)
+  receiver_address                                                     String                           @db.VarChar(500)
+  receiver_building_floor                                              String?                          @db.VarChar(200)
+  receiver_map_link                                                    String?                          @db.VarChar(1000)
+  receiver_instructions                                                String?
+  description                                                          String
+  package_count                                                        Int                              @default(1)
+  quantity                                                             Int?
+  weight_kg                                                            Decimal?                         @db.Decimal(10, 3)
+  package_notes                                                        String?
+  order_amount                                                         Decimal                          @db.Decimal(14, 2)
+  delivery_fee                                                         Decimal                          @db.Decimal(14, 2)
+  payment_type                                                         PaymentType
+  prepaid_order_amount                                                 Decimal                          @default(0) @db.Decimal(14, 2)
+  prepaid_delivery_fee                                                 Decimal                          @default(0) @db.Decimal(14, 2)
+  remaining_order_amount                                               Decimal                          @db.Decimal(14, 2)
+  remaining_delivery_fee                                               Decimal                          @db.Decimal(14, 2)
+  amount_to_collect                                                    Decimal                          @db.Decimal(14, 2)
+  actual_amount_collected                                              Decimal?                         @db.Decimal(14, 2)
+  prepaid_payment_method_id                                            String?                          @db.Uuid
+  collection_payment_method_id                                         String?                          @db.Uuid
+  collection_difference_reason                                         String?
+  needs_financial_review                                               Boolean                          @default(false)
+  current_driver_id                                                    String?                          @db.Uuid
+  assigned_at                                                          DateTime?                        @db.Timestamptz(3)
+  picked_up_at                                                         DateTime?                        @db.Timestamptz(3)
+  out_for_delivery_at                                                  DateTime?                        @db.Timestamptz(3)
+  delivered_at                                                         DateTime?                        @db.Timestamptz(3)
+  cancelled_at                                                         DateTime?                        @db.Timestamptz(3)
+  created_at                                                           DateTime                         @default(now()) @db.Timestamptz(3)
+  updated_at                                                           DateTime                         @default(now()) @db.Timestamptz(3)
+  company_financial_transactions                                       company_financial_transactions[]
+  delivery_attempts                                                    delivery_attempts[]
+  driver_cash_transactions                                             driver_cash_transactions[]
+  order_assignments                                                    order_assignments[]
+  order_status_history                                                 order_status_history[]
+  payment_methods_orders_collection_payment_method_idTopayment_methods payment_methods?                 @relation("orders_collection_payment_method_idTopayment_methods", fields: [collection_payment_method_id], references: [id], onUpdate: NoAction)
+  users                                                                users                            @relation(fields: [created_by_id], references: [id], onUpdate: NoAction)
+  drivers                                                              drivers?                         @relation(fields: [current_driver_id], references: [id], onUpdate: NoAction)
+  customers                                                            customers                        @relation(fields: [customer_id], references: [id], onUpdate: NoAction)
+  payment_methods_orders_prepaid_payment_method_idTopayment_methods    payment_methods?                 @relation("orders_prepaid_payment_method_idTopayment_methods", fields: [prepaid_payment_method_id], references: [id], onUpdate: NoAction)
+  areas                                                                areas?                           @relation(fields: [receiver_area_id], references: [id], onUpdate: NoAction)
+  wallet_transactions                                                  wallet_transactions[]
+
+  @@index([created_at])
+  @@index([customer_id, status])
+  @@index([delivered_at])
+  @@index([financial_status])
+  @@index([order_type, status])
+  @@index([receiver_area])
+  @@index([receiver_phone])
+  @@index([status, current_driver_id])
+}
+
+model payment_methods {
+  id                                                          String                           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code                                                        String                           @unique @db.VarChar(50)
+  name                                                        String                           @db.VarChar(100)
+  is_active                                                   Boolean                          @default(true)
+  sort_order                                                  Int                              @default(0)
+  created_at                                                  DateTime                         @default(now()) @db.Timestamptz(3)
+  updated_at                                                  DateTime                         @default(now()) @db.Timestamptz(3)
+  company_financial_transactions                              company_financial_transactions[]
+  customer_payouts                                            customer_payouts[]
+  driver_settlements                                          driver_settlements[]
+  orders_orders_collection_payment_method_idTopayment_methods orders[]                         @relation("orders_collection_payment_method_idTopayment_methods")
+  orders_orders_prepaid_payment_method_idTopayment_methods    orders[]                         @relation("orders_prepaid_payment_method_idTopayment_methods")
+  wallet_transactions                                         wallet_transactions[]
+
+  @@index([is_active, sort_order])
+}
+
+model permissions {
+  id               String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code             String             @unique @db.VarChar(100)
+  name             String             @db.VarChar(150)
+  description      String?            @db.VarChar(500)
+  created_at       DateTime           @default(now()) @db.Timestamptz(3)
+  role_permissions role_permissions[]
+}
+
+model role_permissions {
+  role_id       String      @db.Uuid
+  permission_id String      @db.Uuid
+  created_at    DateTime    @default(now()) @db.Timestamptz(3)
+  permissions   permissions @relation(fields: [permission_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  roles         roles       @relation(fields: [role_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([role_id, permission_id])
+  @@index([permission_id])
+}
+
+model roles {
+  id               String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name             String             @db.VarChar(100)
+  code             String             @unique @db.VarChar(50)
+  description      String?            @db.VarChar(500)
+  is_active        Boolean            @default(true)
+  created_at       DateTime           @default(now()) @db.Timestamptz(3)
+  updated_at       DateTime           @default(now()) @db.Timestamptz(3)
+  role_permissions role_permissions[]
+  users            users[]
+}
+
+model system_settings {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  key           String   @unique @db.VarChar(150)
+  value         Json
+  description   String?  @db.VarChar(500)
+  updated_by_id String?  @db.Uuid
+  created_at    DateTime @default(now()) @db.Timestamptz(3)
+  updated_at    DateTime @default(now()) @db.Timestamptz(3)
+  users         users?   @relation(fields: [updated_by_id], references: [id], onUpdate: NoAction)
+}
+
+model users {
+  id                                        String                           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email                                     String                           @unique @db.VarChar(255)
+  password_hash                             String                           @db.VarChar(255)
+  first_name                                String                           @db.VarChar(100)
+  last_name                                 String                           @db.VarChar(100)
+  phone                                     String?                          @db.VarChar(30)
+  role_id                                   String                           @db.Uuid
+  is_active                                 Boolean                          @default(true)
+  last_login_at                             DateTime?                        @db.Timestamptz(3)
+  created_at                                DateTime                         @default(now()) @db.Timestamptz(3)
+  updated_at                                DateTime                         @default(now()) @db.Timestamptz(3)
+  audit_logs                                audit_logs[]
+  auth_sessions                             auth_sessions[]
+  company_financial_transactions            company_financial_transactions[]
+  customer_payouts                          customer_payouts[]
+  customers_customers_created_by_idTousers  customers[]                      @relation("customers_created_by_idTousers")
+  customers_customers_portal_user_idTousers customers?                       @relation("customers_portal_user_idTousers")
+  driver_cash_transactions                  driver_cash_transactions[]
+  driver_settlements                        driver_settlements[]
+  drivers                                   drivers?
+  employees                                 employees?
+  order_assignments                         order_assignments[]
+  order_status_history                      order_status_history[]
+  orders                                    orders[]
+  system_settings                           system_settings[]
+  roles                                     roles                            @relation(fields: [role_id], references: [id], onUpdate: NoAction)
+  wallet_transactions                       wallet_transactions[]
+
+  @@index([is_active])
+  @@index([role_id])
+}
+
+model wallet_transactions {
+  id                        String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  wallet_id                 String                @db.Uuid
+  customer_id               String                @db.Uuid
+  order_id                  String?               @db.Uuid
+  payout_id                 String?               @unique @db.Uuid
+  type                      WalletTransactionType
+  credit                    Decimal               @default(0) @db.Decimal(14, 2)
+  debit                     Decimal               @default(0) @db.Decimal(14, 2)
+  balance_before            Decimal               @db.Decimal(14, 2)
+  balance_after             Decimal               @db.Decimal(14, 2)
+  payment_method_id         String?               @db.Uuid
+  processed_by_id           String?               @db.Uuid
+  notes                     String?
+  reversal_of_id            String?               @db.Uuid
+  idempotency_key           String?               @unique @db.VarChar(200)
+  created_at                DateTime              @default(now()) @db.Timestamptz(3)
+  customers                 customers             @relation(fields: [customer_id], references: [id], onUpdate: NoAction)
+  orders                    orders?               @relation(fields: [order_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  payment_methods           payment_methods?      @relation(fields: [payment_method_id], references: [id], onUpdate: NoAction)
+  customer_payouts          customer_payouts?     @relation(fields: [payout_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  users                     users?                @relation(fields: [processed_by_id], references: [id], onUpdate: NoAction)
+  wallet_transactions       wallet_transactions?  @relation("wallet_transactionsTowallet_transactions", fields: [reversal_of_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  other_wallet_transactions wallet_transactions[] @relation("wallet_transactionsTowallet_transactions")
+  customer_wallets          customer_wallets      @relation(fields: [wallet_id], references: [id], onUpdate: NoAction)
+
+  @@index([customer_id, created_at])
+  @@index([order_id])
+  @@index([type, created_at])
+  @@index([wallet_id, created_at])
+}
+
+model auth_sessions {
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id            String    @db.Uuid
+  refresh_token_hash String    @unique @db.Char(64)
+  created_at         DateTime  @default(now()) @db.Timestamptz(3)
+  expires_at         DateTime  @db.Timestamptz(3)
+  revoked_at         DateTime? @db.Timestamptz(3)
+  users              users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([expires_at])
+  @@index([user_id])
+}
+
+enum CompanyFinancialTransactionType {
+  DELIVERY_FEE_REVENUE
+  COMPANY_ORDER_PRODUCT_REVENUE
+  ADJUSTMENT
+  REVERSAL
+}
+
+enum DeliveryAttemptOutcome {
+  DELIVERED
+  FAILED
+  RETURNED
+}
+
+enum DriverCashTransactionType {
+  COLLECTION
+  SETTLEMENT
+  ADJUSTMENT
+  REVERSAL
+}
+
+enum OrderFinancialStatus {
+  PENDING
+  FINALIZED
+  REVIEW_REQUIRED
+  NOT_APPLICABLE
+}
+
+enum OrderStatus {
+  RECEIVED
+  READY_FOR_PICKUP
+  ASSIGNED
+  PICKED_UP
+  OUT_FOR_DELIVERY
+  DELIVERED
+  FAILED_DELIVERY
+  RESCHEDULED
+  RETURNED_TO_COMPANY
+  RETURNED_TO_CUSTOMER
+  CANCELLED
+}
+
+enum OrderType {
+  COMPANY_ORDER
+  DELIVERY_ONLY
+}
+
+enum PaymentType {
+  CASH_ON_DELIVERY
+  ALREADY_PAID
+  PARTIALLY_PAID
+}
+
+enum PayoutStatus {
+  COMPLETED
+  REVERSED
+  CANCELLED
+}
+
+enum WalletTransactionType {
+  ORDER_CREDIT
+  PAYOUT
+  ADJUSTMENT
+  REVERSAL
+}

@@ -1,0 +1,33 @@
+{
+  "name": "swiftdrop-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SwiftDrop delivery management system frontend",
+  "type": "module",
+  "engines": {
+    "node": "^20.19.0 || ^22.12.0 || ^24.0.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b --noEmit"
+  },
+  "dependencies": {
+    "@reduxjs/toolkit": "^2.12.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "react-redux": "^9.3.0",
+    "react-router-dom": "^7.18.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.13",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.1.13",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.4",
+    "tailwindcss": "^4.1.13",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.7"
+  }
+}

@@ -1,0 +1,15 @@
+node_modules/
+dist/
+*.local
+
+# Local env files — .env.example is committed, real env files are not
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor / OS
+.DS_Store
