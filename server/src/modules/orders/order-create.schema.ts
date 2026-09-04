@@ -91,8 +91,74 @@ export const OrderCreateFoundationSchema = z
     // below for the required/absent rules tied to each amount.
     prepaidPaymentMethodId: z.string().uuid().nullable().optional(),
     collectionPaymentMethodId: z.string().uuid().nullable().optional(),
+
+    // ---- Parcel Intake (Phase 11.17.4) ----
+    // parcelIntakeMethod is OPTIONAL only for temporary backward compatibility
+    // with the not-yet-updated frontend: the SERVICE resolves an omitted value
+    // to ALREADY_AT_COMPANY (never DRIVER_COLLECTION). Phase 11.17.5 makes the
+    // frontend send it explicitly.
+    parcelIntakeMethod: z.enum(["ALREADY_AT_COMPANY", "DRIVER_COLLECTION"]).optional(),
+
+    // The Parcel Collection driver (DRIVER_COLLECTION only). A DISTINCT field
+    // from deliveryDriverId — the two are never conflated. Requires orders.assign
+    // in addition to orders.create (enforced in the controller).
+    parcelCollectionDriverId: z.string().uuid().nullable().optional(),
+
+    // The final Delivery driver ("Create & Assign"). Allowed only when the
+    // parcel is already at the company (DRIVER_COLLECTION -> rejected — the
+    // parcel has not reached the company yet). Also requires orders.assign.
+    deliveryDriverId: z.string().uuid().nullable().optional(),
+
+    // Optional Parcel Collection snapshot overrides (DRIVER_COLLECTION only).
+    // Anything omitted is derived from the selected Customer's saved data.
+    // Lengths match the orders.* varchar(N) columns.
+    parcelCollectionContactName: z.string().trim().min(1).max(200).optional(),
+    parcelCollectionPhone: z.string().trim().min(1).max(30).optional(),
+    parcelCollectionAltPhone: z.string().trim().min(1).max(30).optional(),
+    parcelCollectionAreaId: z.string().uuid().optional(),
+    parcelCollectionAddress: z.string().trim().min(1).max(500).optional(),
+    parcelCollectionNotes: z.string().trim().min(1).optional(),
   })
   .superRefine((data, ctx) => {
+    // ---- Parcel Intake combination rules (Phase 11.17.4) ----
+    const intake = data.parcelIntakeMethod ?? "ALREADY_AT_COMPANY";
+    const hasCollectionDriver = data.parcelCollectionDriverId !== undefined && data.parcelCollectionDriverId !== null;
+    const hasDeliveryDriver = data.deliveryDriverId !== undefined && data.deliveryDriverId !== null;
+    const snapshotKeys = [
+      "parcelCollectionContactName",
+      "parcelCollectionPhone",
+      "parcelCollectionAltPhone",
+      "parcelCollectionAreaId",
+      "parcelCollectionAddress",
+      "parcelCollectionNotes",
+    ] as const;
+
+    if (intake === "ALREADY_AT_COMPANY") {
+      if (hasCollectionDriver) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["parcelCollectionDriverId"],
+          message: "A collection driver cannot be set when the parcel is already at the company",
+        });
+      }
+      for (const key of snapshotKeys) {
+        if (data[key] !== undefined) {
+          ctx.addIssue({
+            code: "custom",
+            path: [key],
+            message: "Parcel collection details apply only to DRIVER_COLLECTION orders",
+          });
+        }
+      }
+    }
+
+    if (intake === "DRIVER_COLLECTION" && hasDeliveryDriver) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["deliveryDriverId"],
+        message: "A delivery driver cannot be assigned until the parcel has been received at the company",
+      });
+    }
     const hasPrepaidMethod = data.prepaidPaymentMethodId !== undefined && data.prepaidPaymentMethodId !== null;
     const prepaidTotal = data.prepaidOrderAmount.plus(data.prepaidDeliveryFee);
 

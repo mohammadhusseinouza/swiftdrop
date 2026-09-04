@@ -1,8 +1,9 @@
-import { type ReactNode, useId } from 'react';
+import { type ReactNode, useCallback, useId, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 
 import { Card } from '../../../components/ui/Card';
 import { Badge } from '../../../components/ui/Badge';
+import { Button } from '../../../components/ui/Button';
 import {
   DataTable,
   type DataTableColumn,
@@ -21,19 +22,38 @@ import {
   humanizeToken,
 } from '../../../lib/format';
 import { getApiErrorMessage, type UnknownApiError } from '../../../services/apiError';
+import { useHasPermission } from '../../../features/auth/usePermissions';
+import { PERMISSIONS } from '../../../features/auth/permissions';
 import {
   useGetDriverCurrentOrdersQuery,
   useGetDriverDeliveryHistoryQuery,
+  useGetDriverParcelCollectionHistoryQuery,
   useGetManagementDriverCashQuery,
   useGetManagementDriverCashTransactionsQuery,
 } from '../../../services/driversApi';
 import { useGetSettlementsQuery } from '../../../services/settlementsApi';
+import {
+  useAdjustDriverCashMutation,
+  useReverseDriverCashTransactionMutation,
+} from '../../../services/financeApi';
 import type {
   DriverDeliveryHistoryRow,
+  DriverParcelCollectionHistoryRow,
   ManagementDriverCashTransactionEntry,
   OrderSummary,
   SettlementSummary,
 } from '../../../services/domain.types';
+import {
+  getParcelCollectionStatusPresentation,
+  getParcelEndReasonLabel,
+} from '../../../components/orders/parcelCollection';
+import { LedgerAdjustDialog } from '../../../components/finance/LedgerAdjustDialog';
+import { LedgerReverseDialog } from '../../../components/finance/LedgerReverseDialog';
+import {
+  LEDGER_LABEL,
+  isReversibleType,
+  ledgerTypeLabel,
+} from '../../../components/finance/ledgerCorrection';
 
 const DASH = '—';
 const PAGE_SIZE = 20;
@@ -313,9 +333,114 @@ export function DeliveryHistoryTab({ driverId }: { driverId: string }) {
   );
 }
 
+/* --------------------------- Parcel Collections tab --------------------- */
+
+const parcelCollectionHistoryColumns: DataTableColumn<DriverParcelCollectionHistoryRow>[] = [
+  {
+    id: 'order',
+    header: 'Order',
+    cell: (r) => (
+      <Link
+        to={paths.management.orderDetail(r.order.id)}
+        className="font-medium text-brand-600 hover:underline"
+      >
+        {r.order.orderNumber}
+      </Link>
+    ),
+  },
+  {
+    id: 'status',
+    header: 'Current status',
+    cell: (r) => {
+      const p = getParcelCollectionStatusPresentation(r.parcelCollectionStatus);
+      return <Badge tone={p.tone}>{p.label}</Badge>;
+    },
+  },
+  {
+    id: 'assigned',
+    header: 'Assigned',
+    hideBelow: 'lg',
+    cell: (r) => formatDateTime(r.assignedAt),
+  },
+  {
+    id: 'ended',
+    header: 'Ended',
+    hideBelow: 'lg',
+    cell: (r) => (r.endedAt ? formatDateTime(r.endedAt) : '—'),
+  },
+  {
+    id: 'outcome',
+    header: 'Outcome / end reason',
+    cell: (r) =>
+      r.isCurrent ? (
+        <Badge tone="info">Current</Badge>
+      ) : (
+        <span className="text-ink-secondary">{getParcelEndReasonLabel(r.endReason)}</span>
+      ),
+  },
+];
+
+export function ParcelCollectionsTab({ driverId }: { driverId: string }) {
+  const [page, setPage] = usePageParam('collectionsPage');
+  const query = useGetDriverParcelCollectionHistoryQuery({
+    id: driverId,
+    page,
+    limit: PAGE_SIZE,
+  });
+  const rows = query.data?.items ?? [];
+  const meta = query.data?.meta;
+
+  return (
+    <Section title="Parcel collection history">
+      {query.isLoading ? (
+        <LoadingState className="py-8" />
+      ) : query.isError ? (
+        <ErrorState
+          className="py-8"
+          message={getApiErrorMessage(query.error as UnknownApiError)}
+          onRetry={() => void query.refetch()}
+        />
+      ) : rows.length === 0 ? (
+        <EmptyState
+          className="py-8"
+          title="No parcel collection jobs yet"
+          description="Collection assignments — assigned, reassigned, failed, or received at company — will appear here."
+        />
+      ) : (
+        <>
+          <DataTable
+            columns={parcelCollectionHistoryColumns}
+            rows={rows}
+            getRowId={(r) => r.assignmentId}
+            caption="Driver parcel collection assignments"
+          />
+          {meta && meta.totalPages > 1 && (
+            <Pagination
+              className="mt-4"
+              page={page}
+              totalPages={meta.totalPages}
+              total={meta.total}
+              onPageChange={setPage}
+            />
+          )}
+          <p className="mt-3 text-xs text-ink-muted">
+            One row per Collection assignment — the same order can appear more
+            than once if this driver was assigned across separate attempts.
+            Separate from Delivery metrics/history above; financially neutral
+            (Parcel Collection never affects driver cash).
+          </p>
+        </>
+      )}
+    </Section>
+  );
+}
+
 /* -------------------------------- Cash tab ----------------------------- */
 
-const cashColumns: DataTableColumn<ManagementDriverCashTransactionEntry>[] = [
+function buildCashColumns(
+  renderActions?: (t: ManagementDriverCashTransactionEntry) => ReactNode,
+): DataTableColumn<ManagementDriverCashTransactionEntry>[] {
+  const cols: DataTableColumn<ManagementDriverCashTransactionEntry>[] = [
   {
     id: 'type',
     header: 'Type',
@@ -382,10 +507,28 @@ const cashColumns: DataTableColumn<ManagementDriverCashTransactionEntry>[] = [
     header: 'When',
     cell: (t) => formatDateTime(t.createdAt),
   },
-];
+  ];
+  if (renderActions) {
+    cols.push({
+      id: 'actions',
+      header: '',
+      align: 'right',
+      cell: (t) => renderActions(t),
+    });
+  }
+  return cols;
+}
 
-export function CashTab({ driverId }: { driverId: string }) {
+export function CashTab({
+  driverId,
+  driverLabel,
+}: {
+  driverId: string;
+  driverLabel?: string;
+}) {
   const [page, setPage] = usePageParam('cashPage');
+  const canAdjustCash = useHasPermission(PERMISSIONS.FINANCE_ADJUST);
+
   const balance = useGetManagementDriverCashQuery(driverId);
   const txns = useGetManagementDriverCashTransactionsQuery({
     id: driverId,
@@ -395,19 +538,58 @@ export function CashTab({ driverId }: { driverId: string }) {
   const rows = txns.data?.items ?? [];
   const meta = txns.data?.meta;
 
+  const [adjustOpen, setAdjustOpen] = useState(false);
+  const [reverseTarget, setReverseTarget] =
+    useState<ManagementDriverCashTransactionEntry | null>(null);
+  const [adjustCash, adjustCashState] = useAdjustDriverCashMutation();
+  const [reverseCash, reverseCashState] =
+    useReverseDriverCashTransactionMutation();
+
+  const refetchCash = useCallback(() => {
+    void balance.refetch();
+    void txns.refetch();
+  }, [balance, txns]);
+
+  const columns = buildCashColumns(
+    canAdjustCash
+      ? (t) =>
+          isReversibleType(t.type) ? (
+            <button
+              type="button"
+              onClick={() => setReverseTarget(t)}
+              className="rounded-control px-2 py-1 text-xs font-medium text-danger-700 hover:bg-danger-50"
+            >
+              Reverse
+            </button>
+          ) : null
+      : undefined,
+  );
+
   return (
     <div className="space-y-4">
-      <StatisticCard
-        label="Cash held"
-        value={
-          balance.isError
-            ? DASH
-            : balance.data
-              ? formatMoney(balance.data.currentBalance)
-              : '…'
-        }
-        supportingText="Collected, not yet settled to the company"
-      />
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <StatisticCard
+          className="flex-1"
+          label="Cash held"
+          value={
+            balance.isError
+              ? DASH
+              : balance.data
+                ? formatMoney(balance.data.currentBalance)
+                : '…'
+          }
+          supportingText="Collected, not yet settled to the company"
+        />
+        {canAdjustCash && (
+          <Button
+            variant="secondary"
+            onClick={() => setAdjustOpen(true)}
+            disabled={!balance.data}
+          >
+            Adjust driver cash
+          </Button>
+        )}
+      </div>
 
       <Section title="Cash transactions">
         {txns.isLoading ? (
@@ -427,7 +609,7 @@ export function CashTab({ driverId }: { driverId: string }) {
         ) : (
           <>
             <DataTable
-              columns={cashColumns}
+              columns={columns}
               rows={rows}
               getRowId={(t) => t.id}
               caption="Driver cash ledger"
@@ -444,13 +626,57 @@ export function CashTab({ driverId }: { driverId: string }) {
           </>
         )}
         <p className="mt-3 text-xs text-ink-muted">
-          Read-only. Settlements, adjustments and reversals are handled in Driver
-          Settlements / Finance. A held-cash split by company vs. customer money
-          is not shown — the current ledger does not assign settled cash to
-          ownership buckets, so it is not derivable without a defined allocation
-          policy.
+          Append-only. Adjustments and reversals post a new row — existing rows
+          are never edited. A settlement is reversed here (its historical record
+          is preserved). A held-cash split by company vs. customer money is not
+          shown — the ledger does not assign settled cash to ownership buckets.
         </p>
       </Section>
+
+      {canAdjustCash && (
+        <LedgerAdjustDialog
+          open={adjustOpen}
+          ledger="DRIVER_CASH"
+          entityLabel={driverLabel ?? 'Driver cash'}
+          currentBalance={balance.data?.currentBalance ?? null}
+          submitting={adjustCashState.isLoading}
+          onRefetch={refetchCash}
+          onClose={() => setAdjustOpen(false)}
+          onSubmit={(body) => adjustCash({ driverId, body }).unwrap()}
+        />
+      )}
+
+      {reverseTarget && (
+        <LedgerReverseDialog
+          open
+          submitting={reverseCashState.isLoading}
+          onRefetch={refetchCash}
+          onClose={() => setReverseTarget(null)}
+          onSubmit={(reason) =>
+            reverseCash({
+              transactionId: reverseTarget.id,
+              reason,
+              driverId,
+              orderId: reverseTarget.order?.id,
+              settlementLinked: !!reverseTarget.settlement,
+            }).unwrap()
+          }
+          original={{
+            ledgerLabel: LEDGER_LABEL.DRIVER_CASH,
+            typeLabel: ledgerTypeLabel(reverseTarget.type),
+            amount: reverseTarget.amount,
+            direction: reverseTarget.direction,
+            date: reverseTarget.createdAt,
+            reference:
+              reverseTarget.order?.orderNumber ??
+              reverseTarget.settlement?.settlementNumber ??
+              null,
+            effectNote: reverseTarget.settlement
+              ? 'Driver cash is restored. The settlement’s historical record is preserved. Customer wallet and company revenue are unaffected.'
+              : 'Only this driver’s cash balance changes. Customer wallet, company revenue and the order are unaffected.',
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -512,15 +738,21 @@ export function SettlementsTab({ driverId }: { driverId: string }) {
   const rows = query.data?.items ?? [];
   const meta = query.data?.meta;
 
+  const canCreateSettlement = useHasPermission(PERMISSIONS.SETTLEMENTS_CREATE);
+  // Both entries land on the scoped Driver Settlements list (filtered to this
+  // driver; the Process Settlement dialog there preselects them). The label
+  // just reflects what the user can do once there.
+  const scopedSettlementsPath = `${paths.management.driverSettlements}?driverId=${driverId}`;
+
   return (
     <Section
       title="Settlement history"
       action={
         <Link
-          to={paths.management.driverSettlements}
+          to={scopedSettlementsPath}
           className="text-xs font-medium text-brand-600 hover:underline"
         >
-          View all settlements
+          {canCreateSettlement ? 'Process settlement' : 'View all settlements'}
         </Link>
       }
     >

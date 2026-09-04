@@ -15,7 +15,9 @@ model areas {
   created_at DateTime    @default(now()) @db.Timestamptz(3)
   updated_at DateTime    @default(now()) @db.Timestamptz(3)
   customers  customers[]
-  orders     orders[]
+  orders     orders[]    @relation("orders_receiver_area")
+
+  parcel_collection_orders orders[] @relation("orders_parcel_collection_area")
 
   @@index([is_active, sort_order])
 }
@@ -211,7 +213,11 @@ model drivers {
   driver_settlements       driver_settlements[]
   users                    users                      @relation(fields: [user_id], references: [id], onUpdate: NoAction)
   order_assignments        order_assignments[]
-  orders                   orders[]
+  orders                   orders[]                       @relation("orders_current_driver")
+
+  parcel_collection_current_orders orders[]                       @relation("orders_current_parcel_collection_driver")
+  parcel_collection_assignments    parcel_collection_assignments[]
+  parcel_collection_attempts       parcel_collection_attempts[]
 
   @@index([is_active])
 }
@@ -236,6 +242,81 @@ model failed_delivery_reasons {
   delivery_attempts delivery_attempts[]
 
   @@index([is_active, sort_order])
+}
+
+// ============================================================
+// Parcel Intake & Collection (Phase 11.17.2)
+// Contract: docs/parcel-intake-collection-database-contract.md
+// A different domain from financial "collection" (money from the receiver).
+// ============================================================
+
+/// Separate, configurable reason catalog for FAILED parcel-collection attempts.
+/// NEVER merged with failed_delivery_reasons. Deactivate, do not hard-delete.
+model failed_collection_reasons {
+  id                         String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                       String                      @unique @db.VarChar(150)
+  requires_notes             Boolean                     @default(false)
+  is_active                  Boolean                     @default(true)
+  sort_order                 Int                         @default(0)
+  created_at                 DateTime                    @default(now()) @db.Timestamptz(3)
+  updated_at                 DateTime                    @default(now()) @db.Timestamptz(3)
+  parcel_collection_attempts parcel_collection_attempts[]
+
+  @@index([is_active, sort_order])
+}
+
+/// Permanent history of parcel-collection driver assignments — separate from
+/// order_assignments (which stays DELIVERY-only). Exactly one current row per
+/// order (SQL-only partial unique index
+/// `parcel_collection_assignments_one_current_per_order_uq WHERE is_current`).
+/// SQL-only CHECK `parcel_collection_assignments_current_state_chk`:
+///   is_current <=> (ended_at IS NULL AND end_reason IS NULL).
+/// current row is retained through COLLECTED_FROM_SENDER (driver keeps custody);
+/// ended on reassign / failed collection / received-at-company / order cancel.
+model parcel_collection_assignments {
+  id             String                              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  order_id       String                              @db.Uuid
+  driver_id      String                              @db.Uuid
+  assigned_by_id String                              @db.Uuid
+  assigned_at    DateTime                            @default(now()) @db.Timestamptz(3)
+  ended_at       DateTime?                           @db.Timestamptz(3)
+  end_reason     ParcelCollectionAssignmentEndReason?
+  is_current     Boolean                             @default(true)
+  orders         orders                              @relation(fields: [order_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  drivers        drivers                             @relation(fields: [driver_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  assigned_by    users                               @relation(fields: [assigned_by_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([order_id, is_current])
+  @@index([driver_id, is_current])
+  @@index([assigned_at])
+}
+
+/// Permanent, append-only history of parcel-collection attempts — separate from
+/// delivery_attempts. A retry inserts a new row; failed rows are never rewritten.
+/// SQL-only partial unique index
+/// `parcel_collection_attempts_one_collected_per_order_uq WHERE outcome = 'COLLECTED'`
+/// enforces at most one successful collection per order.
+model parcel_collection_attempts {
+  id                          String                         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  order_id                    String                         @db.Uuid
+  driver_id                   String                         @db.Uuid
+  attempt_number              Int
+  outcome                     ParcelCollectionAttemptOutcome
+  failed_collection_reason_id String?                        @db.Uuid
+  notes                       String?
+  // V1 has no "start parcel collection" action — started_at stays NULL until a
+  // future explicit start action exists (Phase 11.17.3 correction). completed_at
+  // is the action time.
+  started_at                  DateTime?                      @db.Timestamptz(3)
+  completed_at                DateTime?                      @db.Timestamptz(3)
+  created_at                  DateTime                       @default(now()) @db.Timestamptz(3)
+  orders                      orders                         @relation(fields: [order_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  drivers                     drivers                        @relation(fields: [driver_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  failed_collection_reasons   failed_collection_reasons?     @relation(fields: [failed_collection_reason_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@unique([order_id, attempt_number])
+  @@index([driver_id, started_at])
+  @@index([outcome, completed_at])
 }
 
 model order_assignments {
@@ -314,6 +395,28 @@ model orders {
   out_for_delivery_at                                                  DateTime?                        @db.Timestamptz(3)
   delivered_at                                                         DateTime?                        @db.Timestamptz(3)
   cancelled_at                                                         DateTime?                        @db.Timestamptz(3)
+
+  // ---- Parcel Intake & Collection (Phase 11.17.2) ----
+  // Contract: docs/parcel-intake-collection-database-contract.md
+  // NOT NULL, no default. Phase 11.17.4 made Create Order parcel-aware — the
+  // order.service.ts create path always writes both explicitly (an omitted
+  // request `parcelIntakeMethod` is resolved to ALREADY_AT_COMPANY at the
+  // application layer, never by a DB default). Migration __1174__ dropped the
+  // temporary DB defaults.
+  parcel_intake_method                                                 ParcelIntakeMethod
+  parcel_collection_status                                             ParcelCollectionStatus
+  current_parcel_collection_driver_id                                  String?                          @db.Uuid
+  parcel_collection_contact_name                                       String?                          @db.VarChar(200)
+  parcel_collection_phone                                              String?                          @db.VarChar(30)
+  parcel_collection_alt_phone                                          String?                          @db.VarChar(30)
+  parcel_collection_area_id                                            String?                          @db.Uuid
+  parcel_collection_area                                               String?                          @db.VarChar(150)
+  parcel_collection_address                                            String?                          @db.VarChar(500)
+  parcel_collection_notes                                              String?
+  parcel_collected_from_sender_at                                      DateTime?                        @db.Timestamptz(3)
+  received_at_company_at                                               DateTime?                        @db.Timestamptz(3)
+  received_at_company_by_id                                            String?                          @db.Uuid
+
   created_at                                                           DateTime                         @default(now()) @db.Timestamptz(3)
   updated_at                                                           DateTime                         @default(now()) @db.Timestamptz(3)
   company_financial_transactions                                       company_financial_transactions[]
@@ -321,12 +424,17 @@ model orders {
   driver_cash_transactions                                             driver_cash_transactions[]
   order_assignments                                                    order_assignments[]
   order_status_history                                                 order_status_history[]
+  parcel_collection_assignments                                        parcel_collection_assignments[]
+  parcel_collection_attempts                                           parcel_collection_attempts[]
   payment_methods_orders_collection_payment_method_idTopayment_methods payment_methods?                 @relation("orders_collection_payment_method_idTopayment_methods", fields: [collection_payment_method_id], references: [id], onUpdate: NoAction)
-  users                                                                users                            @relation(fields: [created_by_id], references: [id], onUpdate: NoAction)
-  drivers                                                              drivers?                         @relation(fields: [current_driver_id], references: [id], onUpdate: NoAction)
+  users                                                                users                            @relation("orders_created_by", fields: [created_by_id], references: [id], onUpdate: NoAction)
+  received_at_company_by                                               users?                           @relation("orders_received_at_company_by", fields: [received_at_company_by_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  drivers                                                              drivers?                         @relation("orders_current_driver", fields: [current_driver_id], references: [id], onUpdate: NoAction)
+  current_parcel_collection_driver                                     drivers?                         @relation("orders_current_parcel_collection_driver", fields: [current_parcel_collection_driver_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
   customers                                                            customers                        @relation(fields: [customer_id], references: [id], onUpdate: NoAction)
   payment_methods_orders_prepaid_payment_method_idTopayment_methods    payment_methods?                 @relation("orders_prepaid_payment_method_idTopayment_methods", fields: [prepaid_payment_method_id], references: [id], onUpdate: NoAction)
-  areas                                                                areas?                           @relation(fields: [receiver_area_id], references: [id], onUpdate: NoAction)
+  areas                                                                areas?                           @relation("orders_receiver_area", fields: [receiver_area_id], references: [id], onUpdate: NoAction)
+  parcel_collection_area_ref                                           areas?                           @relation("orders_parcel_collection_area", fields: [parcel_collection_area_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
   wallet_transactions                                                  wallet_transactions[]
 
   @@index([created_at])
@@ -337,6 +445,9 @@ model orders {
   @@index([receiver_area])
   @@index([receiver_phone])
   @@index([status, current_driver_id])
+  @@index([parcel_collection_status])
+  @@index([parcel_intake_method])
+  @@index([current_parcel_collection_driver_id])
 }
 
 model payment_methods {
@@ -424,7 +535,9 @@ model users {
   employees                                 employees?
   order_assignments                         order_assignments[]
   order_status_history                      order_status_history[]
-  orders                                    orders[]
+  orders                                    orders[]                         @relation("orders_created_by")
+  orders_received_at_company                orders[]                         @relation("orders_received_at_company_by")
+  parcel_collection_assignments             parcel_collection_assignments[]
   system_settings                           system_settings[]
   roles                                     roles                            @relation(fields: [role_id], references: [id], onUpdate: NoAction)
   wallet_transactions                       wallet_transactions[]
@@ -541,4 +654,32 @@ enum WalletTransactionType {
   PAYOUT
   ADJUSTMENT
   REVERSAL
+}
+
+// ---- Parcel Intake & Collection (Phase 11.17.2) ----
+
+enum ParcelIntakeMethod {
+  ALREADY_AT_COMPANY
+  DRIVER_COLLECTION
+}
+
+enum ParcelCollectionStatus {
+  AWAITING_ASSIGNMENT
+  ASSIGNED
+  COLLECTED_FROM_SENDER
+  FAILED
+  RESCHEDULED
+  RECEIVED_AT_COMPANY
+}
+
+enum ParcelCollectionAttemptOutcome {
+  COLLECTED
+  FAILED
+}
+
+enum ParcelCollectionAssignmentEndReason {
+  REASSIGNED
+  FAILED
+  RECEIVED_AT_COMPANY
+  ORDER_CANCELLED
 }

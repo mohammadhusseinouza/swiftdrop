@@ -17,6 +17,12 @@ import type { SettlementSummary } from './domain.types';
  * Finance view — it NEVER changes the Customer Wallet. `Wallet` /
  * `WalletTransaction` are deliberately absent from the invalidation set.
  *
+ * CACHE (Phase 11.10): a successful settlement invalidates the settlement list,
+ * the Management Driver-Cash detail/ledger for THAT driver (`DriverCash:<id>`),
+ * the batched Driver-List Cash-Held column (`DriverCash:SUMMARIES`), the
+ * Driver Portal's own cash view (`DriverCash:ME`), and the finance / dashboard
+ * / reports summaries.
+ *
  * IDEMPOTENCY (Phase 8.9): `POST /driver-settlements` requires an
  * `Idempotency-Key` header. Same contract as payouts — one explicit
  * caller-supplied stable key, set verbatim as the header, preserved across a
@@ -63,8 +69,10 @@ export const settlementsApi = api.injectEndpoints({
       }),
       transformResponse: (r: ApiSuccessResponse<SettlementSummary>) =>
         unwrapData(r),
-      invalidatesTags: [
+      invalidatesTags: (_res, _err, { body }) => [
         { type: 'Settlement', id: 'LIST' },
+        { type: 'DriverCash', id: body.driverId },
+        { type: 'DriverCash', id: 'SUMMARIES' },
         { type: 'DriverCash', id: 'ME' },
         { type: 'Finance', id: 'SUMMARY' },
         { type: 'Finance', id: 'TRANSACTIONS' },

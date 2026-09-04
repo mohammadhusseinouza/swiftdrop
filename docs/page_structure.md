@@ -113,14 +113,24 @@ Monday, August 17
 Recommended cards:
 
 - Orders Today
+- Awaiting Collection Assignment
+- Collection In Progress
+- Collection Attention / Failed
+- Collected — Awaiting Company Receipt
+- Ready for Delivery Assignment
 - Ready for Pickup
-- Unassigned
 - Assigned
 - Out for Delivery
 - Delivered Today
 - Failed Today
 - Returned
 - Cancelled
+
+**"Ready for Delivery Assignment"** is defined as: parcel received at the company AND no
+current delivery driver AND the order is otherwise eligible for delivery assignment. Orders
+whose parcel collection is still in progress must **not** be shown as delivery-unassigned.
+The final card density is decided in the UI implementation sub-phase, but this operational
+distinction must be visible somewhere on the dashboard.
 
 Example:
 
@@ -175,12 +185,18 @@ Recommended cards:
 
 Recommended categories:
 
-- Unassigned Orders
+- Awaiting Collection Assignment
+- Failed Parcel Collections
+- Collected — Awaiting Company Receipt
+- Orders Ready for Delivery Assignment
 - Failed Deliveries
-- Collection Differences
+- Collection Differences (money — financial review)
 - Returned Orders
 - Orders Waiting Too Long
 - Orders Requiring Review
+
+Note: "Collection Differences" here means the existing financial collection-amount review
+(money collected from the receiver), not parcel collection.
 
 ## Recent Activity
 
@@ -236,7 +252,7 @@ Example:
 Recommended:
 
 ```text
-All | Unassigned | Ready | Assigned | Out for Delivery | Delivered | Failed
+All | Awaiting Collection | Collecting | Ready for Delivery Assignment | Assigned | Out for Delivery | Delivered | Failed
 ```
 
 ## Filters
@@ -245,7 +261,10 @@ Recommended filters:
 
 ```text
 [Status ▼]
-[Driver ▼]
+[Intake Method ▼]
+[Parcel Collection Status ▼]
+[Collection Driver ▼]
+[Delivery Driver ▼]
 [Customer ▼]
 [Area ▼]
 [Order Type ▼]
@@ -256,11 +275,12 @@ Recommended filters:
 [More Filters]
 ```
 
-Filters must be combinable.
+Filters must be combinable. The Collection Driver filter and the Delivery Driver filter are
+distinct — do not overload one generic Driver filter.
 
 ## Orders Table
 
-Recommended columns:
+Recommended columns (use compact badges / secondary lines to avoid an over-wide table):
 
 ```text
 ☐
@@ -270,10 +290,13 @@ Receiver
 Receiver Phone
 Area
 Order Type
+Intake Method
+Parcel Collection Status
 Order Amount
 Delivery Fee
 Amount to Collect
-Driver
+Collection Driver
+Delivery Driver
 Payment Type
 Status
 Created Date
@@ -302,7 +325,10 @@ Recommended actions:
 [Mark Ready]
 ```
 
-Driver assignment should support assigning multiple selected orders to one driver.
+Driver assignment should support assigning multiple selected orders to one **delivery**
+driver. Bulk assignment is atomic and applies only to orders whose Parcel Collection Status
+is `RECEIVED_AT_COMPANY`; if any selected order has not been received at the company the
+whole batch is rejected.
 
 ---
 
@@ -425,25 +451,61 @@ Calculated values should be:
 
 ---
 
-## 5.5 Delivery Assignment
+## 5.5 Parcel Intake
 
 ```text
-Driver
+How will the parcel reach the company? *
+( ) Already at Company
+( ) Collection by Driver Required
+```
+
+When **Collection by Driver Required** is selected, show collection fields, pre-filled from
+the selected customer and stored as an order snapshot:
+
+```text
+Collection Contact Name *
+Collection Phone *
+Alternative Phone
+Collection Area *
+Collection Address *
+Collection Notes
+
+Collection Driver
+[Leave Unassigned ▼]
+```
+
+The Collection Driver is optional. Choosing one here creates a **collection** assignment,
+not a delivery assignment.
+
+---
+
+## 5.6 Delivery Assignment
+
+```text
+Delivery Driver
 [Leave Unassigned ▼]
 
 Notes
 ```
 
-The employee can either:
-
-- Create the order without assigning a driver
-- Create and immediately assign a driver
+The Delivery Driver selector is only available when the parcel is **already at the company**.
+For collection-required orders it is disabled until company receipt is confirmed on the
+Order Detail page.
 
 ## Page Actions
 
+The primary action label reflects what is actually assigned:
+
 ```text
-[Cancel]                     [Create Order]
+Collection required, no collection driver:   [Create Order]
+Collection required, collection driver set:   [Create & Assign Collection Driver]
+Already at company, no delivery driver:        [Create Order]
+Already at company, delivery driver set:       [Create & Assign]
+
+[Cancel]                     [ primary action ]
 ```
+
+One button must never ambiguously assign the wrong responsibility.
 
 ---
 
@@ -487,7 +549,8 @@ Sections:
 3. Receiver Information
 4. Package Information
 5. Financial Information
-6. Delivery Information
+6. Parcel Intake / Collection Information
+7. Delivery Information
 
 ### Right Column
 
@@ -564,31 +627,65 @@ Delivered financial information must not be silently editable.
 
 ---
 
-## 6.5 Delivery Information
+## 6.5 Parcel Intake / Collection Information
 
 Display:
 
-- Assigned Driver
+- Intake Method
+- Parcel Collection Status
+- Collection Contact snapshot (name, phone, alternative phone)
+- Collection Address snapshot (area, address, notes)
+- Current Collection Driver
+- Collection Assignment History (permanent, never overwritten)
+- Collection Attempts (permanent; each with outcome, reason, notes, timestamps)
+- Collected From Sender timestamp
+- Received At Company timestamp
+- Received At Company — confirmed by
+
+Actions here (permission- and state-dependent):
+
+- Assign / Reassign Collection Driver
+- Confirm Received At Company (Management only)
+- Reschedule Collection after a failure
+
+For `ALREADY_AT_COMPANY` orders this section shows the automatic receipt (timestamp = order
+creation, confirmer = order creator) and omits collection-driver/attempt sub-sections.
+
+This section is kept separate from Delivery Information below.
+
+---
+
+## 6.6 Delivery Information
+
+Display:
+
+- Assigned Delivery Driver
 - Assignment Date
 - Pickup Date
 - Out-for-Delivery Date
 - Delivery Date
 - Failed Delivery Information
 - Return Information
-- Reassignment History
+- Delivery Reassignment History
+
+The **Assign Driver** action here is disabled until Parcel Collection Status is
+`RECEIVED_AT_COMPANY`.
 
 ---
 
-## 6.6 Order Actions
+## 6.7 Order Actions
 
 Possible actions depending on permissions and status:
 
 - Edit Order
 - Mark Ready
-- Assign Driver
-- Reassign Driver
-- Cancel Order
-- Reschedule
+- Assign / Reassign Collection Driver
+- Confirm Received At Company (Management only)
+- Reschedule Collection
+- Assign / Reassign Delivery Driver (only after Received At Company)
+- Cancel Order (disabled while parcel collection is at Collected From Sender — a driver still
+  holds the parcel; confirm Received At Company first. Backend enforces this on every path.)
+- Reschedule Delivery
 - View History
 - Copy Tracking Code
 - Copy Tracking Link
@@ -596,21 +693,32 @@ Possible actions depending on permissions and status:
 
 ---
 
-## 6.7 Timeline
+## 6.8 Timeline
+
+The timeline combines the parcel-collection workflow and the delivery workflow
+chronologically, preserving each event's type.
 
 Example:
 
 ```text
+● 12:30  Delivered
+│
 ● 11:40  Out for delivery
 │
-● 11:15  Picked up by Ali
+● 11:15  Picked up from company by Ali
 │
-● 10:55  Assigned to Ali
+● 10:55  Delivery driver assigned: Ali
 │
-● 10:42  Order created by Employee A
+● 10:30  Received at company (confirmed by Dispatcher Sara)
+│
+● 09:20  Collected from sender by Ali
+│
+● 08:50  Collection driver assigned: Ali
+│
+● 08:40  Order created by Employee A (collection required)
 ```
 
-The timeline should include operational and financial events.
+The timeline should include operational, collection, and financial events.
 
 ---
 
@@ -757,9 +865,10 @@ Recommended columns:
 ```text
 Driver
 Phone
-Active Orders
+Active Deliveries
 Out for Delivery
 Completed Today
+Active Collection Jobs
 Cash Held
 Status
 ```
@@ -767,7 +876,7 @@ Status
 Example:
 
 ```text
-Ali Hassan | +961... | 12 | 6 | 18 | $1,245 | Active
+Ali Hassan | +961... | 12 | 6 | 18 | 3 | $1,245 | Active
 ```
 
 ---
@@ -789,39 +898,55 @@ Ali Hassan                           Active
 ## Summary Cards
 
 ```text
-Assigned Orders
+Assigned Deliveries
 Out for Delivery
 Delivered Today
+Active Collection Jobs
 Cash Held
 ```
 
 ## Tabs
 
 ```text
-Current Orders | Delivery History | Cash | Settlements
+Current Deliveries | Delivery History | Collection Jobs | Collection History | Cash | Settlements
 ```
+
+Delivery metrics (Assigned Deliveries, Delivered Today, Delivery History, Delivery Success
+Rate, Failed Deliveries) keep their existing delivery-only meaning. Parcel collection work
+is shown in its own tabs/metrics and must not be folded into delivery numbers.
 
 ---
 
-## 10.1 Current Orders
+## 10.1 Current Deliveries
 
-Display active orders assigned to the driver.
+Display active delivery orders assigned to the driver.
 
 ## 10.2 Delivery History
 
-Display completed, failed, returned, and cancelled delivery history.
+Display completed, failed, returned, and cancelled **delivery** history.
 
-## 10.3 Cash
+## 10.3 Collection Jobs
+
+Display the driver's current parcel-collection assignments (awaiting collection / collected,
+awaiting company receipt).
+
+## 10.4 Collection History
+
+Display the driver's completed and failed parcel-collection attempts (permanent).
+
+## 10.5 Cash
 
 Display:
 
 - Current Cash Held
-- Recent Collections
+- Recent Collections (money collected on delivery)
 - Company Amount
 - Customer-Related Amount
-- Collection Differences
+- Collection Differences (money — financial review)
 
-## 10.4 Settlements
+Parcel collection never appears here.
+
+## 10.6 Settlements
 
 Display the driver's complete settlement history.
 
@@ -1265,9 +1390,16 @@ General
 Payment Methods
 Delivery Settings
 Failed Delivery Reasons
+Failed Collection Reasons
 Areas
 Users & Permissions
 ```
+
+**Failed Collection Reasons** is a distinct tab from **Failed Delivery Reasons**; the two
+datasets are never merged. It follows the same reference-data behavior: `settings.read` to
+view, `settings.manage` to create/edit/deactivate/reactivate, no hard delete, configuration
+changes audited. The DRIVER role is **not** granted `settings.read`; the Driver Portal
+receives active collection reasons through a narrow Driver-safe endpoint.
 
 ## General
 
@@ -1298,7 +1430,13 @@ Possible settings:
 
 ## Failed Delivery Reasons
 
-Manage allowed failure reasons.
+Manage allowed delivery-failure reasons.
+
+## Failed Collection Reasons
+
+Manage allowed parcel-collection-failure reasons (separate catalog). Initial reasons:
+Sender unavailable, Parcel not ready, Unable to contact sender, Incorrect collection
+address, Sender requested reschedule, Collection cancelled by sender, Other (requires notes).
 
 ## Areas
 
@@ -1312,12 +1450,21 @@ Manage role-based access and permissions.
 
 # 23. Driver Portal
 
-The Driver Portal should use a separate mobile-first interface.
+The Driver Portal should use a separate mobile-first interface. It is organized around
+assigned **jobs**, of two types:
+
+```text
+COLLECTION   Sender -> Company
+DELIVERY     Company -> Receiver
+```
+
+A driver may hold both a collection job and a delivery job for the same order at different
+times.
 
 ## Main Navigation
 
 ```text
-My Orders
+My Jobs
 Out for Delivery
 Completed
 Failed / Returned
@@ -1326,28 +1473,34 @@ My Cash
 
 ---
 
-# 24. Driver My Orders Page
+# 24. Driver My Jobs Page
 
 ## Route
 
 ```text
-/driver/orders
+/driver/jobs
 ```
 
-Display orders assigned to the logged-in driver.
+`/driver/jobs` is the canonical Driver work-list route. There is **no** `/driver/orders`
+compatibility alias in Phase 11.17. The exact job-detail route is finalized in Phase 12
+from the final Collection / Delivery job DTO.
+
+Display collection jobs and delivery jobs assigned to the logged-in driver.
 
 Recommended grouping:
 
-- Assigned
+- To Collect
+- Collected (awaiting company receipt)
+- Assigned (delivery)
 - Ready for Pickup
 - Picked Up
 
-Each order should appear as a mobile-friendly card.
+Each job appears as a mobile-friendly card, clearly labeled COLLECTION or DELIVERY.
 
-Example:
+Delivery job example:
 
 ```text
-#10231                     Assigned
+#10231   DELIVERY            Assigned
 
 Mohammad Ahmad
 Beirut — Hamra
@@ -1364,6 +1517,28 @@ $105
 
 [Picked Up]
 ```
+
+Collection job example:
+
+```text
+#10231   COLLECTION          To Collect
+
+ABC Store (sender)
+Beirut — Achrafieh
+
+Phone: +961 XX XXX XXX
+Pickup Address: Sassine Square...
+Notes: Ask for the manager
+
+Packages: 2
+
+[Call] [Location]
+
+[Collected From Sender]   [Failed Collection]
+```
+
+A collection card shows only what is needed to collect the parcel — no amount to collect,
+no receiver data, no company-receipt action.
 
 The amount to collect must be visually prominent.
 
@@ -1388,42 +1563,43 @@ Example actions:
 
 ---
 
-# 26. Driver Order Detail
+# 26. Driver Job Detail
 
 ## Route
 
 ```text
-/driver/orders/:id
+/driver/jobs/:orderId?job=collection|delivery   (indicative — finalized in Phase 12)
 ```
 
-The driver may see only information required for delivery.
+The exact job-detail route and DTO are finalized in Phase 12. The driver sees only the
+information required for the job type.
 
-Display:
+**Delivery job — display:**
 
 - Order Number
-- Receiver Name
-- Receiver Phone
-- Alternative Phone
-- Area
-- Address
-- Location Link
+- Receiver Name / Phone / Alternative Phone
+- Area / Address / Location Link
 - Delivery Instructions
 - Package Count
 - Order Amount where required
 - Delivery Fee
 - Amount to Collect
-- Payment Type
-- Payment Method
+- Payment Type / Payment Method
 - Current Status
 
-Driver actions depend on status.
+Delivery actions (status-dependent): Picked Up, Start Delivery, Delivered, Failed Delivery.
 
-Possible actions:
+**Collection job — display:**
 
-- Picked Up
-- Start Delivery
-- Delivered
-- Failed Delivery
+- Order Number
+- Sender / Collection Contact Name / Phone / Alternative Phone
+- Collection Area / Collection Address / Location Link
+- Collection Notes
+- Package Count
+- Parcel Collection Status
+
+Collection actions (status-dependent): Collected From Sender, Failed Collection. The driver
+never sees an amount to collect on a collection job and never confirms company receipt.
 
 ---
 
@@ -1493,6 +1669,40 @@ Notes
 
 [Confirm Failed Delivery]
 ```
+
+---
+
+# 28A. Collected From Sender / Failed Collection Flow
+
+On a collection job, the driver has two outcomes.
+
+**Collected From Sender:**
+
+```text
+Confirm you have received the parcel(s) from the sender.
+
+Packages: 2
+
+[Confirm Collected From Sender]
+```
+
+This sets Parcel Collection Status to `COLLECTED_FROM_SENDER`. It does **not** confirm
+company receipt — Management does that later.
+
+**Failed Collection:** show the active Failed Collection Reasons (separate list from failed
+delivery), from a narrow Driver-safe endpoint:
+
+```text
+Reason *
+[Sender unavailable ▼]
+
+Notes            (required for "Other" and any reason configured to require notes)
+[ __________________ ]
+
+[Confirm Failed Collection]
+```
+
+The failed attempt is permanent. Management can then reschedule / reassign for a retry.
 
 ---
 
@@ -1653,6 +1863,20 @@ Display:
 
 ## Simplified Tracking
 
+For a collection-required order:
+
+```text
+✓ Order Created
+✓ Collection Scheduled
+✓ Parcel Collected
+● Received at Company
+○ Preparing for Delivery
+○ Out for Delivery
+○ Delivered
+```
+
+For an order already at the company:
+
 ```text
 ✓ Order Received
 ✓ Ready for Delivery
@@ -1660,19 +1884,12 @@ Display:
 ○ Delivered
 ```
 
-If delivery fails:
+If delivery fails: "Delivery Attempt Failed" / "Scheduled for Redelivery".
+If a collection attempt fails, the customer sees a neutral "Collection Rescheduled" — no
+internal failure detail, no collection-driver identity.
 
-```text
-Delivery Attempt Failed
-```
-
-or:
-
-```text
-Scheduled for Redelivery
-```
-
-Internal employee, accounting, audit, and driver cash details must not be exposed.
+Internal employee, accounting, audit, driver cash, the receipt-confirming employee, and
+sender/collection contact details must not be exposed.
 
 ---
 
@@ -1797,6 +2014,19 @@ Out for Delivery
 ○ Delivered
 ```
 
+For a collection-required order the safe stages may include an earlier segment:
+
+```text
+✓ Order Created
+✓ Parcel Collected
+● Received at Company
+○ Preparing for Delivery
+○ Out for Delivery
+○ Delivered
+```
+
+For an order already at the company, collection stages are omitted.
+
 Possible safe information:
 
 - Tracking Code
@@ -1811,10 +2041,13 @@ Must not expose:
 - Customer Internal Information
 - Company Revenue
 - Internal Notes
-- Employee Information
+- Employee Information (including the employee who confirmed company receipt)
 - Driver Cash
 - Financial Accounting
 - Internal Audit Information
+- Sender / collection contact name, phone, or address
+- Collection driver identity or contact
+- Internal collection failure detail
 
 ---
 
@@ -1880,6 +2113,19 @@ Handled inside:
 - Orders Page
 - Order Detail Page
 - Create Order Page
+
+## Parcel Intake & Collection
+
+Handled inside:
+
+- Create Order Page (intake method + collection snapshot + optional collection driver)
+- Orders Page (intake/collection columns and filters)
+- Order Detail Page (Parcel Intake / Collection section, collection assignment/attempts,
+  Confirm Received At Company)
+- Driver Portal (collection jobs)
+- Settings (Failed Collection Reasons)
+
+No dedicated top-level Parcel Collection page.
 
 ## Delivery Workflow
 
@@ -1996,16 +2242,34 @@ Returned to Customer
 Cancelled
 ```
 
+Parcel Collection statuses (separate state, shown in the Parcel Intake / Collection area,
+not mixed into the order status badge):
+
+```text
+Awaiting Assignment
+Assigned
+Collected From Sender
+Failed
+Rescheduled
+Received at Company
+```
+
 Customer/public simplified stages:
 
 ```text
-Order Received
-Ready for Delivery
+(collection-required)                (already at company)
+Order Created                         Order Received
+Collection Scheduled                  Ready for Delivery
+Parcel Collected                      Out for Delivery
+Received at Company                   Delivered
+Preparing for Delivery
 Out for Delivery
 Delivered
 ```
 
-The frontend should map internal statuses to simplified customer/public stages.
+The frontend should map internal order statuses and the parcel collection status to the
+simplified customer/public stages. Keep the parcel collection status visually separate from
+the order status badge.
 
 ---
 
@@ -2036,9 +2300,20 @@ Dispatcher actions:
 
 - Create Order
 - Edit Operational Information
-- Assign Driver
-- Reassign Driver
+- Assign / Reassign Collection Driver (`orders.assign`)
+- Assign / Reassign Delivery Driver (`orders.assign`)
+- Confirm Received At Company (`orders.change_status`)
+- Reschedule Collection (`orders.change_status`)
 - Change Operational Status
+
+Driver actions:
+
+- Collected From Sender (`driver.orders.update_own`)
+- Failed Collection (`driver.orders.update_own`)
+- Pickup / Start Delivery / Delivered / Failed Delivery (`driver.orders.update_own`)
+
+Drivers must **not** be granted `settings.read`; active Failed Collection Reasons reach the
+Driver Portal through a narrow Driver-safe endpoint.
 
 ---
 

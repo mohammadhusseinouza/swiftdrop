@@ -9,6 +9,81 @@
  *   - enum-like fields are `string` unless the backend narrows them
  */
 
+/* ===================== Parcel Intake & Collection ===================== */
+/**
+ * Mirrors server/src/generated/prisma enums + parcel-collection.types.ts
+ * (Phase 11.17). Parcel Collection is a DIFFERENT domain from financial cash
+ * collection — these types never carry money.
+ */
+export type ParcelIntakeMethod = 'ALREADY_AT_COMPANY' | 'DRIVER_COLLECTION';
+export type ParcelCollectionStatus =
+  | 'AWAITING_ASSIGNMENT'
+  | 'ASSIGNED'
+  | 'COLLECTED_FROM_SENDER'
+  | 'FAILED'
+  | 'RESCHEDULED'
+  | 'RECEIVED_AT_COMPANY';
+export type ParcelCollectionAssignmentEndReason =
+  | 'REASSIGNED'
+  | 'FAILED'
+  | 'RECEIVED_AT_COMPANY'
+  | 'ORDER_CANCELLED';
+export type ParcelCollectionAttemptOutcome = 'COLLECTED' | 'FAILED';
+
+export interface ParcelCollectionDriverSummary {
+  id: string;
+  driverNumber: string;
+  user: { firstName: string; lastName: string; phone: string | null };
+}
+export interface ParcelCollectionActorSummary {
+  id: string;
+  firstName: string;
+  lastName: string;
+}
+export interface ParcelCollectionSnapshot {
+  contactName: string | null;
+  phone: string | null;
+  altPhone: string | null;
+  areaId: string | null;
+  area: string | null;
+  address: string | null;
+  notes: string | null;
+}
+export interface ParcelCollectionAssignmentEntry {
+  id: string;
+  driver: ParcelCollectionDriverSummary;
+  assignedBy: ParcelCollectionActorSummary;
+  assignedAt: string;
+  endedAt: string | null;
+  endReason: ParcelCollectionAssignmentEndReason | null;
+  isCurrent: boolean;
+}
+export interface ParcelCollectionAttemptEntry {
+  id: string;
+  attemptNumber: number;
+  driver: ParcelCollectionDriverSummary;
+  outcome: ParcelCollectionAttemptOutcome;
+  failedReason: { id: string; name: string } | null;
+  notes: string | null;
+  /** V1: always null (no "start collection" action) — never render as a date. */
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+}
+/** GET /api/v1/orders/:id/parcel-collection (orders.read). */
+export interface ParcelCollectionDetail {
+  orderId: string;
+  intakeMethod: ParcelIntakeMethod;
+  status: ParcelCollectionStatus;
+  collectionSnapshot: ParcelCollectionSnapshot;
+  currentCollectionDriver: ParcelCollectionDriverSummary | null;
+  parcelCollectedFromSenderAt: string | null;
+  receivedAtCompanyAt: string | null;
+  receivedAtCompanyBy: ParcelCollectionActorSummary | null;
+  assignments: ParcelCollectionAssignmentEntry[];
+  attempts: ParcelCollectionAttemptEntry[];
+}
+
 /* ============================ Orders ============================ */
 
 export interface OrderCustomerSummary {
@@ -36,6 +111,9 @@ export interface OrderSummary {
   financialStatus: string;
   /** CASH_ON_DELIVERY | ALREADY_PAID | PARTIALLY_PAID (Phase 6.3 correction). */
   paymentType: string;
+  /** Parcel Intake at-a-glance (Phase 11.17.5 list-DTO extension). */
+  parcelIntakeMethod: ParcelIntakeMethod;
+  parcelCollectionStatus: ParcelCollectionStatus;
   customer: OrderCustomerSummary;
   receiverName: string;
   receiverPhone: string;
@@ -45,11 +123,25 @@ export interface OrderSummary {
   amountToCollect: string;
   actualAmountCollected: string | null;
   needsFinancialReview: boolean;
+  /** The FINAL DELIVERY driver — unchanged meaning (Phase 6.3). */
   currentDriver: OrderSummaryDriver | null;
+  /** The current COLLECTION driver — DISTINCT from currentDriver (Phase 11.17.6). */
+  currentCollectionDriver: OrderSummaryDriver | null;
   createdAt: string;
   assignedAt: string | null;
   deliveredAt: string | null;
 }
+
+/**
+ * Not a DB column — a derived operational-queue filter (Phase 11.17.6, task
+ * §12). Mirrors server/src/modules/orders/order-workflow-queue.ts exactly.
+ */
+export type WorkflowQueue =
+  | 'AWAITING_COLLECTION_ASSIGNMENT'
+  | 'COLLECTION_IN_PROGRESS'
+  | 'COLLECTION_ATTENTION'
+  | 'AWAITING_COMPANY_RECEIPT'
+  | 'READY_FOR_DELIVERY_ASSIGNMENT';
 
 export interface OrderReceiverSnapshot {
   name: string;
@@ -159,6 +251,9 @@ export interface OrderDetail {
   paymentType: string;
   status: string;
   financialStatus: string;
+  /** Parcel Intake at-a-glance (Phase 11.17.4). Full domain: parcelCollectionApi. */
+  parcelIntakeMethod: ParcelIntakeMethod;
+  parcelCollectionStatus: ParcelCollectionStatus;
   customer: OrderCustomerSummary & { isActive: boolean };
   receiver: OrderReceiverSnapshot;
   package: OrderPackageInfo;
@@ -183,6 +278,53 @@ export interface OrderHistoryResponse {
   orderId: string;
   statusHistory: OrderStatusHistoryEntry[];
   assignmentHistory: OrderAssignmentHistoryEntry[];
+}
+
+/**
+ * GET /api/v1/orders/:id/timeline (Phase 11.17.6). Mirrors
+ * server/src/modules/orders/order-timeline.types.ts exactly. A deliberately
+ * wide, flat shape — only the fields relevant to `type` are populated for
+ * any given entry. Oldest-first (chronological), same raw-data convention
+ * as statusHistory/assignmentHistory/deliveryAttempts/financialEvents.
+ */
+export type OrderTimelineEventType =
+  | 'STATUS_CHANGED'
+  | 'DELIVERY_DRIVER_ASSIGNED'
+  | 'DELIVERY_ASSIGNMENT_ENDED'
+  | 'DELIVERY_ATTEMPT'
+  | 'FINANCIAL_EVENT'
+  | 'PARCEL_COLLECTION_DRIVER_ASSIGNED'
+  | 'PARCEL_COLLECTION_DRIVER_REASSIGNED'
+  | 'PARCEL_COLLECTION_FAILED'
+  | 'PARCEL_COLLECTION_RESCHEDULED'
+  | 'PARCEL_COLLECTED_FROM_SENDER'
+  | 'PARCEL_RECEIVED_AT_COMPANY'
+  | 'PARCEL_COLLECTION_ENDED_ORDER_CANCELLED';
+
+export interface OrderTimelineDriverRef {
+  id: string;
+  driverNumber: string;
+  firstName: string;
+  lastName: string;
+}
+export interface OrderTimelineEvent {
+  id: string;
+  type: OrderTimelineEventType;
+  occurredAt: string;
+  actor: { id: string; firstName: string; lastName: string } | null;
+  driver: OrderTimelineDriverRef | null;
+  /** Reassignment only — the NEW driver (`driver` holds the previous one). */
+  toDriver: OrderTimelineDriverRef | null;
+  fromStatus: string | null;
+  toStatus: string | null;
+  endReason: string | null;
+  attemptNumber: number | null;
+  outcome: string | null;
+  reason: string | null;
+  notes: string | null;
+  amount: string | null;
+  ledger: string | null;
+  financialType: string | null;
 }
 export interface BulkAssignResult {
   assignedCount: number;
@@ -368,6 +510,22 @@ export interface DriverDeliveryHistoryRow {
   completedAt: string | null;
 }
 
+/**
+ * One row of `GET /drivers/:id/parcel-collection-history` (drivers.read,
+ * Phase 11.17.6). Base is a Collection JOB assignment — the same Order may
+ * legitimately appear more than once for separate assignments. Financially
+ * neutral — no money field.
+ */
+export interface DriverParcelCollectionHistoryRow {
+  assignmentId: string;
+  order: { id: string; orderNumber: string; orderType: string };
+  assignedAt: string;
+  endedAt: string | null;
+  endReason: ParcelCollectionAssignmentEndReason | null;
+  isCurrent: boolean;
+  parcelCollectionStatus: ParcelCollectionStatus;
+}
+
 /* ============================ Wallets ============================ */
 
 export interface WalletSummary {
@@ -513,6 +671,7 @@ export interface DashboardSummary {
   orders: {
     ordersToday: number;
     readyForPickup: number;
+    /** @deprecated superseded by parcelCollection.readyForDeliveryAssignment (Phase 11.17.6). */
     unassigned: number;
     assigned: number;
     outForDelivery: number;
@@ -528,6 +687,9 @@ export interface DashboardSummary {
     deliveriesCompletedToday: number;
     driversWithUnsettledCash: number | null;
     totalDriverCashHeld: string | null;
+    /** Separate Collection dimensions (Phase 11.17.6) — never merged with the Delivery fields above. */
+    activeCollectionJobs: number;
+    collectionsCompletedToday: number;
   };
   finance: {
     deliveryFeeRevenue: string;
@@ -539,13 +701,24 @@ export interface DashboardSummary {
   } | null;
   attention: {
     counts: {
-      unassigned: number;
+      /**
+       * Phase 11.17.6 correction — renamed from `unassigned`; now requires
+       * `parcel_collection_status = RECEIVED_AT_COMPANY` via the shared
+       * workflowQueue predicate. Equals `parcelCollection.readyForDeliveryAssignment`.
+       */
+      readyForDeliveryAssignment: number;
       failedDeliveries: number;
       collectionDifferences: number;
       returned: number;
+      collectionAttention: number;
     };
     items: Array<{
-      type: 'FINANCIAL_REVIEW' | 'FAILED_DELIVERY' | 'UNASSIGNED' | 'RETURNED';
+      type:
+        | 'FINANCIAL_REVIEW'
+        | 'FAILED_DELIVERY'
+        | 'READY_FOR_DELIVERY_ASSIGNMENT'
+        | 'RETURNED'
+        | 'COLLECTION_ATTENTION';
       order: { id: string; orderNumber: string; status: string; orderType: string };
       customer: { id: string; customerNumber: string; name: string };
       driver: { id: string; driverNumber: string; name: string } | null;
@@ -565,41 +738,253 @@ export interface DashboardSummary {
       settlementNumber: string | null;
     };
   }>;
+  /** Never finance-gated — Parcel Collection is financially neutral (Phase 11.17.6). */
+  parcelCollection: {
+    awaitingCollectionAssignment: number;
+    collectionInProgress: number;
+    collectionAttention: number;
+    awaitingCompanyReceipt: number;
+    readyForDeliveryAssignment: number;
+  };
 }
 
 /* ============================ Reports ============================ */
+
+/**
+ * Mirrors server/src/modules/reports/report.types.ts (Phase 9.3) exactly.
+ * All four endpoints are `reports.read`-gated aggregate reads — no mutations,
+ * no per-transaction ledger detail, no pagination. Money fields are strings.
+ */
 
 export interface ReportRange {
   from: string | null;
   to: string | null;
 }
-/** The four report DTOs vary widely by groupBy; kept as discriminated `report`. */
+export interface ReportCustomerRef {
+  id: string;
+  customerNumber: string;
+  name: string;
+}
+export interface ReportDriverRef {
+  id: string;
+  driverNumber: string;
+  name: string;
+}
+export interface ReportAreaRef {
+  id: string;
+  name: string;
+}
+
+export type OrderReportGroupBy =
+  | 'date'
+  | 'customer'
+  | 'driver'
+  | 'area'
+  | 'status'
+  | 'type'
+  | 'outcome';
+export type OrderReportBucket = 'day' | 'week' | 'month';
+
+export interface OrderReportSummary {
+  totalOrders: number;
+  deliveredOrders: number;
+  failedOrders: number;
+  cancelledOrders: number;
+  companyOrders: number;
+  deliveryOnlyOrders: number;
+  totalOrderAmount: string;
+  totalDeliveryFee: string;
+  totalExpectedCollection: string;
+  totalActualCollection: string;
+}
+export interface OrderReportDateRow {
+  period: string;
+  orders: number;
+  delivered: number;
+  failed: number;
+  cancelled: number;
+}
+export interface OrderReportCustomerRow {
+  customer: ReportCustomerRef;
+  ordersCreated: number;
+  deliveredOrders: number;
+  failedOrders: number;
+  totalOrderAmount: string;
+  totalDeliveryFee: string;
+  actualCollected: string;
+}
+export interface OrderReportDriverRow {
+  driver: ReportDriverRef;
+  ordersInPortfolio: number;
+  delivered: number;
+  failed: number;
+  actualCollected: string;
+}
+export interface OrderReportAreaRow {
+  area: ReportAreaRef | null;
+  orders: number;
+  delivered: number;
+  failed: number;
+}
+export interface OrderReportStatusRow {
+  status: string;
+  orders: number;
+}
+export interface OrderReportTypeRow {
+  orderType: string;
+  count: number;
+  totalOrderAmount: string;
+  totalDeliveryFee: string;
+  actualCollected: string;
+}
+export type OrderReportRow =
+  | OrderReportDateRow
+  | OrderReportCustomerRow
+  | OrderReportDriverRow
+  | OrderReportAreaRow
+  | OrderReportStatusRow
+  | OrderReportTypeRow;
+export interface OrderReportOutcomeSummary {
+  deliveredOrders: number;
+  failedCurrent: number;
+  failedAttempts: number;
+}
+/** Parcel Intake dimensions over the report population (Phase 11.17.6). Financially neutral. */
+export interface OrderReportParcelSummary {
+  alreadyAtCompanyOrders: number;
+  driverCollectionOrders: number;
+  awaitingCollectionAssignment: number;
+  collectionInProgress: number;
+  collectionAttention: number;
+  awaitingCompanyReceipt: number;
+  readyForDeliveryAssignment: number;
+}
+
 export interface OrderReportDto {
   report: 'ORDERS';
   range: ReportRange;
-  groupBy: string;
-  bucket: string | null;
-  summary: Record<string, string | number>;
-  outcome: Record<string, number> | null;
-  rows: Array<Record<string, unknown>>;
+  groupBy: OrderReportGroupBy;
+  bucket: OrderReportBucket | null;
+  summary: OrderReportSummary;
+  outcome: OrderReportOutcomeSummary | null;
+  rows: OrderReportRow[];
+  parcel: OrderReportParcelSummary;
+}
+
+export interface DriverReportRow {
+  driver: ReportDriverRef & { isActive: boolean };
+  ordersAssigned: number;
+  ordersDelivered: number;
+  failedAttempts: number;
+  deliveryAttempts: number;
+  successRate: string | null;
+  moneyCollected: string;
+  settlementCount: number;
+  settlementAmount: string;
+  currentCashHeld: string;
+  /** Separate Parcel Collection dimensions (Phase 11.17.6) — never merged into the Delivery fields above. */
+  collectionAssignments: number;
+  collectionsCompleted: number;
+  failedCollectionAttempts: number;
 }
 export interface DriverReportDto {
   report: 'DRIVERS';
   range: ReportRange;
-  rows: Array<Record<string, unknown>>;
+  rows: DriverReportRow[];
+}
+
+export interface CustomerReportRow {
+  customer: ReportCustomerRef & { isActive: boolean };
+  ordersCreated: number;
+  deliveredOrders: number;
+  walletCredits: string;
+  walletPayouts: string;
+  currentWalletBalance: string;
+  pendingOrderValue: string;
 }
 export interface CustomerReportDto {
   report: 'CUSTOMERS';
   range: ReportRange;
-  rows: Array<Record<string, unknown>>;
+  rows: CustomerReportRow[];
+}
+
+export type FinanceReportGroupBy = 'day' | 'week' | 'month' | 'category';
+export interface FinanceReportSummary {
+  companyRevenue: string;
+  deliveryFeeRevenue: string;
+  companyOrderRevenue: string;
+  totalCollected: string;
+  customerPayouts: string;
+  currentCustomerWalletLiability: string;
+  currentDriverCashOutstanding: string;
+  settlementCount: number;
+  settlementAmount: string;
+}
+export interface FinanceReportPeriodRow {
+  period: string;
+  companyRevenue: string;
+  deliveryFeeRevenue: string;
+  companyOrderRevenue: string;
+  totalCollected: string;
+  customerPayouts: string;
+  settlementAmount: string;
+}
+export type FinanceReportCategoryName =
+  | 'DELIVERY_FEE_REVENUE'
+  | 'COMPANY_ORDER_REVENUE'
+  | 'TOTAL_COLLECTED'
+  | 'CUSTOMER_PAYOUTS'
+  | 'DRIVER_SETTLEMENTS';
+export interface FinanceReportCategoryRow {
+  category: FinanceReportCategoryName;
+  amount: string;
+  count: number | null;
 }
 export interface FinanceReportDto {
   report: 'FINANCE';
   range: ReportRange;
-  groupBy: string;
-  summary: Record<string, string | number>;
-  rows: Array<Record<string, unknown>>;
+  groupBy: FinanceReportGroupBy;
+  summary: FinanceReportSummary;
+  rows: FinanceReportPeriodRow[] | FinanceReportCategoryRow[];
 }
+
+/* ============================ Employees ============================ */
+
+/** Mirrors server/src/modules/employees/employee.types.ts (Phase 11.14). */
+export interface EmployeeRoleRef {
+  id: string;
+  code: string;
+  name: string;
+}
+export interface EmployeePermissionRef {
+  code: string;
+  name: string;
+  description: string | null;
+}
+export interface EmployeeRoleDetail extends EmployeeRoleRef {
+  description: string | null;
+  isActive: boolean;
+  permissionCount: number;
+  permissions: EmployeePermissionRef[];
+}
+export interface EmployeeSummary {
+  id: string;
+  employeeNumber: string;
+  userId: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string | null;
+  role: EmployeeRoleRef;
+  isActive: boolean;
+  lastLoginAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface EmployeeDetail extends Omit<EmployeeSummary, 'role'> {
+  role: EmployeeRoleDetail;
+}
+export type EmployeeRoleOption = EmployeeRoleDetail;
 
 /* ==================== Settings / reference data ==================== */
 
@@ -629,6 +1014,20 @@ export interface FailedDeliveryReasonSummary {
   createdAt: string;
   updatedAt: string;
 }
+/**
+ * Failed Collection Reasons (Phase 11.17) — a SEPARATE catalog from
+ * failed-delivery reasons. Same shape, never merged.
+ * GET/POST/PATCH /api/v1/settings/failed-collection-reasons.
+ */
+export interface FailedCollectionReasonSummary {
+  id: string;
+  name: string;
+  requiresNotes: boolean;
+  isActive: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
 export interface SystemSettingSummary {
   id: string;
   key: string;
@@ -638,6 +1037,32 @@ export interface SystemSettingSummary {
   updatedBy: { id: string; firstName: string; lastName: string } | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Mirrors server/src/modules/role-config/role-config.types.ts (Phase 11.16). */
+export interface PermissionCatalogEntry {
+  code: string;
+  name: string;
+  description: string | null;
+}
+export interface RoleConfigSummary {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  isActive: boolean;
+  userCount: number;
+  editable: boolean;
+  locked: boolean;
+  permissionCount: number;
+  permissionCodes: string[];
+}
+export interface RoleConfigResponse {
+  roles: RoleConfigSummary[];
+  permissionCatalog: PermissionCatalogEntry[];
+  assignablePermissionCodes: string[];
+  editableRoleCodes: string[];
+  lockedRoleCodes: string[];
 }
 
 /* ============================ Audit ============================ */

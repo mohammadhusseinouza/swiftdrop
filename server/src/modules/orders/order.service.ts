@@ -19,6 +19,17 @@ import { calculateCollectionDifference, calculateOrderFinancials, validatePaymen
 import { creditWalletForOrder } from "../wallets/wallet-ledger.service";
 import { recordCompanyOrderProductRevenue, recordDeliveryFeeRevenue } from "../company-finance/company-finance-ledger.service";
 import { createAuditLog } from "../../shared/audit/audit.service";
+import { assertDriverEligibleForAssignment, loadEligibleDriverForAssignment } from "../drivers/driver-eligibility";
+import {
+  assertConsistentCurrentParcelCollectionAssignment,
+  assignParcelCollectionDriverTx,
+} from "../parcel-collection/parcel-collection.service";
+import {
+  ORDER_INITIAL_ASSIGNMENT_STATUSES,
+  PARCEL_NOT_READY_FOR_DELIVERY_MESSAGE,
+  isParcelReadyForDelivery,
+} from "./order-lifecycle";
+import { buildWorkflowQueueWhere } from "./order-workflow-queue";
 import type { OrderCreateFoundationInput } from "./order-create.schema";
 import type { ListOrdersQuery, OrderUpdateInput, ResolveCollectionDifferenceInput } from "./order.schema";
 import type {
@@ -410,6 +421,9 @@ function toOrderDetail(
     status: order.status,
     financialStatus: order.financial_status,
 
+    parcelIntakeMethod: order.parcel_intake_method,
+    parcelCollectionStatus: order.parcel_collection_status,
+
     customer: {
       id: order.customers.id,
       customerNumber: order.customers.customer_number,
@@ -500,6 +514,8 @@ export const orderSummarySelect = {
   status: true,
   financial_status: true,
   payment_type: true,
+  parcel_intake_method: true,
+  parcel_collection_status: true,
   receiver_name: true,
   receiver_phone: true,
   receiver_area: true,
@@ -521,6 +537,17 @@ export const orderSummarySelect = {
       users: { select: { first_name: true, last_name: true, phone: true } },
     },
   },
+  // Current COLLECTION driver (Phase 11.17.6 — task §9). `drivers` above
+  // remains the FINAL DELIVERY driver only; this is a distinct relation on
+  // orders.current_parcel_collection_driver_id. One extra join on the same
+  // paginated query — no N+1.
+  current_parcel_collection_driver: {
+    select: {
+      id: true,
+      driver_number: true,
+      users: { select: { first_name: true, last_name: true, phone: true } },
+    },
+  },
 } satisfies Prisma.ordersSelect;
 
 export type OrderSummaryRow = Prisma.ordersGetPayload<{ select: typeof orderSummarySelect }>;
@@ -534,6 +561,8 @@ export function toOrderSummary(row: OrderSummaryRow): OrderSummary {
     status: row.status,
     financialStatus: row.financial_status,
     paymentType: row.payment_type,
+    parcelIntakeMethod: row.parcel_intake_method,
+    parcelCollectionStatus: row.parcel_collection_status,
 
     customer: {
       id: row.customers.id,
@@ -560,6 +589,18 @@ export function toOrderSummary(row: OrderSummaryRow): OrderSummary {
             firstName: row.drivers.users.first_name,
             lastName: row.drivers.users.last_name,
             phone: row.drivers.users.phone,
+          },
+        }
+      : null,
+
+    currentCollectionDriver: row.current_parcel_collection_driver
+      ? {
+          id: row.current_parcel_collection_driver.id,
+          driverNumber: row.current_parcel_collection_driver.driver_number,
+          user: {
+            firstName: row.current_parcel_collection_driver.users.first_name,
+            lastName: row.current_parcel_collection_driver.users.last_name,
+            phone: row.current_parcel_collection_driver.users.phone,
           },
         }
       : null,
@@ -625,24 +666,6 @@ async function loadActivePaymentMethod(paymentMethodId: string, field: string): 
 // exists" is already structurally guaranteed by the schema — only the two
 // is_active flags need checking here. Never activates/modifies the Driver
 // or User; a rejection here changes nothing.
-async function loadEligibleDriverForAssignment(driverId: string): Promise<drivers & { users: users }> {
-  const driver = await prisma.drivers.findUnique({ where: { id: driverId }, include: { users: true } });
-  if (!driver) {
-    throw new AppError({ statusCode: 404, code: "NOT_FOUND", message: "Driver not found" });
-  }
-  if (!driver.is_active) {
-    throw new AppError({ statusCode: 400, code: "VALIDATION_ERROR", message: "Driver is not active" });
-  }
-  if (!driver.users.is_active) {
-    throw new AppError({
-      statusCode: 400,
-      code: "VALIDATION_ERROR",
-      message: "Driver's linked user account is not active",
-    });
-  }
-  return driver;
-}
-
 function toAssignmentDriverSummary(driver: drivers & { users: users }) {
   return {
     id: driver.id,
@@ -651,14 +674,159 @@ function toAssignmentDriverSummary(driver: drivers & { users: users }) {
   };
 }
 
+// Delivery-readiness gate (Phase 11.17.4) — PARCEL_NOT_READY_FOR_DELIVERY_MESSAGE
+// and isParcelReadyForDelivery now live in order-lifecycle.ts (Phase 11.17.6
+// correction, imported at the top of this file) so order-workflow-queue.ts /
+// dashboard.service.ts / order-report.service.ts can share the exact same
+// predicate instead of a second, possibly-inconsistent copy.
+
+// Transaction-aware final-Delivery assignment — used by createOrder's
+// "Create & Assign" path. The standalone assignOrder() keeps its own
+// (identical-shape) body; this is not a refactor of Phase 6.5. The
+// parcel_collection_status = RECEIVED_AT_COMPANY guard is inside the
+// conditional claim, so a concurrent parcel-collection change cannot slip a
+// delivery assignment through.
+async function assignDeliveryDriverTx(
+  tx: Prisma.TransactionClient,
+  params: { orderId: string; driverId: string; actorUserId: string; fromStatus: "RECEIVED" | "READY_FOR_PICKUP"; now: Date },
+): Promise<void> {
+  const { orderId, driverId, actorUserId, fromStatus, now } = params;
+  // Authoritative driver eligibility — inside `tx`, immediately before the
+  // claim, so a driver deactivated after the create-path pre-check cannot be
+  // assigned at commit (no TOCTOU — Phase 11.17.4 correction).
+  await assertDriverEligibleForAssignment(tx, driverId);
+  const claim = await tx.orders.updateMany({
+    where: {
+      id: orderId,
+      current_driver_id: null,
+      status: fromStatus,
+      parcel_collection_status: "RECEIVED_AT_COMPANY",
+    },
+    data: { current_driver_id: driverId, assigned_at: now, status: "ASSIGNED", updated_at: now },
+  });
+  if (claim.count !== 1) {
+    throw new AppError({ statusCode: 409, code: "CONFLICT", message: PARCEL_NOT_READY_FOR_DELIVERY_MESSAGE });
+  }
+  await tx.order_assignments.create({
+    data: {
+      order_id: orderId,
+      driver_id: driverId,
+      assigned_by_id: actorUserId,
+      assigned_at: now,
+      ended_at: null,
+      end_reason: null,
+      is_current: true,
+    },
+  });
+  await tx.order_status_history.create({
+    data: { order_id: orderId, from_status: fromStatus, to_status: "ASSIGNED", changed_by_id: actorUserId },
+  });
+}
+
 // ============================================================
 // Create
 // ============================================================
 
+interface ResolvedParcelIntakeFields {
+  parcel_intake_method: "ALREADY_AT_COMPANY" | "DRIVER_COLLECTION";
+  parcel_collection_status: "AWAITING_ASSIGNMENT" | "RECEIVED_AT_COMPANY";
+  received_at_company_at?: Date;
+  received_at_company_by_id?: string;
+  parcel_collection_contact_name?: string;
+  parcel_collection_phone?: string;
+  parcel_collection_alt_phone?: string | null;
+  parcel_collection_area_id?: string;
+  parcel_collection_area?: string | null;
+  parcel_collection_address?: string;
+  parcel_collection_notes?: string | null;
+}
+
+interface ResolvedParcelIntake {
+  fields: ResolvedParcelIntakeFields;
+  collectionDriverId: string | null;
+  deliveryDriverId: string | null;
+}
+
+async function resolveParcelIntake(
+  input: OrderCreateFoundationInput,
+  customer: customers,
+  actorUserId: string,
+  now: Date,
+): Promise<ResolvedParcelIntake> {
+  // Phase 11.17.4 backward compatibility: an omitted parcelIntakeMethod (old
+  // frontend) is resolved to ALREADY_AT_COMPANY at THIS layer — never a DB
+  // default, never DRIVER_COLLECTION. Phase 11.17.5 makes the client explicit.
+  const intakeMethod = input.parcelIntakeMethod ?? "ALREADY_AT_COMPANY";
+
+  if (intakeMethod === "ALREADY_AT_COMPANY") {
+    // The schema already rejects parcelCollectionDriverId / snapshot overrides
+    // for this method; the parcel is considered received the moment the order
+    // is recorded (§8/§9 — received_at_company_at IS the creation moment).
+    return {
+      fields: {
+        parcel_intake_method: "ALREADY_AT_COMPANY",
+        parcel_collection_status: "RECEIVED_AT_COMPANY",
+        received_at_company_at: now,
+        received_at_company_by_id: actorUserId,
+      },
+      collectionDriverId: null,
+      deliveryDriverId: input.deliveryDriverId ?? null,
+    };
+  }
+
+  // DRIVER_COLLECTION — resolve the collection snapshot: request override wins
+  // over the Customer default; the result is a historical Order snapshot that
+  // later Customer edits never rewrite.
+  const contactName = input.parcelCollectionContactName ?? customer.name;
+  const phone = input.parcelCollectionPhone ?? customer.primary_phone;
+  const altPhone = input.parcelCollectionAltPhone ?? customer.secondary_phone ?? null;
+  const address = input.parcelCollectionAddress ?? customer.default_address ?? null;
+  const notes = input.parcelCollectionNotes ?? null;
+  const collectionAreaId = input.parcelCollectionAreaId ?? customer.default_area_id ?? null;
+
+  let collectionAreaName: string | null = null;
+  if (collectionAreaId) {
+    const collectionArea = await loadActiveArea(collectionAreaId);
+    collectionAreaName = collectionArea.name;
+  }
+
+  // §13 — the minimum operational fields a Driver needs to actually collect.
+  // Area is required because the rest of the system requires an Area for
+  // location workflows (receiver_area_id is required on every Order).
+  if (!contactName || !phone || !address || !collectionAreaId) {
+    throw new AppError({
+      statusCode: 400,
+      code: "VALIDATION_ERROR",
+      message:
+        "A collection contact, phone, address and area are required for a driver-collection order — " +
+        "the selected customer's saved data does not provide them and no override was given",
+    });
+  }
+
+  return {
+    fields: {
+      parcel_intake_method: "DRIVER_COLLECTION",
+      // Always created AWAITING_ASSIGNMENT; assignParcelCollectionDriverTx
+      // flips it to ASSIGNED in the same transaction when a driver is chosen.
+      parcel_collection_status: "AWAITING_ASSIGNMENT",
+      parcel_collection_contact_name: contactName,
+      parcel_collection_phone: phone,
+      parcel_collection_alt_phone: altPhone,
+      parcel_collection_area_id: collectionAreaId,
+      parcel_collection_area: collectionAreaName,
+      parcel_collection_address: address,
+      parcel_collection_notes: notes,
+      // received_at_company_* / parcel_collected_from_sender_at stay NULL.
+    },
+    collectionDriverId: input.parcelCollectionDriverId ?? null,
+    deliveryDriverId: null, // schema forbids a delivery driver for DRIVER_COLLECTION at create
+  };
+}
+
 export async function createOrder(input: OrderCreateFoundationInput, actorUserId: string): Promise<OrderDetail> {
   // 1. Customer — must exist and be active (CLAUDE.md-locked V1 rule: no
   // new Orders for inactive Customers; historical Orders are unaffected).
-  await loadActiveCustomer(input.customerId);
+  const customer = await loadActiveCustomer(input.customerId);
 
   // 2. Receiver Area — must exist and be active. receiver_area (the
   // snapshot) is ALWAYS derived from area.name here, never from client text
@@ -683,6 +851,18 @@ export async function createOrder(input: OrderCreateFoundationInput, actorUserId
   }
   if (input.collectionPaymentMethodId) {
     await loadActivePaymentMethod(input.collectionPaymentMethodId, "collection payment method");
+  }
+
+  // 4b. Parcel Intake (Phase 11.17.4) — resolve method + collection snapshot,
+  // and pre-validate any driver eligibility OUTSIDE the transaction so a bad
+  // driver fails before an Order row is ever created (no rollback needed).
+  const now = new Date();
+  const parcel = await resolveParcelIntake(input, customer, actorUserId, now);
+  if (parcel.collectionDriverId) {
+    await loadEligibleDriverForAssignment(parcel.collectionDriverId);
+  }
+  if (parcel.deliveryDriverId) {
+    await loadEligibleDriverForAssignment(parcel.deliveryDriverId);
   }
 
   // 5. Persist atomically, with a bounded retry on order_number/tracking_code
@@ -732,32 +912,56 @@ export async function createOrder(input: OrderCreateFoundationInput, actorUserId
             prepaid_payment_method_id: input.prepaidPaymentMethodId ?? null,
             collection_payment_method_id: input.collectionPaymentMethodId ?? null,
             needs_financial_review: false,
-            // current_driver_id / assigned_at intentionally omitted (stay
-            // NULL) — Driver assignment does not exist until Phase 6.5.
+            // current_driver_id / assigned_at stay NULL here — any final
+            // Delivery assignment happens via assignDeliveryDriverTx below.
+            // For ALREADY_AT_COMPANY, parcel.fields carries received_at_company_at
+            // = `now` (computed just before this transaction); created_at is the
+            // DB default now() of the same transaction — §9: the same logical
+            // creation moment (sub-millisecond apart, one transaction event).
+            ...parcel.fields,
           },
           include: orderDetailInclude,
         });
 
         const historyRow = await tx.order_status_history.create({
-          data: {
-            order_id: order.id,
-            from_status: null,
-            to_status: "RECEIVED",
-            changed_by_id: actorUserId,
-          },
+          data: { order_id: order.id, from_status: null, to_status: "RECEIVED", changed_by_id: actorUserId },
           include: statusHistoryInclude,
         });
 
-        // A brand-new Order can never have an assignment, a delivery attempt,
-        // or any financial ledger row yet — no reload needed for those.
-        return toOrderDetail(
-          order,
-          [historyRow],
-          [],
-          [],
-          { companyAmount: "0", customerWalletAmount: "0" },
-          []
-        );
+        // Optional initial Parcel Collection driver (DRIVER_COLLECTION) —
+        // reuses the exact Phase 11.17.3 invariant, INCLUDING its in-`tx`
+        // driver-eligibility re-check; a failure rolls back the whole create
+        // (no orphan Order).
+        if (parcel.collectionDriverId) {
+          await assignParcelCollectionDriverTx(tx, {
+            orderId: order.id,
+            driverId: parcel.collectionDriverId,
+            actorUserId,
+            expectedStatus: "AWAITING_ASSIGNMENT",
+          });
+        }
+
+        // Optional final Delivery driver ("Create & Assign") — ALREADY_AT_COMPANY
+        // only (the parcel is RECEIVED_AT_COMPANY, so the gate passes).
+        if (parcel.deliveryDriverId) {
+          await assignDeliveryDriverTx(tx, {
+            orderId: order.id,
+            driverId: parcel.deliveryDriverId,
+            actorUserId,
+            fromStatus: "RECEIVED",
+            now,
+          });
+        }
+
+        // Fast path when nothing was assigned (the overwhelmingly common
+        // case) — a brand-new Order has no assignment / attempt / ledger row
+        // and its status history is exactly the one RECEIVED row above.
+        // Only reload + fully assemble when an assign helper mutated state.
+        if (!parcel.collectionDriverId && !parcel.deliveryDriverId) {
+          return toOrderDetail(order, [historyRow], [], [], { companyAmount: "0", customerWalletAmount: "0" }, []);
+        }
+        const finalOrder = await tx.orders.findUniqueOrThrow({ where: { id: order.id }, include: orderDetailInclude });
+        return assembleOrderDetail(tx, finalOrder);
       });
     } catch (error) {
       if (isIdentifierConflict(error)) {
@@ -1074,6 +1278,16 @@ export async function listOrders(query: ListOrdersQuery): Promise<ListOrdersResu
   if (query.areaId) where.receiver_area_id = query.areaId;
   if (query.needsFinancialReview !== undefined) where.needs_financial_review = query.needsFinancialReview;
 
+  // Parcel Intake filters (Phase 11.17.6 — task §5-§8). Independent of
+  // OrderType; independent equality filters, safe as plain top-level keys.
+  // parcelCollectionDriverId filters CURRENT collection work only
+  // (orders.current_parcel_collection_driver_id) — never "ever had a
+  // collection assignment" (that is historical reporting, out of scope
+  // here — see the new Driver parcel-collection-history endpoint).
+  if (query.parcelIntakeMethod) where.parcel_intake_method = query.parcelIntakeMethod;
+  if (query.parcelCollectionStatus) where.parcel_collection_status = query.parcelCollectionStatus;
+  if (query.parcelCollectionDriverId) where.current_parcel_collection_driver_id = query.parcelCollectionDriverId;
+
   // Every remaining condition composes with AND at the outer level so no
   // filter can silently overwrite another (search + payment-method both need
   // their own OR sub-clause; driverId + assignmentStatus both target
@@ -1131,6 +1345,17 @@ export async function listOrders(query: ListOrdersQuery): Promise<ListOrdersResu
     and.push({ current_driver_id: null });
   }
 
+  // Operational queue (Phase 11.17.6 — task §12/§19). Pushed as its own AND
+  // branch (never spread into the top-level `where`) so it composes safely
+  // even when it targets a key (e.g. `status`) another filter above already
+  // set — the two conditions both apply, exactly like every other AND
+  // branch in this function. Reuses the single shared queue definition in
+  // order-workflow-queue.ts — the Dashboard and Reports use the identical
+  // predicate, so counts always agree.
+  if (query.workflowQueue) {
+    and.push(buildWorkflowQueueWhere(query.workflowQueue));
+  }
+
   if (and.length > 0) where.AND = and;
 
   const createdAt = buildCreatedAtRange(query.createdFrom, query.createdTo);
@@ -1161,7 +1386,10 @@ export async function listOrders(query: ListOrdersQuery): Promise<ListOrdersResu
 // /assign must be rejected in favor of /reassign.
 // ============================================================
 
-const INITIAL_ASSIGNMENT_SOURCE_STATUSES = new Set(["RECEIVED", "READY_FOR_PICKUP"]);
+// ORDER_INITIAL_ASSIGNMENT_STATUSES (order-lifecycle.ts) is the shared
+// source — order-workflow-queue.ts's READY_FOR_DELIVERY_ASSIGNMENT queue
+// reuses the identical Set contents (Phase 11.17.6).
+const INITIAL_ASSIGNMENT_SOURCE_STATUSES = new Set<string>(ORDER_INITIAL_ASSIGNMENT_STATUSES);
 
 // CONCURRENCY DESIGN (assign, reassign, and bulk-assign all follow this
 // shape): the initial read happens OUTSIDE the transaction purely to
@@ -1198,12 +1426,29 @@ export async function assignOrder(orderId: string, driverId: string, actorUserId
       message: `Order cannot be assigned while its status is ${existing.status}`,
     });
   }
+  // Phase 11.17.4 — hard Parcel Intake gate for FINAL Delivery assignment.
+  if (!isParcelReadyForDelivery(existing.parcel_collection_status)) {
+    throw new AppError({ statusCode: 409, code: "CONFLICT", message: PARCEL_NOT_READY_FOR_DELIVERY_MESSAGE });
+  }
 
   const now = new Date();
 
   return prisma.$transaction(async (tx) => {
+    // Authoritative driver eligibility — re-checked inside the transaction so a
+    // driver deactivated between the pre-read above and this commit cannot be
+    // assigned (no TOCTOU — Phase 11.17.4 correction). The pre-read stays for
+    // the friendly early error only.
+    await assertDriverEligibleForAssignment(tx, driver.id);
+
     const claim = await tx.orders.updateMany({
-      where: { id: orderId, current_driver_id: null, status: existing.status },
+      // parcel_collection_status is part of the claim so a concurrent
+      // parcel-collection transition can never let a delivery assignment slip.
+      where: {
+        id: orderId,
+        current_driver_id: null,
+        status: existing.status,
+        parcel_collection_status: "RECEIVED_AT_COMPANY",
+      },
       data: { current_driver_id: driver.id, assigned_at: now, status: "ASSIGNED", updated_at: now },
     });
     if (claim.count !== 1) {
@@ -1272,6 +1517,20 @@ export async function reassignOrder(
       message: "The new driver must be different from the current driver",
     });
   }
+  // Phase 11.17.4 — fail closed: a delivery-assigned Order should already be
+  // RECEIVED_AT_COMPANY, but if legacy/corrupt state is not, reassignment must
+  // NOT be a way to hold a driver on an order whose parcel is not at the company.
+  if (!isParcelReadyForDelivery(existing.parcel_collection_status)) {
+    console.error(
+      `[order.service] integrity failure for order ${orderId}: has a current delivery driver but ` +
+        `parcel_collection_status=${existing.parcel_collection_status}`,
+    );
+    throw new AppError({
+      statusCode: 500,
+      code: "INTERNAL_ERROR",
+      message: "Order parcel-intake state is inconsistent with its delivery assignment — action was not performed",
+    });
+  }
 
   // Assignment-history integrity check — there must be EXACTLY one current
   // assignment row and it must correspond to orders.current_driver_id.
@@ -1286,8 +1545,17 @@ export async function reassignOrder(
   const now = new Date();
 
   return prisma.$transaction(async (tx) => {
+    // Authoritative NEW-driver eligibility — in-transaction (no TOCTOU;
+    // Phase 11.17.4). Pre-read above is the friendly early error only.
+    await assertDriverEligibleForAssignment(tx, newDriver.id);
+
     const claim = await tx.orders.updateMany({
-      where: { id: orderId, status: sourceStatus, current_driver_id: oldDriverId },
+      where: {
+        id: orderId,
+        status: sourceStatus,
+        current_driver_id: oldDriverId,
+        parcel_collection_status: "RECEIVED_AT_COMPANY",
+      },
       // status is always (re)set to ASSIGNED: a no-op when the source was
       // already ASSIGNED, a real transition when the source was RESCHEDULED.
       data: { current_driver_id: newDriver.id, assigned_at: now, updated_at: now, status: "ASSIGNED" },
@@ -1371,6 +1639,15 @@ export async function bulkAssignOrders(
         message: `Order ${order.order_number} cannot be assigned while its status is ${order.status}`,
       });
     }
+    // Phase 11.17.4 — every selected Order must have its parcel at the company.
+    // Bulk stays ALL-OR-NOTHING: one ineligible order rejects the whole batch.
+    if (!isParcelReadyForDelivery(order.parcel_collection_status)) {
+      throw new AppError({
+        statusCode: 409,
+        code: "CONFLICT",
+        message: `Order ${order.order_number}: ${PARCEL_NOT_READY_FOR_DELIVERY_MESSAGE.toLowerCase()}`,
+      });
+    }
   }
 
   const now = new Date();
@@ -1385,9 +1662,18 @@ export async function bulkAssignOrders(
   // conditional update affects 0 rows, the thrown error aborts the whole
   // transaction and Prisma rolls back every write made so far in it.
   await prisma.$transaction(async (tx) => {
+    // Authoritative driver eligibility — in-transaction, once for the batch
+    // (no TOCTOU; Phase 11.17.4). The pre-read above is the friendly early error.
+    await assertDriverEligibleForAssignment(tx, driver.id);
+
     for (const order of targetOrders) {
       const claim = await tx.orders.updateMany({
-        where: { id: order.id, current_driver_id: null, status: order.status },
+        where: {
+          id: order.id,
+          current_driver_id: null,
+          status: order.status,
+          parcel_collection_status: "RECEIVED_AT_COMPANY",
+        },
         data: { current_driver_id: driver.id, assigned_at: now, status: "ASSIGNED", updated_at: now },
       });
       if (claim.count !== 1) {
@@ -1601,6 +1887,45 @@ export async function cancelOrder(
     });
   }
 
+  // Phase 11.17.4 — Parcel Collection integration.
+  //  - COLLECTED_FROM_SENDER: a driver physically holds the parcel; cancellation
+  //    is forbidden until Management confirms RECEIVED_AT_COMPANY (§32).
+  //  - ASSIGNED: the current collection assignment is closed with
+  //    end_reason = ORDER_CANCELLED in the same transaction, and the collection
+  //    driver pointer is cleared. parcel_collection_status stays ASSIGNED as the
+  //    last historical stage — there is NO ParcelCollectionStatus.CANCELLED (§34).
+  const parcelStatus = existing.parcel_collection_status;
+  if (parcelStatus === "COLLECTED_FROM_SENDER") {
+    throw new AppError({
+      statusCode: 409,
+      code: "CONFLICT",
+      message:
+        "The collection driver is holding this parcel — confirm it has been received at the company before cancelling the order",
+    });
+  }
+  const closesParcelCollectionAssignment = parcelStatus === "ASSIGNED";
+  let parcelAssignmentId: string | null = null;
+  if (closesParcelCollectionAssignment) {
+    const parcelAssignment = await assertConsistentCurrentParcelCollectionAssignment(
+      prisma,
+      orderId,
+      existing.current_parcel_collection_driver_id,
+    );
+    parcelAssignmentId = parcelAssignment.id;
+  } else if (existing.current_parcel_collection_driver_id !== null) {
+    // AWAITING_ASSIGNMENT / FAILED / RESCHEDULED / RECEIVED_AT_COMPANY must all
+    // carry a NULL collection-driver pointer.
+    console.error(
+      `[order.service] data-consistency failure for order ${orderId}: parcel_collection_status=${parcelStatus} ` +
+        `unexpectedly has current_parcel_collection_driver_id=${existing.current_parcel_collection_driver_id}`,
+    );
+    throw new AppError({
+      statusCode: 500,
+      code: "INTERNAL_ERROR",
+      message: "Parcel collection assignment state is inconsistent — action was not performed",
+    });
+  }
+
   const hasActiveAssignment = CANCEL_STATUSES_WITH_ACTIVE_ASSIGNMENT.has(existing.status);
   let currentAssignmentId: string | null = null;
 
@@ -1626,7 +1951,15 @@ export async function cancelOrder(
 
   return prisma.$transaction(async (tx) => {
     const claim = await tx.orders.updateMany({
-      where: { id: orderId, status: sourceStatus, current_driver_id: currentDriverId },
+      // parcel_collection_status is part of the claim: a concurrent
+      // driver `collected`/`failed` (which moves it off ASSIGNED) makes this
+      // claim match 0 rows -> 409, and the whole cancel rolls back.
+      where: {
+        id: orderId,
+        status: sourceStatus,
+        current_driver_id: currentDriverId,
+        parcel_collection_status: parcelStatus,
+      },
       data: {
         status: "CANCELLED",
         cancelled_at: now,
@@ -1635,6 +1968,8 @@ export async function cancelOrder(
         // CANCEL WITHOUT CURRENT ASSIGNMENT: for RECEIVED/READY_FOR_PICKUP
         // these are already null, so this is a harmless no-op assignment.
         ...(hasActiveAssignment ? { current_driver_id: null, assigned_at: null } : {}),
+        // parcel_collection_status is deliberately NOT changed (§34).
+        ...(closesParcelCollectionAssignment ? { current_parcel_collection_driver_id: null } : {}),
       },
     });
     if (claim.count !== 1) {
@@ -1657,6 +1992,25 @@ export async function cancelOrder(
           message: "Order was changed by another request — please retry",
         });
       }
+    }
+
+    if (closesParcelCollectionAssignment && parcelAssignmentId) {
+      // The parcel_collection_assignments_current_state_chk CHECK requires
+      // ended_at + end_reason to be set together with is_current = false.
+      const endedParcel = await tx.parcel_collection_assignments.updateMany({
+        where: { id: parcelAssignmentId, is_current: true },
+        data: { is_current: false, ended_at: now, end_reason: "ORDER_CANCELLED" },
+      });
+      if (endedParcel.count !== 1) {
+        throw new AppError({
+          statusCode: 409,
+          code: "CONFLICT",
+          message: "Order was changed by another request — please retry",
+        });
+      }
+      // No parcel_collection_attempts row is fabricated (§33/§41). The
+      // assignment row's end_reason = ORDER_CANCELLED is the operational
+      // evidence for why the collection assignment ended.
     }
 
     // financial_status/actual_amount_collected/needs_financial_review and

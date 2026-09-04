@@ -10,6 +10,7 @@ import type {
 import type {
   DriverDeliveryHistoryRow,
   DriverDetail,
+  DriverParcelCollectionHistoryRow,
   DriverSummary,
   ManagementDriverCashDetail,
   ManagementDriverCashSummary,
@@ -130,6 +131,23 @@ export const driversApi = api.injectEndpoints({
       providesTags: [{ type: 'Order', id: 'LIST' }],
     }),
 
+    /** Driver-scoped HISTORICAL Parcel Collection work (drivers.read, Phase 11.17.6). */
+    getDriverParcelCollectionHistory: builder.query<
+      Paginated<DriverParcelCollectionHistoryRow>,
+      DriverWorkListParams
+    >({
+      query: ({ id, ...params }) => ({
+        url: `/drivers/${id}/parcel-collection-history`,
+        params: cleanParams({ ...params }),
+      }),
+      transformResponse: (r: ApiListResponse<DriverParcelCollectionHistoryRow>) =>
+        unwrapList(r),
+      providesTags: (_res, _err, { id }) => [
+        { type: 'ParcelCollection', id: 'LIST' },
+        { type: 'Driver', id },
+      ],
+    }),
+
     /** Management Driver Cash balance (finance.read). */
     getManagementDriverCash: builder.query<ManagementDriverCashDetail, string>({
       query: (driverId) => ({ url: `/finance/driver-cash/${driverId}` }),
@@ -178,6 +196,7 @@ export const {
   useUpdateDriverMutation,
   useGetDriverCurrentOrdersQuery,
   useGetDriverDeliveryHistoryQuery,
+  useGetDriverParcelCollectionHistoryQuery,
   useGetManagementDriverCashQuery,
   useGetManagementDriverCashTransactionsQuery,
   useGetDriverCashSummariesQuery,

@@ -1,8 +1,16 @@
 import { RequestHandler } from "express";
+import { AppError } from "../../shared/errors/app-error";
 import { createArea, getAreaById, listAreas, updateArea } from "./area.service";
 import type { CreateAreaInput, ListAreasQuery, UpdateAreaInput } from "./area.schema";
 import type { AreaSummary } from "./area.types";
 import type { ApiListResponse, ApiSuccessResponse } from "../../shared/types/api-response";
+
+function requireActorId(req: { actor?: { userId: string } }): string {
+  if (!req.actor) {
+    throw new AppError({ statusCode: 401, code: "UNAUTHORIZED", message: "Authentication required" });
+  }
+  return req.actor.userId;
+}
 
 export const listAreasController: RequestHandler<
   Record<string, never>,
@@ -33,7 +41,7 @@ export const createAreaController: RequestHandler<
   CreateAreaInput
 > = async (req, res, next) => {
   try {
-    const area = await createArea(req.body);
+    const area = await createArea(req.body, requireActorId(req));
     res.status(201).json({ success: true, data: area });
   } catch (error) {
     next(error);
@@ -58,7 +66,7 @@ export const updateAreaController: RequestHandler<
   UpdateAreaInput
 > = async (req, res, next) => {
   try {
-    const area = await updateArea(req.params.id, req.body);
+    const area = await updateArea(req.params.id, req.body, requireActorId(req));
     res.json({ success: true, data: area });
   } catch (error) {
     next(error);

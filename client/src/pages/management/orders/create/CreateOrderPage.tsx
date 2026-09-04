@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Controller, useForm, type UseFormSetError } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -8,10 +8,7 @@ import { paths } from '../../../../routes/paths';
 import { useHasPermission } from '../../../../features/auth/usePermissions';
 import { PERMISSIONS } from '../../../../features/auth/permissions';
 import { useDebouncedValue } from '../../../../lib/useDebouncedValue';
-import {
-  useCreateOrderMutation,
-  useAssignOrderMutation,
-} from '../../../../services/ordersApi';
+import { useCreateOrderMutation } from '../../../../services/ordersApi';
 import type { OrderDetail } from '../../../../services/domain.types';
 import { useGetCustomersQuery, useGetCustomerQuery } from '../../../../services/customersApi';
 import { useGetDriversQuery, useGetDriverQuery } from '../../../../services/driversApi';
@@ -49,8 +46,6 @@ import {
   moneyIsPositive,
 } from './createOrderFinancialPreview';
 import { CreateOrderReview } from './CreateOrderReview';
-
-type SubmitMode = 'create' | 'createAndAssign';
 
 const FORM_FIELDS = new Set<string>(Object.keys(CREATE_ORDER_DEFAULTS));
 
@@ -119,6 +114,19 @@ const PAYMENT_TYPE_OPTIONS = [
   },
 ] as const;
 
+const PARCEL_INTAKE_OPTIONS = [
+  {
+    value: 'ALREADY_AT_COMPANY',
+    title: 'Already at Company',
+    hint: 'The parcel is already here — a delivery driver can be assigned now.',
+  },
+  {
+    value: 'DRIVER_COLLECTION',
+    title: 'Collection by Driver Required',
+    hint: 'A driver brings the parcel from the sender to the company first.',
+  },
+] as const;
+
 export default function CreateOrderPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -152,22 +160,20 @@ export default function CreateOrderPage() {
   });
 
   const [createOrder, { isLoading: creating }] = useCreateOrderMutation();
-  const [assignOrder, { isLoading: assigning }] = useAssignOrderMutation();
 
-  // The Order once it exists — set only after a successful POST /orders.
-  // Its presence flips the page into "already created" mode: the create
-  // actions disappear so the order can never be POSTed twice.
+  // The Order once it exists — set only after a successful POST /orders, which
+  // is now a single atomic request (collection/delivery driver included). Its
+  // presence locks the form so the order can never be POSTed twice.
   const [created, setCreated] = useState<OrderDetail | null>(null);
-  const [pending, setPending] = useState<SubmitMode | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [assignError, setAssignError] = useState<string | null>(null);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
 
   const values = watch();
   const preview = calculateOrderPreview(values);
-  // `pending` / `isSubmitting` also cover the async validate + the create→assign
-  // gap, so a rapid second click can never fire a second POST /orders.
-  const busy = creating || assigning || isSubmitting || pending !== null;
+  const busy = creating || isSubmitting || submitting || created !== null;
+
+  const driverCollection = values.parcelIntakeMethod === 'DRIVER_COLLECTION';
 
   const prepaidPositive =
     moneyIsPositive(values.prepaidOrderAmount) ||
@@ -196,8 +202,11 @@ export default function CreateOrderPage() {
     { search: debouncedDriverTerm.trim() || undefined, isActive: true, limit: 20 },
     { skip: !canAssign },
   );
-  const selectedDriver = useGetDriverQuery(values.driverId, {
+  const selectedDeliveryDriver = useGetDriverQuery(values.driverId, {
     skip: !values.driverId || !canAssign,
+  });
+  const selectedCollectionDriver = useGetDriverQuery(values.parcelCollectionDriverId, {
+    skip: !values.parcelCollectionDriverId || !canAssign,
   });
 
   const areaOptions = useMemo(
@@ -222,8 +231,6 @@ export default function CreateOrderPage() {
         setValue('prepaidDeliveryFee', '0.00', { shouldValidate: true });
       }
     } else if (paymentType === 'ALREADY_PAID') {
-      // ALREADY_PAID means the order amount is fully prepaid — keep the
-      // prepaid-order field mirrored (it is rendered disabled below).
       if (getValues('prepaidOrderAmount') !== orderAmount) {
         setValue('prepaidOrderAmount', orderAmount, { shouldValidate: true });
       }
@@ -231,8 +238,6 @@ export default function CreateOrderPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paymentType, orderAmount]);
 
-  // Clear a payment method when its money reason disappears (predictable:
-  // "no prepaid amount" / "nothing to collect" -> no method).
   useEffect(() => {
     if (!prepaidPositive && getValues('prepaidPaymentMethodId')) {
       setValue('prepaidPaymentMethodId', '', { shouldValidate: true });
@@ -246,6 +251,60 @@ export default function CreateOrderPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collectPositive]);
 
+  /* ---------- parcel-intake driven field normalization ---------- */
+  // Switching to ALREADY_AT_COMPANY must not carry stale collection values into
+  // the request. Switching to DRIVER_COLLECTION must not carry a stale delivery
+  // driver (it is disabled/hidden). Both are also enforced by the schema and
+  // the backend, but clearing here keeps the request body clean.
+  useEffect(() => {
+    if (driverCollection) {
+      if (getValues('driverId')) setValue('driverId', '', { shouldValidate: true });
+    } else {
+      for (const key of [
+        'parcelCollectionContactName',
+        'parcelCollectionPhone',
+        'parcelCollectionAltPhone',
+        'parcelCollectionAreaId',
+        'parcelCollectionAddress',
+        'parcelCollectionNotes',
+        'parcelCollectionDriverId',
+      ] as const) {
+        if (getValues(key)) setValue(key, '', { shouldValidate: true });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [driverCollection]);
+
+  /* ---------- customer snapshot prefill (DRIVER_COLLECTION) ---------- */
+  // FORM DEFAULTS only — the submitted order stores a snapshot the operator may
+  // edit per order without touching the customer profile. Re-prefills whenever
+  // the selected customer changes so customer A's address can never be
+  // submitted for customer B. Manual edits made after the prefill are kept
+  // (we only overwrite when the field still holds the previous customer's
+  // prefilled value or is empty).
+  const cust = selectedCustomer.data;
+  const prefillRef = useRef<Record<string, string>>({});
+  useEffect(() => {
+    if (!driverCollection || !cust) return;
+    const next: Record<string, string> = {
+      parcelCollectionContactName: cust.name ?? '',
+      parcelCollectionPhone: cust.primaryPhone ?? '',
+      parcelCollectionAltPhone: cust.secondaryPhone ?? '',
+      parcelCollectionAddress: cust.defaultAddress ?? '',
+      parcelCollectionAreaId: cust.area?.id ?? '',
+    };
+    for (const [key, value] of Object.entries(next)) {
+      const field = key as keyof CreateOrderFormValues;
+      const current = String(getValues(field) ?? '');
+      const wasPrefilled = prefillRef.current[key];
+      if (current === '' || current === wasPrefilled) {
+        setValue(field, value, { shouldValidate: current !== '' });
+      }
+    }
+    prefillRef.current = next;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [driverCollection, cust?.id]);
+
   /* -------------------- submit -------------------- */
   const goToOrder = (order: OrderDetail, assigned: boolean) => {
     navigate(paths.management.orderDetail(order.id), {
@@ -258,69 +317,47 @@ export default function CreateOrderPage() {
     });
   };
 
-  const run = async (formValues: CreateOrderFormValues, mode: SubmitMode) => {
-    if (pending) return;
-    setPending(mode);
+  const run = async (formValues: CreateOrderFormValues) => {
+    if (submitting || created) return;
+    setSubmitting(true);
     setFormError(null);
-    setAssignError(null);
-
     try {
-      let order = created;
-      if (!order) {
-        try {
-          order = await createOrder(toCreateOrderRequest(formValues)).unwrap();
-          setCreated(order);
-        } catch (e) {
-          const err = e as UnknownApiError;
-          if (isTransportError(err)) {
-            setFormError(
-              'We could not confirm whether the order was created. Check the Orders list before submitting again.',
-            );
-            return;
-          }
-          if (!applyServerFieldErrors(err, setError)) {
-            setFormError(safeMutationMessage(err, 'Could not create the order. Please try again.'));
-          } else {
-            setFormError('Please fix the highlighted fields and try again.');
-          }
-          return;
-        }
+      const order = await createOrder(toCreateOrderRequest(formValues)).unwrap();
+      setCreated(order);
+      const assigned =
+        (formValues.parcelIntakeMethod === 'DRIVER_COLLECTION' &&
+          !!formValues.parcelCollectionDriverId) ||
+        (formValues.parcelIntakeMethod === 'ALREADY_AT_COMPANY' &&
+          !!formValues.driverId);
+      goToOrder(order, assigned);
+    } catch (e) {
+      const err = e as UnknownApiError;
+      if (isTransportError(err)) {
+        setFormError(
+          'We could not confirm whether the order was created. Check the Orders list before submitting again.',
+        );
+        return;
       }
-
-      if (mode === 'createAndAssign' && formValues.driverId) {
-        try {
-          const assignedOrder = await assignOrder({
-            id: order.id,
-            driverId: formValues.driverId,
-          }).unwrap();
-          goToOrder(assignedOrder, true);
-          return;
-        } catch (e) {
-          setAssignError(
-            safeMutationMessage(
-              e as UnknownApiError,
-              'Could not assign a driver. The order was still created.',
-            ),
-          );
-          return;
-        }
+      if (!applyServerFieldErrors(err, setError)) {
+        setFormError(
+          safeMutationMessage(err, 'Could not create the order. Please try again.'),
+        );
+      } else {
+        setFormError('Please fix the highlighted fields and try again.');
       }
-
-      goToOrder(order, false);
     } finally {
-      setPending(null);
+      setSubmitting(false);
     }
   };
 
-  const runCreate = handleSubmit((v) => run(v, 'create'));
-  const runCreateAndAssign = handleSubmit((v) => run(v, 'createAndAssign'));
+  const submit = handleSubmit((v) => run(v));
 
   const attemptLeave = () => {
     if (isDirty && !created) setShowLeaveConfirm(true);
     else navigate(paths.management.orders);
   };
 
-  /* -------------------- derived review labels -------------------- */
+  /* -------------------- derived labels -------------------- */
   const reviewLabels = {
     customer: selectedCustomer.data
       ? `${selectedCustomer.data.customerNumber} · ${selectedCustomer.data.name}`
@@ -333,14 +370,28 @@ export default function CreateOrderPage() {
     collectionMethod:
       methodOptions.find((o) => o.value === values.collectionPaymentMethodId)
         ?.label ?? null,
-    driver: selectedDriver.data
-      ? `${selectedDriver.data.driverNumber} · ${selectedDriver.data.user.firstName} ${selectedDriver.data.user.lastName}`
+    driver: selectedDeliveryDriver.data
+      ? `${selectedDeliveryDriver.data.driverNumber} · ${selectedDeliveryDriver.data.user.firstName} ${selectedDeliveryDriver.data.user.lastName}`
+      : null,
+    collectionArea:
+      areaOptions.find((o) => o.value === values.parcelCollectionAreaId)?.label ??
+      null,
+    collectionDriver: selectedCollectionDriver.data
+      ? `${selectedCollectionDriver.data.driverNumber} · ${selectedCollectionDriver.data.user.firstName} ${selectedCollectionDriver.data.user.lastName}`
       : null,
   };
 
   const previewMoney = (v: string | null) => (v ? formatMoney(v) : '—');
   const alreadyPaid = paymentType === 'ALREADY_PAID';
   const cod = paymentType === 'CASH_ON_DELIVERY';
+
+  const primaryLabel = driverCollection
+    ? values.parcelCollectionDriverId
+      ? 'Create & assign collection'
+      : 'Create order'
+    : values.driverId
+      ? 'Create & assign delivery'
+      : 'Create order';
 
   return (
     <div className="mx-auto max-w-3xl space-y-5 pb-4">
@@ -373,12 +424,7 @@ export default function CreateOrderPage() {
         </div>
       )}
 
-      <form
-        noValidate
-        onSubmit={(e) => e.preventDefault()}
-        className="space-y-5"
-      >
-        {/* Sections 1-4 lock once the order exists (no re-POST possible). */}
+      <form noValidate onSubmit={(e) => e.preventDefault()} className="space-y-5">
         <fieldset disabled={!!created} className="space-y-5 disabled:opacity-70">
           <FormSection
             title="Customer & order type"
@@ -669,123 +715,182 @@ export default function CreateOrderPage() {
               </p>
             </div>
           </FormSection>
-        </fieldset>
 
-        {/* Assignment stays editable after create so a failed assignment can
-            be retried without re-creating the order. */}
-        {canAssign && (
+          {/* -------------------- Parcel Intake -------------------- */}
           <FormSection
-            title="Delivery assignment"
-            description="Optional. Assigning a driver here runs a separate request after the order is created (RECEIVED → ASSIGNED)."
+            title="Parcel Intake"
+            description="How the parcel reaches the company. This is separate from the delivery to the receiver, and independent of the order type."
           >
-            <Controller
-              control={control}
-              name="driverId"
-              render={({ field }) => (
-                <ServerSearchSelect
-                  label="Driver"
-                  variant="field"
-                  anyLabel="Leave unassigned"
-                  searchPlaceholder="Search active drivers…"
-                  value={field.value}
-                  onChange={field.onChange}
-                  searchTerm={driverTerm}
-                  onSearchTermChange={setDriverTerm}
-                  loading={drivers.isFetching}
-                  total={drivers.data?.meta.total}
-                  options={(drivers.data?.items ?? []).map((d) => ({
-                    id: d.id,
-                    label: `${d.driverNumber} · ${d.user.firstName} ${d.user.lastName}${d.user.phone ? ` · ${d.user.phone}` : ''}`,
-                  }))}
-                  selectedLabel={
-                    selectedDriver.data
-                      ? `${selectedDriver.data.driverNumber} · ${selectedDriver.data.user.firstName} ${selectedDriver.data.user.lastName}`
-                      : undefined
-                  }
-                  error={errors.driverId?.message}
+            <RadioCards
+              legend="How will the parcel reach the company?"
+              name="parcelIntakeMethod"
+              options={PARCEL_INTAKE_OPTIONS}
+              register={register}
+              error={errors.parcelIntakeMethod?.message}
+            />
+
+            {driverCollection ? (
+              <div className="space-y-4">
+                <p className="text-xs text-ink-muted">
+                  The collection driver brings the parcel from the sender /
+                  customer location to the company. These details are prefilled
+                  from the selected customer and stored as a snapshot on this
+                  order — editing them here does not change the customer profile.
+                </p>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <TextField
+                    label="Collection contact name"
+                    required
+                    autoComplete="off"
+                    error={errors.parcelCollectionContactName?.message}
+                    {...register('parcelCollectionContactName')}
+                  />
+                  <TextField
+                    label="Collection phone"
+                    required
+                    inputMode="tel"
+                    autoComplete="off"
+                    error={errors.parcelCollectionPhone?.message}
+                    {...register('parcelCollectionPhone')}
+                  />
+                  <TextField
+                    label="Alternative phone"
+                    inputMode="tel"
+                    autoComplete="off"
+                    error={errors.parcelCollectionAltPhone?.message}
+                    {...register('parcelCollectionAltPhone')}
+                  />
+                  <SelectField
+                    label="Collection area"
+                    required
+                    placeholder={
+                      areas.isLoading ? 'Loading areas…' : 'Select an area…'
+                    }
+                    options={areaOptions}
+                    error={errors.parcelCollectionAreaId?.message}
+                    {...register('parcelCollectionAreaId')}
+                  />
+                </div>
+                <TextAreaField
+                  label="Collection address"
+                  required
+                  rows={2}
+                  error={errors.parcelCollectionAddress?.message}
+                  {...register('parcelCollectionAddress')}
+                />
+                <TextAreaField
+                  label="Collection notes"
+                  rows={2}
+                  error={errors.parcelCollectionNotes?.message}
+                  {...register('parcelCollectionNotes')}
+                />
+
+                {canAssign ? (
+                  <Controller
+                    control={control}
+                    name="parcelCollectionDriverId"
+                    render={({ field }) => (
+                      <ServerSearchSelect
+                        label="Collection driver"
+                        variant="field"
+                        anyLabel="Leave unassigned (Awaiting Collection Assignment)"
+                        searchPlaceholder="Search active drivers…"
+                        value={field.value}
+                        onChange={field.onChange}
+                        searchTerm={driverTerm}
+                        onSearchTermChange={setDriverTerm}
+                        loading={drivers.isFetching}
+                        total={drivers.data?.meta.total}
+                        options={(drivers.data?.items ?? []).map((d) => ({
+                          id: d.id,
+                          label: `${d.driverNumber} · ${d.user.firstName} ${d.user.lastName}${d.user.phone ? ` · ${d.user.phone}` : ''}`,
+                        }))}
+                        selectedLabel={
+                          selectedCollectionDriver.data
+                            ? `${selectedCollectionDriver.data.driverNumber} · ${selectedCollectionDriver.data.user.firstName} ${selectedCollectionDriver.data.user.lastName}`
+                            : undefined
+                        }
+                        error={errors.parcelCollectionDriverId?.message}
+                      />
+                    )}
+                  />
+                ) : (
+                  <p className="rounded-control border border-line-subtle bg-sunken px-3 py-2 text-xs text-ink-muted">
+                    The order will enter <span className="font-medium">Awaiting Collection Assignment</span>.
+                    Assigning a collection driver needs the “assign drivers” permission.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <p className="rounded-control border border-line-subtle bg-sunken px-3 py-2 text-sm text-ink-muted">
+                The parcel is treated as received at the company when this order
+                is created. A delivery driver can be assigned right away.
+              </p>
+            )}
+          </FormSection>
+
+          {/* -------------------- Delivery assignment -------------------- */}
+          {canAssign && (
+            <FormSection
+              title="Delivery assignment"
+              description="Optional. The delivery driver takes the parcel from the company to the receiver."
+            >
+              {driverCollection ? (
+                <p className="rounded-control border border-line-subtle bg-sunken px-3 py-2 text-sm text-ink-muted">
+                  Delivery driver can be assigned after the parcel is received at
+                  the company.
+                </p>
+              ) : (
+                <Controller
+                  control={control}
+                  name="driverId"
+                  render={({ field }) => (
+                    <ServerSearchSelect
+                      label="Delivery driver"
+                      variant="field"
+                      anyLabel="Leave unassigned"
+                      searchPlaceholder="Search active drivers…"
+                      value={field.value}
+                      onChange={field.onChange}
+                      searchTerm={driverTerm}
+                      onSearchTermChange={setDriverTerm}
+                      loading={drivers.isFetching}
+                      total={drivers.data?.meta.total}
+                      options={(drivers.data?.items ?? []).map((d) => ({
+                        id: d.id,
+                        label: `${d.driverNumber} · ${d.user.firstName} ${d.user.lastName}${d.user.phone ? ` · ${d.user.phone}` : ''}`,
+                      }))}
+                      selectedLabel={
+                        selectedDeliveryDriver.data
+                          ? `${selectedDeliveryDriver.data.driverNumber} · ${selectedDeliveryDriver.data.user.firstName} ${selectedDeliveryDriver.data.user.lastName}`
+                          : undefined
+                      }
+                      error={errors.driverId?.message}
+                    />
+                  )}
                 />
               )}
-            />
-          </FormSection>
-        )}
+            </FormSection>
+          )}
+        </fieldset>
 
         <FormSection title="Review">
           <CreateOrderReview values={values} labels={reviewLabels} preview={preview} />
         </FormSection>
 
-        {/* Actions / partial-success */}
-        {created && assignError ? (
-          <div
-            role="alert"
-            className="space-y-3 rounded-card border border-warning-200 bg-warning-50 p-4 text-sm"
-          >
-            <p className="font-medium text-ink">
-              Order {created.orderNumber} was created, but the driver assignment
-              failed.
-            </p>
-            <p className="text-ink-secondary">{assignError}</p>
-            <p className="text-ink-muted">
-              Tracking code: {created.trackingCode}. The order exists — do not
-              create it again. Pick a driver above and retry, or open the order.
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                onClick={runCreateAndAssign}
-                loading={pending === 'createAndAssign'}
-                disabled={busy || !values.driverId}
-              >
-                Retry assignment
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => goToOrder(created, false)}
-              >
-                Open order
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => navigate(paths.management.orders)}
-              >
-                Back to orders
-              </Button>
-            </div>
-          </div>
-        ) : created ? (
+        {/* Actions */}
+        {created ? (
           <div className="rounded-card border border-line bg-card p-4 text-sm text-ink-muted">
-            Order {created.orderNumber} created. Finishing up…
+            Order {created.orderNumber} created. Opening it…
           </div>
         ) : (
           <div className="flex flex-wrap items-center justify-end gap-2">
             <Button type="button" variant="secondary" onClick={attemptLeave} disabled={busy}>
               Cancel
             </Button>
-            <Button
-              type="button"
-              variant={canAssign ? 'secondary' : 'primary'}
-              onClick={runCreate}
-              loading={pending === 'create'}
-              disabled={busy}
-            >
-              Create order
+            <Button type="button" onClick={submit} loading={submitting} disabled={busy}>
+              {primaryLabel}
             </Button>
-            {canAssign && (
-              <Button
-                type="button"
-                onClick={runCreateAndAssign}
-                loading={pending === 'createAndAssign'}
-                disabled={busy || !values.driverId}
-                title={
-                  !values.driverId
-                    ? 'Select a driver to enable Create & Assign'
-                    : undefined
-                }
-              >
-                Create &amp; assign
-              </Button>
-            )}
           </div>
         )}
       </form>
@@ -811,7 +916,7 @@ export default function CreateOrderPage() {
 
 interface RadioCardsProps {
   legend: string;
-  name: 'orderType' | 'paymentType';
+  name: 'orderType' | 'paymentType' | 'parcelIntakeMethod';
   options: readonly { value: string; title: string; hint: string }[];
   register: ReturnType<typeof useForm<CreateOrderFormValues>>['register'];
   error?: string;

@@ -21,6 +21,7 @@ import {
   createOrderController,
   getOrderController,
   getOrderHistoryController,
+  getOrderTimelineController,
   listOrdersController,
   reassignOrderController,
   readyOrderController,
@@ -117,6 +118,16 @@ orderRouter.get(
   authorize("orders.read"),
   validate({ params: OrderIdParamSchema }),
   getOrderHistoryController
+);
+
+// Unified operational timeline (Phase 11.17.6, task §41) — orders.read,
+// same as every other Order Detail read.
+orderRouter.get(
+  "/:id/timeline",
+  authenticate,
+  authorize("orders.read"),
+  validate({ params: OrderIdParamSchema }),
+  getOrderTimelineController
 );
 
 // Phase 8.7 — a cross-ledger Finance adjustment/review action (can create

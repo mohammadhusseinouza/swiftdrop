@@ -153,6 +153,12 @@ export interface OrderDetail {
   status: string;
   financialStatus: string;
 
+  // Parcel Intake (Phase 11.17.4) — a coherent-at-a-glance summary. The full
+  // Parcel Collection domain (snapshot, assignment/attempt history, receipt
+  // actor) is served by GET /orders/:id/parcel-collection, not inlined here.
+  parcelIntakeMethod: string;
+  parcelCollectionStatus: string;
+
   customer: OrderCustomerSummary;
   receiver: OrderReceiverSnapshot;
   package: OrderPackageInfo;
@@ -305,6 +311,17 @@ export interface OrderSummary {
   // the prepaid/collection payment-method objects.
   paymentType: string;
 
+  // Parcel Intake (Phase 11.17.5 list-DTO extension) — the two enum columns
+  // already stored on `orders`, exposed so the Management Orders list can show
+  // the parcel-intake state at a glance (page-structure §19/§20) without a
+  // per-row GET /orders/:id/parcel-collection. Pure scalar passthrough — no
+  // business logic, no extra join. The full Parcel Collection domain
+  // (snapshot, current collection driver, assignment/attempt history) stays on
+  // GET /orders/:id/parcel-collection. Collection-driver columns and
+  // parcel-intake list FILTERS remain a deferred contract (Phase 11.17.6).
+  parcelIntakeMethod: string;
+  parcelCollectionStatus: string;
+
   customer: OrderSummaryCustomer;
 
   receiverName: string;
@@ -321,6 +338,12 @@ export interface OrderSummary {
   needsFinancialReview: boolean;
 
   currentDriver: OrderSummaryDriver | null;
+
+  // Current COLLECTION driver (Phase 11.17.6) — DISTINCT from currentDriver
+  // above, which remains the FINAL DELIVERY driver only. Scalar/relation
+  // passthrough of orders.current_parcel_collection_driver_id — no
+  // assignment/attempt history (that stays on GET /orders/:id/parcel-collection).
+  currentCollectionDriver: OrderSummaryDriver | null;
 
   createdAt: string;
   assignedAt: string | null;

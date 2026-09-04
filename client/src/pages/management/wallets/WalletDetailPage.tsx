@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 
@@ -8,8 +8,18 @@ import { PERMISSIONS } from '../../../features/auth/permissions';
 import {
   useGetWalletQuery,
   useGetWalletTransactionsQuery,
+  useAdjustWalletMutation,
+  useReverseWalletTransactionMutation,
   type ListWalletTransactionsParams,
 } from '../../../services/walletsApi';
+import type { WalletTransactionEntry } from '../../../services/domain.types';
+import { LedgerAdjustDialog } from '../../../components/finance/LedgerAdjustDialog';
+import { LedgerReverseDialog } from '../../../components/finance/LedgerReverseDialog';
+import {
+  LEDGER_LABEL,
+  isReversibleType,
+  ledgerTypeLabel,
+} from '../../../components/finance/ledgerCorrection';
 import {
   getApiErrorCode,
   getApiErrorMessage,
@@ -51,9 +61,17 @@ export default function WalletDetailPage() {
   const canViewOrders = useHasPermission(PERMISSIONS.ORDERS_READ);
   const canViewCustomer = useHasPermission(PERMISSIONS.CUSTOMERS_READ);
   const canProcessPayout = useHasPermission(PERMISSIONS.PAYOUTS_CREATE);
+  const canAdjustWallet = useHasPermission(PERMISSIONS.WALLETS_ADJUST);
 
   const query = useGetWalletQuery(customerId ?? '', { skip: !customerId });
   const wallet = query.data;
+
+  const [adjustOpen, setAdjustOpen] = useState(false);
+  const [reverseTarget, setReverseTarget] =
+    useState<WalletTransactionEntry | null>(null);
+  const [adjustWallet, adjustWalletState] = useAdjustWalletMutation();
+  const [reverseWallet, reverseWalletState] =
+    useReverseWalletTransactionMutation();
 
   /* ---- transaction ledger URL state ---- */
   const rawType = sp.get('type');
@@ -88,9 +106,29 @@ export default function WalletDetailPage() {
   const txRows = txns.data?.items ?? [];
   const txMeta = txns.data?.meta;
 
+  const refetchWallet = useCallback(() => {
+    void query.refetch();
+    void txns.refetch();
+  }, [query, txns]);
+
   const columns = useMemo(
-    () => buildWalletTransactionColumns({ canViewOrders }),
-    [canViewOrders],
+    () =>
+      buildWalletTransactionColumns({
+        canViewOrders,
+        renderActions: canAdjustWallet
+          ? (t) =>
+              isReversibleType(t.type) ? (
+                <button
+                  type="button"
+                  onClick={() => setReverseTarget(t)}
+                  className="rounded-control px-2 py-1 text-xs font-medium text-danger-700 hover:bg-danger-50"
+                >
+                  Reverse
+                </button>
+              ) : null
+          : undefined,
+      }),
+    [canViewOrders, canAdjustWallet],
   );
 
   /* ------------------------------ error states --------------------------- */
@@ -167,6 +205,11 @@ export default function WalletDetailPage() {
         >
           View customer
         </Link>
+      )}
+      {canAdjustWallet && (
+        <Button variant="secondary" onClick={() => setAdjustOpen(true)}>
+          Adjust wallet
+        </Button>
       )}
       {payoutEntry}
     </div>
@@ -310,6 +353,56 @@ export default function WalletDetailPage() {
           transaction — existing rows are never edited or removed.
         </p>
       </section>
+
+      {canAdjustWallet && (
+        <LedgerAdjustDialog
+          open={adjustOpen}
+          ledger="WALLET"
+          entityLabel={`${customer.name} · ${customer.customerNumber}`}
+          currentBalance={wallet.wallet.availableBalance}
+          submitting={adjustWalletState.isLoading}
+          onRefetch={refetchWallet}
+          onClose={() => setAdjustOpen(false)}
+          onSubmit={(body) =>
+            adjustWallet({ customerId: customer.id, body }).unwrap()
+          }
+        />
+      )}
+
+      {reverseTarget && (
+        <LedgerReverseDialog
+          open
+          submitting={reverseWalletState.isLoading}
+          onRefetch={refetchWallet}
+          onClose={() => setReverseTarget(null)}
+          onSubmit={(reason) =>
+            reverseWallet({
+              transactionId: reverseTarget.id,
+              reason,
+              customerId: customer.id,
+              orderId: reverseTarget.order?.id,
+              payoutLinked: !!reverseTarget.payout,
+            }).unwrap()
+          }
+          original={{
+            ledgerLabel: LEDGER_LABEL.WALLET,
+            typeLabel: ledgerTypeLabel(reverseTarget.type),
+            amount:
+              reverseTarget.credit !== '0'
+                ? reverseTarget.credit
+                : reverseTarget.debit,
+            direction: reverseTarget.credit !== '0' ? 'CREDIT' : 'DEBIT',
+            date: reverseTarget.createdAt,
+            reference:
+              reverseTarget.order?.orderNumber ??
+              reverseTarget.payout?.payoutNumber ??
+              null,
+            effectNote: reverseTarget.payout
+              ? 'The payout’s status becomes REVERSED and this customer’s available wallet balance is restored. Driver cash and company revenue are unaffected.'
+              : 'This customer’s available wallet balance is restored by the opposite amount. Pending, driver cash and company revenue are unaffected.',
+          }}
+        />
+      )}
     </div>
   );
 }

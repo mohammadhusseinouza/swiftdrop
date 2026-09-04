@@ -16,6 +16,10 @@ import type {
   OrderDetail,
   OrderHistoryResponse,
   OrderSummary,
+  OrderTimelineEvent,
+  ParcelCollectionStatus,
+  ParcelIntakeMethod,
+  WorkflowQueue,
 } from './domain.types';
 
 /**
@@ -60,6 +64,13 @@ export interface ListOrdersParams extends PaginationParams {
   areaId?: string;
   needsFinancialReview?: boolean;
   assignmentStatus?: 'ASSIGNED' | 'UNASSIGNED';
+  /** Parcel Intake / Collection filters (Phase 11.17.6) — independent of OrderType. */
+  parcelIntakeMethod?: ParcelIntakeMethod;
+  parcelCollectionStatus?: ParcelCollectionStatus;
+  /** CURRENT collection work only — never "ever had a collection assignment". */
+  parcelCollectionDriverId?: string;
+  /** Operational queue (Phase 11.17.6) — see order-workflow-queue.ts for the exact predicate. */
+  workflowQueue?: WorkflowQueue;
   /** Bare YYYY-MM-DD -> whole UTC day; the backend applies the boundaries. */
   createdFrom?: string;
   createdTo?: string;
@@ -95,6 +106,31 @@ export interface CreateOrderRequest {
   prepaidDeliveryFee?: string;
   prepaidPaymentMethodId?: string | null;
   collectionPaymentMethodId?: string | null;
+
+  /* ---- Parcel Intake (Phase 11.17.4 backend / 11.17.5 frontend) ---- */
+  /**
+   * The frontend now ALWAYS sends this (the backend's omitted →
+   * ALREADY_AT_COMPANY compatibility is for older clients only).
+   */
+  parcelIntakeMethod: 'ALREADY_AT_COMPANY' | 'DRIVER_COLLECTION';
+  /**
+   * DRIVER_COLLECTION only — a DISTINCT field from any delivery driver.
+   * Assigning here also requires `orders.assign`. Omitted → the order enters
+   * "Awaiting Collection Assignment".
+   */
+  parcelCollectionDriverId?: string | null;
+  /**
+   * ALREADY_AT_COMPANY only ("Create & Assign Delivery"). The backend rejects
+   * it for DRIVER_COLLECTION — the parcel has not reached the company yet.
+   */
+  deliveryDriverId?: string | null;
+  /** DRIVER_COLLECTION collection snapshot overrides (else derived from the customer). */
+  parcelCollectionContactName?: string;
+  parcelCollectionPhone?: string;
+  parcelCollectionAltPhone?: string;
+  parcelCollectionAreaId?: string;
+  parcelCollectionAddress?: string;
+  parcelCollectionNotes?: string;
 }
 
 /**
@@ -187,11 +223,29 @@ export const ordersApi = api.injectEndpoints({
       providesTags: (_res, _err, id) => [{ type: 'Order', id }],
     }),
 
+    /** Unified operational timeline (Phase 11.17.6) — Collection + Delivery events, oldest-first. */
+    getOrderTimeline: builder.query<OrderTimelineEvent[], string>({
+      query: (id) => ({ url: `/orders/${id}/timeline` }),
+      transformResponse: (r: ApiSuccessResponse<OrderTimelineEvent[]>) =>
+        unwrapData(r),
+      // Shares the per-order tag AND the ParcelCollection tag — a Collection
+      // mutation (assign/reassign/reschedule/receive) must refetch this too.
+      providesTags: (_res, _err, id) => [
+        { type: 'Order', id },
+        { type: 'ParcelCollection', id },
+      ],
+    }),
+
     createOrder: builder.mutation<OrderDetail, CreateOrderRequest>({
       query: (body) => ({ url: '/orders', method: 'POST', body }),
       transformResponse: (r: ApiSuccessResponse<OrderDetail>) => unwrapData(r),
+      // The create is atomic: it can also assign a collection driver
+      // (DRIVER_COLLECTION) or a delivery driver (ALREADY_AT_COMPANY), so the
+      // Drivers list may be stale too.
       invalidatesTags: [
         { type: 'Order', id: 'LIST' },
+        { type: 'Driver', id: 'LIST' },
+        { type: 'DriverOrder', id: 'LIST' },
         { type: 'Dashboard', id: 'ROOT' },
         { type: 'Report', id: 'LIST' },
       ],
@@ -305,9 +359,14 @@ export const ordersApi = api.injectEndpoints({
         body,
       }),
       transformResponse: (r: ApiSuccessResponse<OrderDetail>) => unwrapData(r),
+      // Cancelling from parcel_collection_status = ASSIGNED closes the open
+      // collection assignment (end_reason ORDER_CANCELLED) in the same
+      // transaction — refresh the Parcel Collection view.
       invalidatesTags: (_res, _err, { id }) => [
         { type: 'Order', id },
         { type: 'Order', id: 'LIST' },
+        { type: 'ParcelCollection', id },
+        { type: 'Driver', id: 'LIST' },
         { type: 'Dashboard', id: 'ROOT' },
         { type: 'Report', id: 'LIST' },
       ],
@@ -452,6 +511,7 @@ export const {
   useGetOrdersQuery,
   useGetOrderQuery,
   useGetOrderHistoryQuery,
+  useGetOrderTimelineQuery,
   useCreateOrderMutation,
   useUpdateOrderMutation,
   useAssignOrderMutation,

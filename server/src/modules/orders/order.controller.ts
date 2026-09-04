@@ -14,6 +14,7 @@ import {
   resolveCollectionDifference,
   updateOrder,
 } from "./order.service";
+import { getOrderTimeline } from "./order-timeline.service";
 import type { OrderCreateFoundationInput } from "./order-create.schema";
 import type {
   AssignOrderInput,
@@ -26,6 +27,7 @@ import type {
   RescheduleOrderInput,
 } from "./order.schema";
 import type { BulkAssignResult, OrderDetail, OrderHistoryResponse, OrderSummary } from "./order.types";
+import type { OrderTimelineEvent } from "./order-timeline.types";
 import type { ApiListResponse, ApiSuccessResponse } from "../../shared/types/api-response";
 
 export const createOrderController: RequestHandler<
@@ -36,6 +38,19 @@ export const createOrderController: RequestHandler<
   try {
     if (!req.actor) {
       throw new AppError({ statusCode: 401, code: "UNAUTHORIZED", message: "Authentication required" });
+    }
+
+    // Phase 11.17.4 — assigning EITHER a parcel-collection driver OR a final
+    // delivery driver during creation additionally requires orders.assign, so
+    // that orders.create alone can never be used to bypass assignment RBAC.
+    const assignsADriver =
+      (req.body.parcelCollectionDriverId ?? null) !== null || (req.body.deliveryDriverId ?? null) !== null;
+    if (assignsADriver && !req.actor.permissions.includes("orders.assign")) {
+      throw new AppError({
+        statusCode: 403,
+        code: "FORBIDDEN",
+        message: "Assigning a driver during order creation requires the orders.assign permission",
+      });
     }
 
     const order = await createOrder(req.body, req.actor.userId);
@@ -195,6 +210,19 @@ export const getOrderHistoryController: RequestHandler<
   try {
     const history = await getOrderHistory(req.params.id);
     res.json({ success: true, data: history });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// GET /api/v1/orders/:id/timeline (Phase 11.17.6, task §41).
+export const getOrderTimelineController: RequestHandler<
+  { id: string },
+  ApiSuccessResponse<OrderTimelineEvent[]>
+> = async (req, res, next) => {
+  try {
+    const timeline = await getOrderTimeline(req.params.id);
+    res.json({ success: true, data: timeline });
   } catch (error) {
     next(error);
   }

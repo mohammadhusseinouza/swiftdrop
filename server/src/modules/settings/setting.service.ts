@@ -2,8 +2,11 @@ import { Prisma } from "../../generated/prisma/client";
 import type { system_settings, users } from "../../generated/prisma/client";
 import { prisma } from "../../db/prisma";
 import { AppError } from "../../shared/errors/app-error";
+import { createAuditLog } from "../../shared/audit/audit.service";
 import type { UpdateSettingInput } from "./setting.schema";
 import type { SettingSummary } from "./setting.types";
+
+const REDACTED = "[redacted]";
 
 type SettingWithUpdatedBy = system_settings & { users: users | null };
 
@@ -80,20 +83,57 @@ export async function updateSettingByKey(
   actorUserId: string
 ): Promise<SettingSummary> {
   try {
-    const setting = await prisma.system_settings.update({
-      where: { key },
-      data: {
-        ...(input.value !== undefined
-          ? { value: (input.value === null ? Prisma.JsonNull : input.value) as Prisma.InputJsonValue }
-          : {}),
-        ...(input.description !== undefined ? { description: input.description } : {}),
-        updated_by_id: actorUserId,
-        updated_at: new Date(),
-      },
-      include: { users: true },
+    const setting = await prisma.$transaction(async (tx) => {
+      const existing = await tx.system_settings.findUnique({ where: { key } });
+      if (!existing) {
+        throw new AppError({ statusCode: 404, code: "NOT_FOUND", message: "Setting not found" });
+      }
+
+      const updated = await tx.system_settings.update({
+        where: { key },
+        data: {
+          ...(input.value !== undefined
+            ? { value: (input.value === null ? Prisma.JsonNull : input.value) as Prisma.InputJsonValue }
+            : {}),
+          ...(input.description !== undefined ? { description: input.description } : {}),
+          updated_by_id: actorUserId,
+          updated_at: new Date(),
+        },
+        include: { users: true },
+      });
+
+      // Traceable configuration change (Phase 11.16). A sensitive-looking key
+      // NEVER has its real previous/new value recorded in audit — only a
+      // "[redacted]" marker (§39). Non-sensitive values are recorded verbatim
+      // so the change is reviewable.
+      const sensitive = isSensitiveSettingKey(key);
+      const previousValues: Record<string, unknown> = {};
+      const newValues: Record<string, unknown> = {};
+      if (input.value !== undefined) {
+        previousValues.value = sensitive ? REDACTED : (existing.value as unknown);
+        newValues.value = sensitive ? REDACTED : (input.value as unknown);
+      }
+      if (input.description !== undefined && input.description !== existing.description) {
+        previousValues.description = existing.description;
+        newValues.description = input.description;
+      }
+
+      if (Object.keys(newValues).length > 0) {
+        await createAuditLog(tx, {
+          actorUserId,
+          action: "SYSTEM_SETTING_UPDATED",
+          entityType: "SYSTEM_SETTING",
+          entityId: key,
+          previousValues: previousValues as Prisma.InputJsonValue,
+          newValues: newValues as Prisma.InputJsonValue,
+          metadata: { key, isSensitive: sensitive },
+        });
+      }
+
+      return updated;
     });
 
-    return toSettingSummary(setting);
+    return toSettingSummary(setting as SettingWithUpdatedBy);
   } catch (error) {
     handleKnownSettingError(error, "Failed to update setting");
   }

@@ -22,6 +22,11 @@ import type {
  * LEDGER SEPARATION in invalidation:
  *   - driver-cash adjust/reverse  -> DriverCash + Finance views (NOT Wallet)
  *   - company adjust/reverse      -> Finance views only (NOT Wallet, NOT DriverCash)
+ *
+ * Phase 11.12: the reverse-mutation args carry OPTIONAL `driverId` / `orderId`
+ * / `settlementLinked` — used ONLY for precise cache invalidation (the server
+ * body is still just `{ reason }`). The UI row already holds these; nothing is
+ * invented. See CLAUDE.md §22.
  */
 
 export interface FinanceSummaryParams {
@@ -88,12 +93,25 @@ export const financeApi = api.injectEndpoints({
       }),
       transformResponse: (r: ApiSuccessResponse<LedgerCorrectionResult>) =>
         unwrapData(r),
-      invalidatesTags: [{ type: 'DriverCash', id: 'ME' }, ...FINANCE_VIEWS],
+      invalidatesTags: (_res, _err, { driverId }) => [
+        { type: 'DriverCash', id: driverId },
+        { type: 'DriverCash', id: 'SUMMARIES' },
+        { type: 'DriverCash', id: 'ME' },
+        { type: 'Driver', id: driverId },
+        ...FINANCE_VIEWS,
+      ],
     }),
 
     reverseDriverCashTransaction: builder.mutation<
       LedgerCorrectionResult,
-      { transactionId: string; reason: string }
+      {
+        transactionId: string;
+        reason: string;
+        /** cache-invalidation hints only — not sent to the server */
+        driverId?: string;
+        orderId?: string;
+        settlementLinked?: boolean;
+      }
     >({
       query: ({ transactionId, reason }) => ({
         url: `/finance/driver-cash-transactions/${transactionId}/reverse`,
@@ -102,7 +120,21 @@ export const financeApi = api.injectEndpoints({
       }),
       transformResponse: (r: ApiSuccessResponse<LedgerCorrectionResult>) =>
         unwrapData(r),
-      invalidatesTags: [{ type: 'DriverCash', id: 'ME' }, ...FINANCE_VIEWS],
+      invalidatesTags: (_res, _err, { driverId, orderId, settlementLinked }) => [
+        { type: 'DriverCash', id: 'ME' },
+        { type: 'DriverCash', id: 'SUMMARIES' },
+        ...(driverId
+          ? [
+              { type: 'DriverCash' as const, id: driverId },
+              { type: 'Driver' as const, id: driverId },
+            ]
+          : []),
+        ...(orderId ? [{ type: 'Order' as const, id: orderId }] : []),
+        ...(settlementLinked
+          ? [{ type: 'Settlement' as const, id: 'LIST' }]
+          : []),
+        ...FINANCE_VIEWS,
+      ],
     }),
 
     adjustCompanyFinance: builder.mutation<
@@ -117,7 +149,12 @@ export const financeApi = api.injectEndpoints({
 
     reverseCompanyTransaction: builder.mutation<
       LedgerCorrectionResult,
-      { transactionId: string; reason: string }
+      {
+        transactionId: string;
+        reason: string;
+        /** cache-invalidation hint only — not sent to the server */
+        orderId?: string;
+      }
     >({
       query: ({ transactionId, reason }) => ({
         url: `/finance/company-transactions/${transactionId}/reverse`,
@@ -126,7 +163,10 @@ export const financeApi = api.injectEndpoints({
       }),
       transformResponse: (r: ApiSuccessResponse<LedgerCorrectionResult>) =>
         unwrapData(r),
-      invalidatesTags: [...FINANCE_VIEWS],
+      invalidatesTags: (_res, _err, { orderId }) => [
+        ...(orderId ? [{ type: 'Order' as const, id: orderId }] : []),
+        ...FINANCE_VIEWS,
+      ],
     }),
   }),
 });

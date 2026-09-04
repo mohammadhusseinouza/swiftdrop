@@ -2,6 +2,8 @@ import { Prisma } from "../../generated/prisma/client";
 import type { areas } from "../../generated/prisma/client";
 import { prisma } from "../../db/prisma";
 import { AppError } from "../../shared/errors/app-error";
+import { createAuditLog } from "../../shared/audit/audit.service";
+import { classifyReferenceUpdate, diffReferenceFields } from "./reference-audit";
 import type { CreateAreaInput, ListAreasQuery, UpdateAreaInput } from "./area.schema";
 import type { AreaSummary } from "./area.types";
 
@@ -62,13 +64,25 @@ export async function listAreas(query: ListAreasQuery): Promise<ListAreasResult>
   return { items: rows.map(toAreaSummary), total };
 }
 
-export async function createArea(input: CreateAreaInput): Promise<AreaSummary> {
+export async function createArea(input: CreateAreaInput, actorUserId: string): Promise<AreaSummary> {
   try {
-    const area = await prisma.areas.create({
-      data: {
-        name: input.name,
-        ...(input.sortOrder !== undefined ? { sort_order: input.sortOrder } : {}),
-      },
+    const area = await prisma.$transaction(async (tx) => {
+      const created = await tx.areas.create({
+        data: {
+          name: input.name,
+          ...(input.sortOrder !== undefined ? { sort_order: input.sortOrder } : {}),
+        },
+      });
+
+      await createAuditLog(tx, {
+        actorUserId,
+        action: "AREA_CREATED",
+        entityType: "AREA",
+        entityId: created.id,
+        newValues: { name: created.name, sortOrder: created.sort_order, isActive: created.is_active },
+      });
+
+      return created;
     });
 
     return toAreaSummary(area);
@@ -87,16 +101,47 @@ export async function getAreaById(id: string): Promise<AreaSummary> {
   return toAreaSummary(area);
 }
 
-export async function updateArea(id: string, input: UpdateAreaInput): Promise<AreaSummary> {
+export async function updateArea(id: string, input: UpdateAreaInput, actorUserId: string): Promise<AreaSummary> {
   try {
-    const area = await prisma.areas.update({
-      where: { id },
-      data: {
-        ...(input.name !== undefined ? { name: input.name } : {}),
-        ...(input.sortOrder !== undefined ? { sort_order: input.sortOrder } : {}),
-        ...(input.isActive !== undefined ? { is_active: input.isActive } : {}),
-        updated_at: new Date(),
-      },
+    const area = await prisma.$transaction(async (tx) => {
+      const existing = await tx.areas.findUnique({ where: { id } });
+      if (!existing) {
+        throw new AppError({ statusCode: 404, code: "NOT_FOUND", message: "Area not found" });
+      }
+
+      const updated = await tx.areas.update({
+        where: { id },
+        data: {
+          ...(input.name !== undefined ? { name: input.name } : {}),
+          ...(input.sortOrder !== undefined ? { sort_order: input.sortOrder } : {}),
+          ...(input.isActive !== undefined ? { is_active: input.isActive } : {}),
+          updated_at: new Date(),
+        },
+      });
+
+      const { previousValues, newValues, otherFieldsTouched } = diffReferenceFields(
+        { name: existing.name, sortOrder: existing.sort_order, isActive: existing.is_active },
+        { name: input.name, sortOrder: input.sortOrder, isActive: input.isActive },
+      );
+
+      if (Object.keys(newValues).length > 0) {
+        const action = `AREA_${classifyReferenceUpdate({
+          wasActive: existing.is_active,
+          nextActive: input.isActive,
+          otherFieldsTouched,
+        })}`;
+
+        await createAuditLog(tx, {
+          actorUserId,
+          action,
+          entityType: "AREA",
+          entityId: id,
+          previousValues: previousValues as Prisma.InputJsonValue,
+          newValues: newValues as Prisma.InputJsonValue,
+        });
+      }
+
+      return updated;
     });
 
     return toAreaSummary(area);

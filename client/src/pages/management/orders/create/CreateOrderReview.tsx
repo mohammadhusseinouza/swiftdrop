@@ -1,6 +1,7 @@
 import { CalculatedField } from '../../../../components/forms/CalculatedField';
 import { formatMoney } from '../../../../lib/format';
 import { getOrderTypeLabel, getPaymentTypePresentation } from '../../../../components/orders/orderStatus';
+import { getParcelIntakeMethodLabel } from '../../../../components/orders/parcelCollection';
 import type { CreateOrderFormValues } from './createOrder.schema';
 import type { OrderFinancialPreview } from './createOrderFinancialPreview';
 
@@ -10,6 +11,8 @@ export interface CreateOrderReviewLabels {
   prepaidMethod: string | null;
   collectionMethod: string | null;
   driver: string | null;
+  collectionArea: string | null;
+  collectionDriver: string | null;
 }
 
 interface CreateOrderReviewProps {
@@ -47,6 +50,7 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
  */
 export function CreateOrderReview({ values, labels, preview }: CreateOrderReviewProps) {
   const money = (v: string) => (v.trim() ? formatMoney(v) : DASH);
+  const driverCollection = values.parcelIntakeMethod === 'DRIVER_COLLECTION';
 
   return (
     <div className="space-y-5">
@@ -108,11 +112,44 @@ export function CreateOrderReview({ values, labels, preview }: CreateOrderReview
         </p>
       </div>
 
-      <Group title="Assignment">
+      <Group title="Parcel intake">
         <Row
-          label="Driver"
+          label="Intake method"
+          value={getParcelIntakeMethodLabel(values.parcelIntakeMethod)}
+        />
+        {driverCollection && (
+          <>
+            <Row label="Collection contact" value={values.parcelCollectionContactName} />
+            <Row label="Collection phone" value={values.parcelCollectionPhone} />
+            <Row
+              label="Collection area"
+              value={
+                labels.collectionArea ??
+                (values.parcelCollectionAreaId ? 'Selected' : '')
+              }
+            />
+            <Row label="Collection address" value={values.parcelCollectionAddress} />
+            <Row
+              label="Collection driver"
+              value={
+                values.parcelCollectionDriverId
+                  ? (labels.collectionDriver ?? 'Selected')
+                  : 'Unassigned (awaiting collection assignment)'
+              }
+            />
+          </>
+        )}
+      </Group>
+
+      <Group title="Delivery assignment">
+        <Row
+          label="Delivery driver"
           value={
-            values.driverId ? (labels.driver ?? 'Selected') : 'Unassigned (create only)'
+            driverCollection
+              ? 'Assigned after the parcel is received at the company'
+              : values.driverId
+                ? (labels.driver ?? 'Selected')
+                : 'Unassigned (create only)'
           }
         />
       </Group>

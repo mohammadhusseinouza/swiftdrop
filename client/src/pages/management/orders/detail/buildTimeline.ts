@@ -1,50 +1,33 @@
 import type { TimelineItem } from '../../../../components/orders/OrderTimeline';
 import type { BadgeTone } from '../../../../components/ui/Badge';
 import { getOrderStatusPresentation } from '../../../../components/orders/orderStatus';
+import {
+  getParcelAttemptOutcomePresentation,
+  getParcelEndReasonLabel,
+} from '../../../../components/orders/parcelCollection';
 import { formatDateTime, formatMoney } from '../../../../lib/format';
 import type {
-  OrderDetail,
-  OrderFinancialEvent,
+  OrderTimelineDriverRef,
+  OrderTimelineEvent,
 } from '../../../../services/domain.types';
 
 /**
- * Build the Management Order Timeline for one Order from the authoritative
- * OrderDetail response — operational events (statusHistory + assignmentHistory
- * + deliveryAttempts) AND financial events (financialEvents), as required by
- * page-structure §6.7.
+ * Build the Management Order Timeline from the server-authoritative
+ * GET /orders/:id/timeline response (Phase 11.17.6) — Collection + Delivery
+ * events, already deduplicated and deterministically ordered server-side.
  *
- * DISPLAY ONLY:
- *   - never mutates the source arrays (spreads before sorting)
- *   - performs no workflow / financial logic — it only re-labels persisted
- *     events (one timeline entry per persisted occurrence, never synthesised)
- *   - newest-first, matching the page-structure §6.7 example
- *   - identical timestamps fall back to a deterministic source ordering
- *     (status change, assignment, delivery attempt, financial event)
- *
- * This is NOT a full system audit log — it covers the order's operational and
- * financial history only.
+ * DISPLAY ONLY: performs no workflow/financial logic, just labels one
+ * persisted event per entry. The server returns oldest-first (chronological,
+ * matching every other raw list in this codebase); this module reverses to
+ * newest-first for display — the same presentation choice the pre-11.17.6
+ * client-built timeline used, unchanged.
  */
-
-interface RawEvent {
-  id: string;
-  at: number;
-  /** Deterministic tiebreak for identical timestamps. */
-  seq: number;
-  item: TimelineItem;
-}
 
 const fullName = (p: { firstName: string; lastName: string }) =>
   `${p.firstName} ${p.lastName}`.trim();
 
-const driverLabel = (d: {
-  driverNumber: string;
-  user: { firstName: string; lastName: string };
-}) => `${d.driverNumber} · ${fullName(d.user)}`;
-
-function toMillis(iso: string): number {
-  const t = new Date(iso).getTime();
-  return Number.isNaN(t) ? 0 : t;
-}
+const driverLabel = (d: OrderTimelineDriverRef) =>
+  `${d.driverNumber} · ${d.firstName} ${d.lastName}`;
 
 const ATTEMPT_PRESENTATION: Record<
   string,
@@ -56,8 +39,8 @@ const ATTEMPT_PRESENTATION: Record<
 };
 
 /** Label for a financial event, keyed by `ledger:type` then `type`. */
-function financialEventLabel(ev: OrderFinancialEvent): string {
-  const key = `${ev.ledger}:${ev.type}`;
+function financialEventLabel(ev: OrderTimelineEvent): string {
+  const key = `${ev.ledger}:${ev.financialType}`;
   switch (key) {
     case 'DRIVER_CASH:COLLECTION':
       return 'Amount collected';
@@ -80,119 +63,161 @@ function financialEventLabel(ev: OrderFinancialEvent): string {
     case 'COMPANY_FINANCE:ADJUSTMENT':
       return 'Company adjustment';
     default:
-      return `${ev.ledger.replace(/_/g, ' ').toLowerCase()} ${ev.type
+      return `${(ev.ledger ?? '').replace(/_/g, ' ').toLowerCase()} ${(ev.financialType ?? '')
         .replace(/_/g, ' ')
-        .toLowerCase()}`;
+        .toLowerCase()}`.trim();
   }
 }
 
-function financialEventTone(ev: OrderFinancialEvent): BadgeTone {
-  if (ev.type === 'REVERSAL') return 'warning';
-  if (ev.type === 'ADJUSTMENT') return 'info';
-  if (ev.type === 'COLLECTION') return 'brand';
+function financialEventTone(ev: OrderTimelineEvent): BadgeTone {
+  if (ev.financialType === 'REVERSAL') return 'warning';
+  if (ev.financialType === 'ADJUSTMENT') return 'info';
+  if (ev.financialType === 'COLLECTION') return 'brand';
   return 'success';
 }
 
-export function buildOrderTimeline(order: OrderDetail): TimelineItem[] {
-  const events: RawEvent[] = [];
+function toTimelineItem(ev: OrderTimelineEvent): TimelineItem {
+  const timestamp = formatDateTime(ev.occurredAt);
 
-  order.statusHistory.forEach((entry, i) => {
-    const { label, tone } = getOrderStatusPresentation(entry.toStatus);
-    const parts = [entry.reason, entry.notes].filter(Boolean);
-    events.push({
-      id: `status:${entry.id}`,
-      at: toMillis(entry.createdAt),
-      seq: 100000 + i,
-      item: {
-        id: `status:${entry.id}`,
-        title: entry.fromStatus ? `Status → ${label}` : label,
+  switch (ev.type) {
+    case 'STATUS_CHANGED': {
+      const { label, tone } = getOrderStatusPresentation(ev.toStatus ?? '');
+      const parts = [ev.reason, ev.notes].filter(Boolean);
+      return {
+        id: ev.id,
+        title: ev.fromStatus ? `Status → ${label}` : label,
         description: parts.length ? parts.join(' — ') : undefined,
-        timestamp: formatDateTime(entry.createdAt),
-        actor: `by ${fullName(entry.changedBy)}`,
+        timestamp,
+        actor: ev.actor ? `by ${fullName(ev.actor)}` : undefined,
         tone,
-      },
-    });
-  });
+      };
+    }
 
-  order.assignmentHistory.forEach((entry, i) => {
-    events.push({
-      id: `assign:${entry.id}`,
-      at: toMillis(entry.assignedAt),
-      seq: 200000 + i,
-      item: {
-        id: `assign:${entry.id}`,
-        title: `Assigned to ${driverLabel(entry.driver)}`,
-        timestamp: formatDateTime(entry.assignedAt),
-        actor: `by ${fullName(entry.assignedBy)}`,
+    case 'DELIVERY_DRIVER_ASSIGNED':
+      return {
+        id: ev.id,
+        title: `Assigned to ${ev.driver ? driverLabel(ev.driver) : 'driver'}`,
+        timestamp,
+        actor: ev.actor ? `by ${fullName(ev.actor)}` : undefined,
         tone: 'info',
-      },
-    });
-    if (entry.endedAt && entry.endReason) {
-      events.push({
-        id: `assign-end:${entry.id}`,
-        at: toMillis(entry.endedAt),
-        seq: 250000 + i,
-        item: {
-          id: `assign-end:${entry.id}`,
-          title: `Assignment to ${driverLabel(entry.driver)} ended`,
-          description: entry.endReason,
-          timestamp: formatDateTime(entry.endedAt),
-          tone: 'warning',
-        },
-      });
-    }
-  });
+      };
 
-  order.deliveryAttempts.forEach((entry, i) => {
-    const when = entry.completedAt ?? entry.startedAt;
-    const outcome = ATTEMPT_PRESENTATION[entry.outcome];
-    const descParts: string[] = [];
-    if (entry.failedReason) descParts.push(entry.failedReason.name);
-    if (entry.outcome === 'DELIVERED' && entry.actualCollection != null) {
-      descParts.push(`Collected ${formatMoney(entry.actualCollection)}`);
-    }
-    if (entry.notes) descParts.push(entry.notes);
-    events.push({
-      id: `attempt:${entry.id}`,
-      at: toMillis(when),
-      seq: 300000 + i,
-      item: {
-        id: `attempt:${entry.id}`,
-        title: `Delivery attempt #${entry.attemptNumber} — ${
-          outcome?.label ?? entry.outcome
-        }`,
+    case 'DELIVERY_ASSIGNMENT_ENDED':
+      return {
+        id: ev.id,
+        title: `Assignment to ${ev.driver ? driverLabel(ev.driver) : 'driver'} ended`,
+        description: ev.endReason ?? undefined,
+        timestamp,
+        tone: 'warning',
+      };
+
+    case 'DELIVERY_ATTEMPT': {
+      const outcome = ATTEMPT_PRESENTATION[ev.outcome ?? ''];
+      const descParts: string[] = [];
+      if (ev.reason) descParts.push(ev.reason);
+      if (ev.outcome === 'DELIVERED' && ev.amount != null) {
+        descParts.push(`Collected ${formatMoney(ev.amount)}`);
+      }
+      if (ev.notes) descParts.push(ev.notes);
+      return {
+        id: ev.id,
+        title: `Delivery attempt #${ev.attemptNumber ?? ''} — ${outcome?.label ?? ev.outcome ?? 'Unknown'}`,
         description: descParts.length ? descParts.join(' — ') : undefined,
-        timestamp: formatDateTime(when),
-        actor: `by ${driverLabel(entry.driver)}`,
+        timestamp,
+        actor: ev.driver ? `by ${driverLabel(ev.driver)}` : undefined,
         tone: outcome?.tone ?? 'neutral',
-      },
-    });
-  });
+      };
+    }
 
-  order.financialEvents.forEach((ev, i) => {
-    const sign = ev.direction === 'DEBIT' ? '−' : '';
-    events.push({
-      id: `finance:${ev.id}`,
-      at: toMillis(ev.occurredAt),
-      seq: 400000 + i,
-      item: {
-        id: `finance:${ev.id}`,
+    case 'FINANCIAL_EVENT': {
+      const descParts = [
+        ev.amount != null ? formatMoney(ev.amount) : undefined,
+        ev.notes ?? undefined,
+      ].filter(Boolean);
+      return {
+        id: ev.id,
         title: financialEventLabel(ev),
-        description: [
-          `${sign}${formatMoney(ev.amount)}`,
-          ev.notes ?? undefined,
-        ]
-          .filter(Boolean)
-          .join(' — '),
-        timestamp: formatDateTime(ev.occurredAt),
-        actor: ev.actor
-          ? `by ${fullName(ev.actor)}`
-          : undefined,
+        description: descParts.length ? descParts.join(' — ') : undefined,
+        timestamp,
+        actor: ev.actor ? `by ${fullName(ev.actor)}` : undefined,
         tone: financialEventTone(ev),
-      },
-    });
-  });
+      };
+    }
 
-  events.sort((a, b) => (b.at - a.at) || (b.seq - a.seq));
-  return events.map((e) => e.item);
+    case 'PARCEL_COLLECTION_DRIVER_ASSIGNED':
+      return {
+        id: ev.id,
+        title: `Collection driver assigned: ${ev.driver ? driverLabel(ev.driver) : ''}`,
+        timestamp,
+        actor: ev.actor ? `by ${fullName(ev.actor)}` : undefined,
+        tone: 'info',
+      };
+
+    case 'PARCEL_COLLECTION_DRIVER_REASSIGNED':
+      return {
+        id: ev.id,
+        title: `Collection driver reassigned from ${ev.driver ? driverLabel(ev.driver) : ''} to ${ev.toDriver ? driverLabel(ev.toDriver) : ''}`,
+        timestamp,
+        actor: ev.actor ? `by ${fullName(ev.actor)}` : undefined,
+        tone: 'info',
+      };
+
+    case 'PARCEL_COLLECTION_FAILED': {
+      const parts = [ev.reason, ev.notes].filter(Boolean);
+      return {
+        id: ev.id,
+        title: `Collection failed (attempt #${ev.attemptNumber ?? ''})`,
+        description: parts.length ? parts.join(' — ') : undefined,
+        timestamp,
+        actor: ev.driver ? `by ${driverLabel(ev.driver)}` : undefined,
+        tone: 'danger',
+      };
+    }
+
+    case 'PARCEL_COLLECTION_RESCHEDULED':
+      return {
+        id: ev.id,
+        title: 'Collection rescheduled',
+        timestamp,
+        actor: ev.actor ? `by ${fullName(ev.actor)}` : undefined,
+        tone: 'warning',
+      };
+
+    case 'PARCEL_COLLECTED_FROM_SENDER': {
+      const outcome = getParcelAttemptOutcomePresentation('COLLECTED');
+      return {
+        id: ev.id,
+        title: `Collected from sender (attempt #${ev.attemptNumber ?? ''})`,
+        timestamp,
+        actor: ev.driver ? `by ${driverLabel(ev.driver)}` : undefined,
+        tone: outcome.tone,
+      };
+    }
+
+    case 'PARCEL_RECEIVED_AT_COMPANY':
+      return {
+        id: ev.id,
+        title: 'Parcel received at company',
+        timestamp,
+        actor: ev.actor ? `by ${fullName(ev.actor)}` : undefined,
+        tone: 'success',
+      };
+
+    case 'PARCEL_COLLECTION_ENDED_ORDER_CANCELLED':
+      return {
+        id: ev.id,
+        title: `Collection ended — order cancelled${ev.driver ? ` (was ${driverLabel(ev.driver)})` : ''}`,
+        description: getParcelEndReasonLabel(ev.endReason),
+        timestamp,
+        tone: 'warning',
+      };
+
+    default:
+      return { id: ev.id, title: ev.type, timestamp, tone: 'neutral' };
+  }
+}
+
+export function buildOrderTimeline(events: OrderTimelineEvent[]): TimelineItem[] {
+  // Server returns oldest-first; display newest-first (unchanged convention).
+  return [...events].reverse().map(toTimelineItem);
 }

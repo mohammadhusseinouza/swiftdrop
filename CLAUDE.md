@@ -1551,7 +1551,17 @@ The following numbering must match `/docs/implementation-plan.md`.
 11.14 Employees + Permissions
 11.15 Audit Logs
 11.16 Settings
+11.17 Parcel Intake & Collection Integration
+  11.17.1 Requirements + Database Contract Update
+  11.17.2 Database / Prisma + Migration
+  11.17.3 Parcel Collection Backend
+  11.17.4 Order Engine Integration
+  11.17.5 Management UI Integration
+  11.17.6 Dashboard + Reports + Audit + Tracking Contracts
+  11.17.7 Full Regression + Visual Acceptance
 ```
+
+Phase 12 (Driver Portal) is BLOCKED until every Phase 11.17 gate passes.
 
 ## Phase 12 — Driver Portal
 
@@ -1563,6 +1573,12 @@ The following numbering must match `/docs/implementation-plan.md`.
 12.5 Driver Cash Page
 12.6 Mobile Responsiveness Review
 ```
+
+Phase 12 must account for the Parcel Intake feature (see Phase 11.17 and Section 72):
+the Driver Portal is built around assigned **jobs** (COLLECTION and DELIVERY), a Driver
+may hold both job types for the same Order, the Driver confirms `COLLECTED_FROM_SENDER`
+but never confirms company receipt, and Failed Collection is separate from Failed Delivery.
+Do not begin Phase 12 until Phase 11.17 is complete and approved.
 
 ## Phase 13 — Customer Portal
 
@@ -2146,3 +2162,114 @@ When uncertain:
 3. preserve historical data
 4. avoid inventing business rules
 5. stop at the active sub-phase boundary
+
+---
+
+# 72. Parcel Intake & Collection (Phase 11.17)
+
+A newly approved cross-cutting feature. Full spec:
+`/docs/delivery_management_system_parcel_intake_collection_feature_change_spec_v1.md`.
+Database contract: `/docs/parcel-intake-collection-database-contract.md`.
+
+Mandatory rules:
+
+- **Parcel Intake Method is independent of Order Type.** `ALREADY_AT_COMPANY` and
+  `DRIVER_COLLECTION` both apply to `COMPANY_ORDER` and `DELIVERY_ONLY`. All four
+  combinations are valid. Never hard-wire an Order Type to one Intake Method.
+- **Parcel Collection is a different domain from financial cash collection.** The
+  existing `collection` names (`amountToCollect`, `actualAmountCollected`,
+  `collectionPaymentMethod`, `collectionDifferenceReason`, `DriverCashTransactionType.COLLECTION`)
+  stay about MONEY collected from the receiver. New parcel work MUST use `Parcel`-prefixed
+  names (`ParcelIntakeMethod`, `ParcelCollectionStatus`, `parcel_collection_assignments`,
+  `parcel_collection_attempts`, `failed_collection_reasons`, etc.).
+- **Collection and Delivery assignments are separate permanent histories.**
+  `parcel_collection_assignments` is separate from `order_assignments`;
+  `parcel_collection_attempts` is separate from `delivery_attempts`. Reassignment ends the
+  previous record and never overwrites it.
+- **`orders.current_driver_id` remains the final DELIVERY driver only.** The current
+  Collection driver is a separate column (`current_parcel_collection_driver_id`) that always
+  mirrors the single open `parcel_collection_assignments` row.
+- The same physical Driver may perform both the Collection job and the Delivery job for one
+  Order at different times; they are still separate assignments/responsibilities.
+- **Collection assignment lifecycle (all steps are one transaction — status + assignment row
+  + `current_parcel_collection_driver_id` change together):**
+  - `ALREADY_AT_COMPANY`: no assignment row; pointer `NULL`; status `RECEIVED_AT_COMPANY`.
+  - Assign / reassign: open a new current row (`is_current=true`, `ended_at=NULL`); on
+    reassign, first end the old row with `end_reason=REASSIGNED`; set the pointer; status
+    `ASSIGNED`. Reassignment is allowed **only before `COLLECTED_FROM_SENDER`**.
+  - `COLLECTED_FROM_SENDER`: append a `COLLECTED` attempt; **do NOT end the assignment and
+    do NOT clear the pointer** — the driver still has custody in transit.
+  - Collection Failed: append a `FAILED` attempt; end the current row
+    (`end_reason=FAILED`); clear the pointer; status `FAILED`.
+  - `RESCHEDULED`: Management approval of another attempt; no current row; pointer `NULL`;
+    no scheduled-date field in V1. A later assignment opens a brand-new row.
+  - `RECEIVED_AT_COMPANY`: end the current row (`end_reason=RECEIVED_AT_COMPANY`); clear the
+    pointer; set `received_at_company_at` / `received_at_company_by_id`.
+  - **Order cancellation:** allowed from `AWAITING_ASSIGNMENT` / `ASSIGNED` / `FAILED` /
+    `RESCHEDULED` under existing order-cancel rules. From `ASSIGNED`, the cancel handler
+    ends the current row (`end_reason=ORDER_CANCELLED`) and clears the pointer **in the same
+    transaction** as the order status change. **Cancellation is rejected from
+    `COLLECTED_FROM_SENDER`** (driver holds the parcel — confirm `RECEIVED_AT_COMPANY`
+    first) — enforce on every cancel path server-side. Order cancellation never changes
+    `parcel_collection_status` and never fabricates an attempt row. No "cancelled while
+    driver holds parcel" workflow, no `RETURNED` outcome in V1.
+  - `end_reason` is a fixed enum:
+    `REASSIGNED | FAILED | RECEIVED_AT_COMPANY | ORDER_CANCELLED`. `ORDER_CANCELLED` ≠ the
+    Failed Collection Reason "Collection cancelled by sender". Invariants:
+    `is_current = (ended_at IS NULL)`; at most one current row per Order (partial unique
+    index); a cancelled Order never has a current row or a non-null pointer. Full contract:
+    `/docs/parcel-intake-collection-database-contract.md` §4.1 / §4.3 / §8.
+- **The Collection Driver confirms `COLLECTED_FROM_SENDER`. Authorized Management confirms
+  `RECEIVED_AT_COMPANY`.** A Driver must never perform the company-receipt step.
+- The Management Orders **list DTO** (`OrderSummary`) carries `parcelIntakeMethod` +
+  `parcelCollectionStatus` (Phase 11.17.5 — scalar passthrough of the two NOT NULL `orders`
+  columns, no join, no business logic). Parcel-intake list FILTERS, a collection-driver
+  column, and collection-aware quick-tab semantics are a DEFERRED CONTRACT (Phase 11.17.6) —
+  never simulate them client-side over one paginated page, and never issue one
+  `GET /orders/:id/parcel-collection` per row. There is no backend Driver
+  collection-history endpoint yet (also deferred to 11.17.6); Driver Detail Delivery
+  metrics must keep their exact meaning.
+- Frontend (Phase 11.17.5): Create Order is **one atomic request** — the collection driver
+  (`parcelCollectionDriverId`, DRIVER_COLLECTION) and the delivery driver
+  (`deliveryDriverId`, ALREADY_AT_COMPANY) go in the `POST /orders` body, not a second
+  request. The frontend always sends `parcelIntakeMethod` explicitly (the backend's
+  omitted → `ALREADY_AT_COMPANY` resolution is legacy-client compatibility only).
+- **Delivery-driver assignment is forbidden until `parcel_collection_status = RECEIVED_AT_COMPANY`.**
+  LIVE since Phase 11.17.4 via `isParcelReadyForDelivery()` + the condition in the
+  conditional claim of `assignOrder` / `reassignOrder` / `bulkAssignOrders` and the Create
+  Order path. Bulk delivery assignment stays atomic: one ineligible order 409s the whole
+  batch.
+- For `ALREADY_AT_COMPANY`, `parcel_collection_status` is `RECEIVED_AT_COMPANY` immediately;
+  `received_at_company_at` = order creation time; `received_at_company_by_id` = order creator.
+  There is no `NOT_REQUIRED` status. Phase 11.17.4 made Create Order parcel-aware: an omitted
+  `parcelIntakeMethod` resolves to `ALREADY_AT_COMPANY` **at the service layer** (never a DB
+  default — the temporary `orders` DB defaults were dropped by migration `__1174__`); the
+  columns stay NOT NULL and are always written by the service.
+- Create Order: `parcelCollectionDriverId` (DRIVER_COLLECTION) and `deliveryDriverId`
+  ("Create & Assign", ALREADY_AT_COMPANY only) are DISTINCT fields, both additionally require
+  `orders.assign`, and the whole create is one transaction (a driver failure rolls it back).
+  The collection snapshot is derived from the Customer (request override wins) and its
+  required fields (contact/phone/address/area) are validated → 400.
+- Order cancellation (Phase 11.17.4): **rejected 409 from `COLLECTED_FROM_SENDER`** (driver
+  holds the parcel — confirm receipt first). From `parcel_collection_status = ASSIGNED` the
+  cancel handler ends the collection assignment (`end_reason = ORDER_CANCELLED`) and clears
+  the pointer in the same transaction as the order status change; `parcel_collection_status`
+  stays `ASSIGNED` as the last historical stage (there is **no** `ParcelCollectionStatus.CANCELLED`).
+  A cancelled order therefore may show `parcel_collection_status = ASSIGNED` with a NULL
+  pointer and no current assignment — a valid terminal-order combination, never "corruption",
+  never auto-repaired.
+- **Failed Collection and Failed Delivery are separate** — separate attempt tables and
+  separate configurable reason catalogs. Failed Collection does not auto-cancel the Order.
+- **Parcel Collection is financially neutral in V1.** It creates ZERO wallet posting, ZERO
+  driver-cash posting, ZERO company-finance posting, no payout, no settlement, no fee.
+- Customer collection contact/address data is **snapshotted onto the Order** at creation
+  (same principle as the receiver snapshot); later Customer edits must not rewrite it.
+- `OrderStatus.RECEIVED` no longer proves physical company possession — it means the Order
+  is recorded in the system. Company possession is read from `parcel_collection_status` /
+  receipt fields.
+- Do NOT grant the DRIVER role `settings.read` for Failed Collection Reasons; the Driver
+  Portal gets active reasons through a narrow Driver-safe endpoint.
+- **Existing (pre-feature) Orders backfill as `ALREADY_AT_COMPANY` / `RECEIVED_AT_COMPANY`**,
+  receipt time = `created_at`, receipt confirmer = `created_by_id`. No existing delivery
+  assignment may be reinterpreted as Collection work.
+- **Phase 12 (Driver Portal) remains blocked until all Phase 11.17 gates pass and are approved.**

@@ -51,6 +51,23 @@ export interface OrderReportSummary {
   totalActualCollection: string;
 }
 
+// Phase 11.17.6 (task §34) — Parcel Intake dimensions over the SAME report
+// population (created within range + the report's other filters). The five
+// operational-queue counts reuse order-workflow-queue.ts's
+// buildWorkflowQueueWhere — identical predicate to the Orders List /
+// Dashboard, so a report scoped to "today" agrees with the Dashboard's
+// system-wide count when the population happens to match. Financially
+// neutral — no revenue/fee/commission field.
+export interface OrderReportParcelSummary {
+  alreadyAtCompanyOrders: number;
+  driverCollectionOrders: number;
+  awaitingCollectionAssignment: number;
+  collectionInProgress: number;
+  collectionAttention: number;
+  awaitingCompanyReceipt: number;
+  readyForDeliveryAssignment: number;
+}
+
 // groupBy=date row.
 export interface OrderReportDateRow {
   period: string;
@@ -126,6 +143,7 @@ export interface OrderReportDto {
   summary: OrderReportSummary;
   outcome: OrderReportOutcomeSummary | null;
   rows: OrderReportRow[];
+  parcel: OrderReportParcelSummary;
 }
 
 // ------------------------------------------------------------
@@ -143,6 +161,15 @@ export interface DriverReportRow {
   settlementCount: number;
   settlementAmount: string;
   currentCashHeld: string;
+  // Phase 11.17.6 (task §36/§37) — separate Parcel Collection dimensions.
+  // Every field above stays DELIVERY-only and unchanged; these never fold
+  // into ordersAssigned/ordersDelivered/successRate.
+  //   collectionAssignments   — parcel_collection_assignments.assigned_at in range
+  //   collectionsCompleted    — assignment ended_at in range AND end_reason = RECEIVED_AT_COMPANY
+  //   failedCollectionAttempts — parcel_collection_attempts.completed_at in range AND outcome = FAILED
+  collectionAssignments: number;
+  collectionsCompleted: number;
+  failedCollectionAttempts: number;
 }
 
 export interface DriverReportDto {

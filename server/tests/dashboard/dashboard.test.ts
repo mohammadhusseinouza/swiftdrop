@@ -828,17 +828,45 @@ describe("Management Dashboard API (Phase 9.1)", () => {
     // to the Order this test itself created) is the deterministic check;
     // the dashboard's global count is only checked for well-typed shape.
 
-    test("43. unassigned Order counted", async () => {
+    test("43. ready-for-delivery Order counted (Phase 11.17.6 correction — requires parcel_collection_status = RECEIVED_AT_COMPANY, not just no driver)", async () => {
       const customerId = await freshCustomer();
+      // Default seedTestOrder fixture (no parcelIntakeMethod override) is
+      // ALREADY_AT_COMPANY / RECEIVED_AT_COMPANY — still a valid
+      // ready-for-delivery fixture under the corrected predicate.
       const orderId = await seedTestOrder(customerId, admin.id, { areaId: areaActive.id, areaName: areaActive.name, status: "RECEIVED" });
       createdOrderIds.push(orderId);
       const scopedMatch = await prisma.orders.count({
-        where: { id: orderId, status: { in: ["RECEIVED", "READY_FOR_PICKUP"] }, current_driver_id: null },
+        where: {
+          id: orderId,
+          status: { in: ["RECEIVED", "READY_FOR_PICKUP"] },
+          current_driver_id: null,
+          parcel_collection_status: "RECEIVED_AT_COMPANY",
+        },
       });
-      assert.equal(scopedMatch, 1, "fixture Order must itself match the unassigned predicate");
+      assert.equal(scopedMatch, 1, "fixture Order must itself match the ready-for-delivery predicate");
       const res = await getDashboard(tokens.admin);
-      assert.equal(typeof res.body.data.attention.counts.unassigned, "number");
-      assert.ok(res.body.data.attention.counts.unassigned >= 1);
+      assert.equal(typeof res.body.data.attention.counts.readyForDeliveryAssignment, "number");
+      assert.ok(res.body.data.attention.counts.readyForDeliveryAssignment >= 1);
+    });
+
+    test("43b. a DRIVER_COLLECTION order with collection still in progress is NOT counted as ready-for-delivery attention", async () => {
+      const customerId = await freshCustomer();
+      const orderId = await seedTestOrder(customerId, admin.id, {
+        areaId: areaActive.id,
+        areaName: areaActive.name,
+        status: "RECEIVED",
+        parcelIntakeMethod: "DRIVER_COLLECTION",
+        parcelCollectionStatus: "AWAITING_ASSIGNMENT",
+      });
+      createdOrderIds.push(orderId);
+      const before = await getDashboard(tokens.admin);
+      const beforeCount = before.body.data.attention.counts.readyForDeliveryAssignment as number;
+      const after = await getDashboard(tokens.admin);
+      // Same instant class of read — the fixture must not have moved the
+      // count (it never matches parcel_collection_status = RECEIVED_AT_COMPANY).
+      assert.equal(after.body.data.attention.counts.readyForDeliveryAssignment, beforeCount);
+      const items = after.body.data.attention.items as Array<{ type: string; order: { id: string } }>;
+      assert.ok(!items.some((i) => i.order.id === orderId && i.type === "READY_FOR_DELIVERY_ASSIGNMENT"));
     });
 
     test("44. current FAILED_DELIVERY counted", async () => {
@@ -915,20 +943,20 @@ describe("Management Dashboard API (Phase 9.1)", () => {
       assert.ok(res.body.data.attention.items.length <= 10);
     });
 
-    test("50. deterministic ordering — FINANCIAL_REVIEW items sort before UNASSIGNED items when both present", async () => {
+    test("50. deterministic ordering — FINANCIAL_REVIEW items sort before READY_FOR_DELIVERY_ASSIGNMENT items when both present", async () => {
       const customerId = await freshCustomer();
       const driver = await createDriverWithToken("att50");
       const reviewOrderId = await createOutForDeliveryOrder(customerId, driver.token, driver.driverId);
       await deliver(reviewOrderId, driver.token, { actualAmountCollected: "95.00", collectionDifferenceReason: "phase91 order" });
-      const unassignedOrderId = await seedTestOrder(customerId, admin.id, { areaId: areaActive.id, areaName: areaActive.name, status: "RECEIVED" });
-      createdOrderIds.push(unassignedOrderId);
+      const readyOrderId = await seedTestOrder(customerId, admin.id, { areaId: areaActive.id, areaName: areaActive.name, status: "RECEIVED" });
+      createdOrderIds.push(readyOrderId);
 
       const res = await getDashboard(tokens.admin);
       const types: string[] = res.body.data.attention.items.map((i: { type: string }) => i.type);
       const reviewIdx = types.indexOf("FINANCIAL_REVIEW");
-      const unassignedIdx = types.indexOf("UNASSIGNED");
-      if (reviewIdx !== -1 && unassignedIdx !== -1) {
-        assert.ok(reviewIdx < unassignedIdx, `FINANCIAL_REVIEW (${reviewIdx}) must sort before UNASSIGNED (${unassignedIdx})`);
+      const readyIdx = types.indexOf("READY_FOR_DELIVERY_ASSIGNMENT");
+      if (reviewIdx !== -1 && readyIdx !== -1) {
+        assert.ok(reviewIdx < readyIdx, `FINANCIAL_REVIEW (${reviewIdx}) must sort before READY_FOR_DELIVERY_ASSIGNMENT (${readyIdx})`);
       }
     });
 

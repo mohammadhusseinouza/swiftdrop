@@ -3,11 +3,20 @@ import {
   ORDER_TYPES,
   PAYMENT_TYPES,
 } from '../../../components/orders/orderStatus';
+import {
+  PARCEL_COLLECTION_STATUSES,
+  PARCEL_INTAKE_METHODS,
+} from '../../../components/orders/parcelCollection';
 import type {
   ListOrdersParams,
   OrderSortBy,
   OrderSortOrder,
 } from '../../../services/ordersApi';
+import type {
+  ParcelCollectionStatus,
+  ParcelIntakeMethod,
+  WorkflowQueue,
+} from '../../../services/domain.types';
 import type { SortState } from '../../../components/data-display/DataTable';
 
 /**
@@ -35,6 +44,15 @@ const ORDER_TYPE_SET = new Set<string>(ORDER_TYPES);
 const PAYMENT_TYPE_SET = new Set<string>(PAYMENT_TYPES);
 const ASSIGNMENT_SET = new Set(['ASSIGNED', 'UNASSIGNED']);
 const DELIVERY_STATUS_SET = new Set(['DELIVERED', 'UNDELIVERED']);
+const PARCEL_INTAKE_METHOD_SET = new Set<string>(PARCEL_INTAKE_METHODS);
+const PARCEL_COLLECTION_STATUS_SET = new Set<string>(PARCEL_COLLECTION_STATUSES);
+const WORKFLOW_QUEUE_SET = new Set<string>([
+  'AWAITING_COLLECTION_ASSIGNMENT',
+  'COLLECTION_IN_PROGRESS',
+  'COLLECTION_ATTENTION',
+  'AWAITING_COMPANY_RECEIPT',
+  'READY_FOR_DELIVERY_ASSIGNMENT',
+]);
 const FINANCIAL_STATUS_SET = new Set([
   'PENDING',
   'FINALIZED',
@@ -67,6 +85,11 @@ export interface OrdersListState {
   areaId: string;
   assignmentStatus: '' | 'ASSIGNED' | 'UNASSIGNED';
   needsFinancialReview: boolean;
+  // Parcel Intake / Collection filters (Phase 11.17.6).
+  parcelIntakeMethod: '' | ParcelIntakeMethod;
+  parcelCollectionStatus: '' | ParcelCollectionStatus;
+  parcelCollectionDriverId: string;
+  workflowQueue: '' | WorkflowQueue;
   createdFrom: string;
   createdTo: string;
   sortBy: '' | OrderSortBy;
@@ -87,6 +110,10 @@ export const EMPTY_ORDERS_STATE: OrdersListState = {
   areaId: '',
   assignmentStatus: '',
   needsFinancialReview: false,
+  parcelIntakeMethod: '',
+  parcelCollectionStatus: '',
+  parcelCollectionDriverId: '',
+  workflowQueue: '',
   createdFrom: '',
   createdTo: '',
   sortBy: '',
@@ -126,6 +153,19 @@ export function parseOrdersListParams(sp: URLSearchParams): OrdersListState {
         ? (assignment as 'ASSIGNED' | 'UNASSIGNED')
         : '',
     needsFinancialReview: sp.get('needsFinancialReview') === 'true',
+    parcelIntakeMethod: pick(
+      sp.get('parcelIntakeMethod'),
+      PARCEL_INTAKE_METHOD_SET,
+    ) as '' | ParcelIntakeMethod,
+    parcelCollectionStatus: pick(
+      sp.get('parcelCollectionStatus'),
+      PARCEL_COLLECTION_STATUS_SET,
+    ) as '' | ParcelCollectionStatus,
+    // Opaque id — the backend validates the UUID and stays authoritative.
+    parcelCollectionDriverId: sp.get('parcelCollectionDriverId') ?? '',
+    workflowQueue: pick(sp.get('workflowQueue'), WORKFLOW_QUEUE_SET) as
+      | ''
+      | WorkflowQueue,
     createdFrom: DATE_RE.test(sp.get('createdFrom') ?? '')
       ? (sp.get('createdFrom') as string)
       : '',
@@ -160,6 +200,10 @@ export function serializeOrdersListParams(
   if (state.areaId) sp.set('areaId', state.areaId);
   if (state.assignmentStatus) sp.set('assignmentStatus', state.assignmentStatus);
   if (state.needsFinancialReview) sp.set('needsFinancialReview', 'true');
+  if (state.parcelIntakeMethod) sp.set('parcelIntakeMethod', state.parcelIntakeMethod);
+  if (state.parcelCollectionStatus) sp.set('parcelCollectionStatus', state.parcelCollectionStatus);
+  if (state.parcelCollectionDriverId) sp.set('parcelCollectionDriverId', state.parcelCollectionDriverId);
+  if (state.workflowQueue) sp.set('workflowQueue', state.workflowQueue);
   if (state.createdFrom) sp.set('createdFrom', state.createdFrom);
   if (state.createdTo) sp.set('createdTo', state.createdTo);
   if (state.sortBy) {
@@ -185,6 +229,10 @@ export function toListOrdersParams(state: OrdersListState): ListOrdersParams {
     areaId: state.areaId || undefined,
     assignmentStatus: state.assignmentStatus || undefined,
     needsFinancialReview: state.needsFinancialReview || undefined,
+    parcelIntakeMethod: state.parcelIntakeMethod || undefined,
+    parcelCollectionStatus: state.parcelCollectionStatus || undefined,
+    parcelCollectionDriverId: state.parcelCollectionDriverId || undefined,
+    workflowQueue: state.workflowQueue || undefined,
     createdFrom: state.createdFrom || undefined,
     createdTo: state.createdTo || undefined,
     sortBy: state.sortBy || undefined,
@@ -205,6 +253,10 @@ const FILTER_KEYS: readonly (keyof OrdersListState)[] = [
   'areaId',
   'assignmentStatus',
   'needsFinancialReview',
+  'parcelIntakeMethod',
+  'parcelCollectionStatus',
+  'parcelCollectionDriverId',
+  'workflowQueue',
   'createdFrom',
   'createdTo',
 ];
@@ -264,7 +316,8 @@ export function applySort(
 
 export type QuickTabId =
   | 'all'
-  | 'unassigned'
+  | 'readyForDelivery'
+  | 'awaitingCollection'
   | 'ready'
   | 'assigned'
   | 'out'
@@ -274,33 +327,55 @@ export type QuickTabId =
 export interface QuickTab {
   id: QuickTabId;
   label: string;
-  /** The status/assignment dimensions this tab sets (others are cleared). */
+  /** The status/assignment/workflowQueue dimensions this tab sets (others are cleared). */
   status: string;
   assignmentStatus: '' | 'ASSIGNED' | 'UNASSIGNED';
+  workflowQueue: '' | WorkflowQueue;
 }
 
+// Phase 11.17.6 (task §19) — the old generic "Unassigned" tab
+// (assignmentStatus=UNASSIGNED alone) wrongly treated a Collection-in-
+// progress order (which also has no DELIVERY driver yet) as a delivery-
+// assignment problem. Replaced by two server-backed workflowQueue tabs:
+// "Ready for Delivery" (the real delivery-assignment queue) and "Awaiting
+// Collection" (the real collection-assignment queue) — never conflated.
 export const QUICK_TABS: readonly QuickTab[] = [
-  { id: 'all', label: 'All', status: '', assignmentStatus: '' },
-  { id: 'unassigned', label: 'Unassigned', status: '', assignmentStatus: 'UNASSIGNED' },
-  { id: 'ready', label: 'Ready', status: 'READY_FOR_PICKUP', assignmentStatus: '' },
-  { id: 'assigned', label: 'Assigned', status: 'ASSIGNED', assignmentStatus: '' },
-  { id: 'out', label: 'Out for Delivery', status: 'OUT_FOR_DELIVERY', assignmentStatus: '' },
-  { id: 'delivered', label: 'Delivered', status: 'DELIVERED', assignmentStatus: '' },
-  { id: 'failed', label: 'Failed', status: 'FAILED_DELIVERY', assignmentStatus: '' },
+  { id: 'all', label: 'All', status: '', assignmentStatus: '', workflowQueue: '' },
+  {
+    id: 'readyForDelivery',
+    label: 'Ready for Delivery',
+    status: '',
+    assignmentStatus: '',
+    workflowQueue: 'READY_FOR_DELIVERY_ASSIGNMENT',
+  },
+  {
+    id: 'awaitingCollection',
+    label: 'Awaiting Collection',
+    status: '',
+    assignmentStatus: '',
+    workflowQueue: 'AWAITING_COLLECTION_ASSIGNMENT',
+  },
+  { id: 'ready', label: 'Ready for Pickup', status: 'READY_FOR_PICKUP', assignmentStatus: '', workflowQueue: '' },
+  { id: 'assigned', label: 'Assigned', status: 'ASSIGNED', assignmentStatus: '', workflowQueue: '' },
+  { id: 'out', label: 'Out for Delivery', status: 'OUT_FOR_DELIVERY', assignmentStatus: '', workflowQueue: '' },
+  { id: 'delivered', label: 'Delivered', status: 'DELIVERED', assignmentStatus: '', workflowQueue: '' },
+  { id: 'failed', label: 'Failed', status: 'FAILED_DELIVERY', assignmentStatus: '', workflowQueue: '' },
 ];
 
 /**
  * Active tab derived purely from URL state. The quick "Delivered" tab uses the
  * precise `status=DELIVERED` (unchanged) — this is deliberately distinct from
  * the explicit "Delivery status" filter, which uses the `deliveryStatus`
- * param (DELIVERED / UNDELIVERED). Returns null when a status filter is active
- * that no tab represents (e.g. RESCHEDULED).
+ * param (DELIVERED / UNDELIVERED). Returns null when a status/queue filter is
+ * active that no tab represents (e.g. RESCHEDULED, or the detailed
+ * parcelCollectionStatus filter).
  */
 export function getActiveQuickTab(state: OrdersListState): QuickTabId | null {
   for (const tab of QUICK_TABS) {
     if (
       tab.status === state.status &&
-      tab.assignmentStatus === state.assignmentStatus
+      tab.assignmentStatus === state.assignmentStatus &&
+      tab.workflowQueue === state.workflowQueue
     ) {
       return tab.id;
     }
@@ -308,7 +383,7 @@ export function getActiveQuickTab(state: OrdersListState): QuickTabId | null {
   return null;
 }
 
-/** Apply a quick tab: set its status/assignment dims, clear the others, keep the rest, reset page. */
+/** Apply a quick tab: set its status/assignment/workflowQueue dims, clear the others, keep the rest, reset page. */
 export function applyQuickTab(
   state: OrdersListState,
   tab: QuickTab,
@@ -317,6 +392,7 @@ export function applyQuickTab(
     ...state,
     status: tab.status,
     assignmentStatus: tab.assignmentStatus,
+    workflowQueue: tab.workflowQueue,
     page: 1,
   };
 }

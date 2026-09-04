@@ -9,8 +9,11 @@ import type {
 } from './apiTypes';
 import type {
   AreaSummary,
+  FailedCollectionReasonSummary,
   FailedDeliveryReasonSummary,
   PaymentMethodSummary,
+  RoleConfigResponse,
+  RoleConfigSummary,
   SystemSettingSummary,
 } from './domain.types';
 
@@ -66,9 +69,24 @@ export interface UpdateFailedDeliveryReasonRequest {
   sortOrder?: number;
   isActive?: boolean;
 }
+export interface CreateFailedCollectionReasonRequest {
+  name: string;
+  requiresNotes?: boolean;
+  sortOrder?: number;
+}
+export interface UpdateFailedCollectionReasonRequest {
+  name?: string;
+  requiresNotes?: boolean;
+  sortOrder?: number;
+  isActive?: boolean;
+}
 export interface UpdateSystemSettingRequest {
   value?: unknown;
   description?: string | null;
+}
+export interface UpdateRolePermissionsRequest {
+  roleId: string;
+  permissionCodes: string[];
 }
 
 const settingsTag = (id: string) => ({ type: 'Settings' as const, id });
@@ -206,6 +224,70 @@ export const settingsApi = api.injectEndpoints({
       ],
     }),
 
+    /* -------------------- Failed collection reasons ------------------- */
+    /**
+     * A SEPARATE catalog from failed-delivery reasons (Phase 11.17) — never
+     * merged. Management endpoint (settings.read / settings.manage); the
+     * Driver Portal uses its own narrow endpoint, not this one.
+     */
+    getFailedCollectionReasons: builder.query<
+      FailedCollectionReasonSummary[],
+      ReferenceListParams | void
+    >({
+      query: (params) => ({
+        url: '/settings/failed-collection-reasons',
+        params: cleanParams({ ...(params ?? {}) }),
+      }),
+      transformResponse: (
+        r: ApiSuccessResponse<FailedCollectionReasonSummary[]>,
+      ) => unwrapData(r),
+      providesTags: [
+        settingsTag('FAILED_COLLECTION_REASONS'),
+        settingsTag('LIST'),
+      ],
+    }),
+    getFailedCollectionReason: builder.query<
+      FailedCollectionReasonSummary,
+      string
+    >({
+      query: (id) => ({ url: `/settings/failed-collection-reasons/${id}` }),
+      transformResponse: (r: ApiSuccessResponse<FailedCollectionReasonSummary>) =>
+        unwrapData(r),
+      providesTags: [settingsTag('FAILED_COLLECTION_REASONS')],
+    }),
+    createFailedCollectionReason: builder.mutation<
+      FailedCollectionReasonSummary,
+      CreateFailedCollectionReasonRequest
+    >({
+      query: (body) => ({
+        url: '/settings/failed-collection-reasons',
+        method: 'POST',
+        body,
+      }),
+      transformResponse: (r: ApiSuccessResponse<FailedCollectionReasonSummary>) =>
+        unwrapData(r),
+      invalidatesTags: [
+        settingsTag('FAILED_COLLECTION_REASONS'),
+        settingsTag('LIST'),
+      ],
+    }),
+    updateFailedCollectionReason: builder.mutation<
+      FailedCollectionReasonSummary,
+      { id: string; body: UpdateFailedCollectionReasonRequest }
+    >({
+      query: ({ id, body }) => ({
+        url: `/settings/failed-collection-reasons/${id}`,
+        method: 'PATCH',
+        body,
+      }),
+      transformResponse: (r: ApiSuccessResponse<FailedCollectionReasonSummary>) =>
+        unwrapData(r),
+      invalidatesTags: [
+        settingsTag('FAILED_COLLECTION_REASONS'),
+        settingsTag('LIST'),
+      ],
+    }),
+
     /* -------------------------- System settings ------------------------ */
     getSystemSettings: builder.query<SystemSettingSummary[], void>({
       query: () => ({ url: '/system-settings' }),
@@ -232,6 +314,40 @@ export const settingsApi = api.injectEndpoints({
         unwrapData(r),
       invalidatesTags: [settingsTag('SYSTEM')],
     }),
+
+    /* --------------------- Role → Permission config ------------------- */
+    /**
+     * Settings-authorized (settings.read) — deliberately NOT the
+     * employees.read `/employees/roles`, which DISPATCHER / FINANCE cannot
+     * call. Returns the three management roles, the full permission catalog,
+     * and the management-role assignment policy.
+     */
+    getRoleConfig: builder.query<RoleConfigResponse, void>({
+      query: () => ({ url: '/settings/roles' }),
+      transformResponse: (r: ApiSuccessResponse<RoleConfigResponse>) =>
+        unwrapData(r),
+      providesTags: [{ type: 'Role', id: 'CONFIG' }],
+    }),
+    updateRolePermissions: builder.mutation<
+      RoleConfigSummary,
+      UpdateRolePermissionsRequest
+    >({
+      query: ({ roleId, permissionCodes }) => ({
+        url: `/settings/roles/${roleId}/permissions`,
+        method: 'PUT',
+        body: { permissionCodes },
+      }),
+      transformResponse: (r: ApiSuccessResponse<RoleConfigSummary>) =>
+        unwrapData(r),
+      // Role matrix changed -> refresh the config view, the Employees role
+      // list (permission counts), and the current user's own hydrated
+      // permissions in case their role was the one edited (§34).
+      invalidatesTags: [
+        { type: 'Role', id: 'CONFIG' },
+        { type: 'Role', id: 'LIST' },
+        { type: 'Auth', id: 'ME' },
+      ],
+    }),
   }),
 });
 
@@ -248,7 +364,13 @@ export const {
   useGetFailedDeliveryReasonQuery,
   useCreateFailedDeliveryReasonMutation,
   useUpdateFailedDeliveryReasonMutation,
+  useGetFailedCollectionReasonsQuery,
+  useGetFailedCollectionReasonQuery,
+  useCreateFailedCollectionReasonMutation,
+  useUpdateFailedCollectionReasonMutation,
   useGetSystemSettingsQuery,
   useGetSystemSettingQuery,
   useUpdateSystemSettingMutation,
+  useGetRoleConfigQuery,
+  useUpdateRolePermissionsMutation,
 } = settingsApi;

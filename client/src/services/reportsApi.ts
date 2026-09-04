@@ -7,6 +7,8 @@ import type {
   DriverReportDto,
   FinanceReportDto,
   OrderReportDto,
+  ParcelCollectionStatus,
+  ParcelIntakeMethod,
 } from './domain.types';
 
 /**
@@ -34,6 +36,11 @@ export interface OrderReportParams extends DateRangeParams {
   areaId?: string;
   status?: string;
   orderType?: string;
+  /** Parcel Intake / Collection filters (Phase 11.17.6), independent of OrderType. */
+  parcelIntakeMethod?: ParcelIntakeMethod;
+  parcelCollectionStatus?: ParcelCollectionStatus;
+  /** CURRENT collection work only. */
+  parcelCollectionDriverId?: string;
 }
 export interface DriverReportParams extends DateRangeParams {
   driverId?: string;

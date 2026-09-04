@@ -622,7 +622,7 @@ describe("Orders workflow backend (Phase 6.6 — Ready / Reschedule / Cancel / H
   // ===========================================================
 
   describe("Concurrency", () => {
-    test("57. ready vs assign race on the same RECEIVED order: exactly one succeeds", async () => {
+    test("57. ready vs assign race on the same RECEIVED order: the order ends in exactly one coherent state", async () => {
       const eligible = await createEligibleDriver();
       const order = await createBaseOrder();
 
@@ -631,16 +631,35 @@ describe("Orders workflow backend (Phase 6.6 — Ready / Reschedule / Cancel / H
         request(app).post(assignPath(order.id)).set(auth(tokens.admin)).send({ driverId: eligible.driverId }),
       ]);
 
-      const statuses = [readyRes.status, assignRes.status].sort();
-      assert.deepEqual(statuses, [200, 409], JSON.stringify({ ready: readyRes.body, assign: assignRes.body }));
+      // /assign accepts BOTH RECEIVED and READY_FOR_PICKUP as source statuses,
+      // so — besides the obvious "one wins the RECEIVED claim, the other 409s"
+      // — a valid serialization is: /ready commits RECEIVED -> READY_FOR_PICKUP,
+      // then /assign legitimately proceeds READY_FOR_PICKUP -> ASSIGNED, and
+      // BOTH return 200. (/ready that reads the already-ASSIGNED order 400s.)
+      // What must always hold is a single coherent final state with no
+      // assignment-history corruption.
+      const ctx = JSON.stringify({ ready: readyRes.body, assign: assignRes.body });
+      assert.ok([200, 400, 409].includes(readyRes.status), `ready status ${readyRes.status} ${ctx}`);
+      assert.ok([200, 409].includes(assignRes.status), `assign status ${assignRes.status} ${ctx}`);
 
       const row = await prisma.orders.findUniqueOrThrow({ where: { id: order.id } });
-      if (readyRes.status === 200) {
-        assert.equal(row.status, "READY_FOR_PICKUP");
-        assert.equal(row.current_driver_id, null);
+      const currentAssignments = await prisma.order_assignments.count({
+        where: { order_id: order.id, is_current: true },
+      });
+
+      if (assignRes.status === 200) {
+        // assign succeeded (directly from RECEIVED, or from READY_FOR_PICKUP
+        // after /ready won) — the order is ASSIGNED to the eligible driver.
+        assert.equal(row.status, "ASSIGNED", ctx);
+        assert.equal(row.current_driver_id, eligible.driverId, ctx);
+        assert.equal(currentAssignments, 1, ctx);
       } else {
-        assert.equal(row.status, "ASSIGNED");
-        assert.equal(row.current_driver_id, eligible.driverId);
+        // assign lost the race -> /ready is the only mutation that landed.
+        assert.equal(assignRes.status, 409, ctx);
+        assert.equal(readyRes.status, 200, ctx);
+        assert.equal(row.status, "READY_FOR_PICKUP", ctx);
+        assert.equal(row.current_driver_id, null, ctx);
+        assert.equal(currentAssignments, 0, ctx);
       }
     });
 

@@ -113,13 +113,26 @@ export const walletsApi = api.injectEndpoints({
         unwrapData(r),
       invalidatesTags: (_res, _err, { customerId }) => [
         { type: 'Wallet', id: customerId },
+        { type: 'Customer', id: customerId },
         ...WALLET_CORRECTION_INVALIDATION,
       ],
     }),
 
+    /**
+     * POST /wallet-transactions/:id/reverse. Server body is only `{ reason }`;
+     * `customerId` / `orderId` / `payoutLinked` are optional cache-invalidation
+     * hints the UI row already holds (CLAUDE.md §22). A PAYOUT reversal here
+     * also flips the payout's status to REVERSED server-side, hence `Payout`.
+     */
     reverseWalletTransaction: builder.mutation<
       LedgerCorrectionResult,
-      { transactionId: string; reason: string }
+      {
+        transactionId: string;
+        reason: string;
+        customerId?: string;
+        orderId?: string;
+        payoutLinked?: boolean;
+      }
     >({
       query: ({ transactionId, reason }) => ({
         url: `/wallet-transactions/${transactionId}/reverse`,
@@ -128,7 +141,17 @@ export const walletsApi = api.injectEndpoints({
       }),
       transformResponse: (r: ApiSuccessResponse<LedgerCorrectionResult>) =>
         unwrapData(r),
-      invalidatesTags: [...WALLET_CORRECTION_INVALIDATION],
+      invalidatesTags: (_res, _err, { customerId, orderId, payoutLinked }) => [
+        ...(customerId
+          ? [
+              { type: 'Wallet' as const, id: customerId },
+              { type: 'Customer' as const, id: customerId },
+            ]
+          : []),
+        ...(orderId ? [{ type: 'Order' as const, id: orderId }] : []),
+        ...(payoutLinked ? [{ type: 'Payout' as const, id: 'LIST' }] : []),
+        ...WALLET_CORRECTION_INVALIDATION,
+      ],
     }),
   }),
 });

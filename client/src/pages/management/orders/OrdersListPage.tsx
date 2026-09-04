@@ -282,7 +282,14 @@ export default function OrdersListPage() {
                   driverName: o.currentDriver
                     ? `${o.currentDriver.user.firstName} ${o.currentDriver.user.lastName}`
                     : undefined,
+                  collectionDriverName: o.currentCollectionDriver
+                    ? `${o.currentCollectionDriver.user.firstName} ${o.currentCollectionDriver.user.lastName}`
+                    : undefined,
                   createdAt: formatDateTime(o.createdAt),
+                  parcelIntake: {
+                    method: o.parcelIntakeMethod,
+                    status: o.parcelCollectionStatus,
+                  },
                 }}
                 onClick={() => navigate(`/management/orders/${o.id}`)}
                 selected={

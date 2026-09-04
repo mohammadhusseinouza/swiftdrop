@@ -11,6 +11,8 @@ The system will manage the complete delivery lifecycle, including:
 - Employees
 - Drivers
 - Orders
+- Parcel intake (parcel already at company, or driver collection from the sender)
+- Parcel collection assignments
 - Delivery assignments
 - Order tracking
 - Customer wallets
@@ -43,7 +45,9 @@ The Admin can:
 - Manage drivers
 - Manage customers
 - Create and edit orders
-- Assign and reassign drivers
+- Assign and reassign collection drivers
+- Assign and reassign delivery drivers
+- Confirm parcels received at the company
 - Manage customer wallets
 - Manage customer payouts
 - Manage driver settlements
@@ -64,8 +68,10 @@ They can:
 - Edit customer information
 - Create orders
 - Edit orders before completion
-- Assign drivers
-- Reassign drivers
+- Assign and reassign collection drivers
+- Assign and reassign delivery drivers
+- Confirm parcels received at the company
+- Reschedule and retry failed parcel collections
 - Change operational order statuses
 - Search and filter orders
 - View tracking information
@@ -95,23 +101,29 @@ Financial transactions must remain traceable.
 
 Drivers have limited access.
 
-A driver can only access orders assigned to them.
+A driver can only access the jobs assigned to them. A driver may hold two kinds of job for
+an order at different times: a **collection job** (bring the parcel from the sender to the
+company) and a **delivery job** (deliver the parcel from the company to the receiver). The
+same driver may hold both jobs for the same order; they remain separate assignments.
 
 Drivers can:
 
-- View assigned orders
-- View receiver information
-- View delivery address
-- View receiver phone number
-- View delivery instructions
-- View amount that must be collected
-- Mark an order as picked up
+- View their assigned collection jobs and delivery jobs
+- View sender / collection contact and address for a collection job
+- View receiver information, delivery address, phone, and instructions for a delivery job
+- View amount that must be collected (delivery jobs only)
+- Confirm a parcel was collected from the sender
+- Mark a parcel collection attempt as failed (with a reason)
+- Mark an order as picked up (from the company)
 - Start delivery
 - Mark an order as delivered
 - Mark a delivery attempt as failed
 - Enter the actual amount collected
-- View their delivery history
+- View their delivery and collection history
 - View their current collected-cash balance
+
+Drivers cannot confirm that a parcel was **received at the company** — only authorized
+Management can confirm company receipt.
 
 Drivers cannot access:
 
@@ -242,6 +254,240 @@ The customer can later withdraw their wallet balance from the company.
 
 ---
 
+# 5A. Parcel Intake and Parcel Collection
+
+## 5A.1 Parcel Intake Method
+
+Every order has a **Parcel Intake Method** that describes how the parcel reaches the
+company. It is **independent of Order Type** — all four combinations are valid.
+
+```text
+Parcel Intake Method
+- ALREADY_AT_COMPANY   the parcel is physically at the company when the order is created
+- DRIVER_COLLECTION    a driver must first collect the parcel from the sender
+```
+
+An Order Type is never hard-wired to one intake method. A `COMPANY_ORDER` may require driver
+collection; a `DELIVERY_ONLY` order may already be at the company.
+
+## 5A.2 Parcel Collection is not money collection
+
+"Parcel collection" (a driver bringing a parcel from a sender to the company) is a different
+concept from the existing financial "collection" wording (money the driver collects from the
+receiver on delivery). The two must never be mixed. Parcel collection technical naming is
+always `Parcel`-prefixed (`ParcelIntakeMethod`, `ParcelCollectionStatus`, etc.).
+
+## 5A.3 Parcel Collection state
+
+`DRIVER_COLLECTION` orders move through a **Parcel Collection state** that is separate from
+the order/delivery lifecycle:
+
+```text
+AWAITING_ASSIGNMENT    collection required, no current collection driver
+ASSIGNED               a collection driver is assigned; parcel still with the sender
+COLLECTED_FROM_SENDER  the driver has the parcel; the company does NOT have it yet
+FAILED                 the last collection attempt failed; no current collection driver
+RESCHEDULED            Management approved another attempt; no current collection driver
+RECEIVED_AT_COMPANY    Management has confirmed the parcel is physically at the company
+```
+
+For `ALREADY_AT_COMPANY` orders the Parcel Collection state is `RECEIVED_AT_COMPANY`
+immediately on creation (there is no separate "not required" state). The receipt timestamp
+is the order creation time and the receipt confirmer is the order creator. No collection
+assignment record is created.
+
+**Current collection driver pointer.** The order carries a single "current collection
+driver" value that always matches the one open collection assignment:
+
+- set when a collection driver is assigned;
+- **kept through `COLLECTED_FROM_SENDER`** — the driver still physically holds the parcel
+  while transporting it to the company;
+- cleared when a collection attempt fails, and when Management confirms receipt;
+- empty while `AWAITING_ASSIGNMENT` or `RESCHEDULED`, and for `ALREADY_AT_COMPANY` orders.
+
+This is a separate value from the current **delivery** driver and is never confused with it.
+
+## 5A.4 Parcel Collection workflow (DRIVER_COLLECTION)
+
+```text
+Order created (intake = DRIVER_COLLECTION)
+  -> Collection driver assigned now or later
+  -> Driver confirms "Collected From Sender"
+  -> Driver transports the parcel to the company
+  -> Management confirms "Received At Company"
+  -> Order is now eligible for delivery-driver assignment
+  -> Existing delivery workflow
+```
+
+## 5A.5 Collection assignment and reassignment
+
+- The collection driver is **optional at order creation** and may be assigned later.
+- The collection driver may be **reassigned only before `COLLECTED_FROM_SENDER`**. Once the
+  driver has confirmed possession from the sender, reassignment is forbidden — that driver
+  keeps the job through company receipt.
+- Reassignment ends the previous assignment record (reason: reassigned) and opens a new one;
+  assignment history is permanent and is never overwritten.
+- After a failed collection there is no current collection driver. Assigning a driver again
+  — even the same person — always creates a new assignment record.
+- Collection assignments are **separate records** from delivery assignments. The same
+  physical driver may hold both, at different times, for the same order.
+- Inactive drivers should not normally receive new collection assignments.
+
+## 5A.6 Company receipt confirmation
+
+- The **collection driver** confirms only that the parcel was collected from the sender.
+- **Authorized Management** (Admin / Dispatcher under existing operational permissions)
+  confirms that the parcel was received at the company.
+- Company receipt records a timestamp and the confirming user.
+- A driver can never perform the company-receipt step.
+
+## 5A.7 Failed parcel collection
+
+- A collection attempt can fail. A failed collection does **not** automatically cancel the
+  order.
+- A failed collection records a configured **Failed Collection Reason** and notes where the
+  reason requires them.
+- Collection may be rescheduled and retried; each retry is a new attempt.
+- Failed collection attempts are permanent history and are never overwritten.
+- **Failed Collection Reasons are a separate configurable catalog from Failed Delivery
+  Reasons** (see §19A).
+
+## 5A.8 Collection contact and address snapshot
+
+For `DRIVER_COLLECTION`, the collection contact and address are pre-filled from the
+customer's saved information and then **stored as an order snapshot** (collection contact
+name, collection phone, alternative phone, collection area, collection address, collection
+notes). Later edits to the customer profile must not rewrite an existing order's collection
+snapshot. This matches the existing receiver-snapshot principle (§4).
+
+## 5A.9 Delivery assignment gate
+
+> A delivery driver may not be assigned to an order until its Parcel Collection state is
+> `RECEIVED_AT_COMPANY`.
+
+This is a hard business rule enforced server-side on every delivery-assignment path (assign,
+reassign, bulk assign, create-and-assign, direct API request). For bulk delivery assignment
+the batch is atomic: if any selected order has not reached `RECEIVED_AT_COMPANY`, the whole
+batch is rejected rather than partially assigned.
+
+## 5A.10 Financial neutrality
+
+Parcel collection is **free of charge in V1** and is financially neutral:
+
+```text
+Parcel Collection action
+Customer Wallet      change 0
+Driver Cash          change 0
+Company Finance      change 0
+Customer Payout      none
+Driver Settlement    none
+Collection fee       none
+```
+
+The existing financial rules (§10) are unchanged and continue to refer only to money
+collected from the receiver during delivery.
+
+## 5A.11 Parcel Collection state transition matrix
+
+### Already at company
+
+```text
+(create, intake = ALREADY_AT_COMPANY)  ->  RECEIVED_AT_COMPANY
+```
+
+Recorded automatically: `received_at_company_at` = creation time,
+`received_at_company_by` = order creator. No collection driver, no attempts.
+
+### Driver collection
+
+```text
+(create, DRIVER_COLLECTION, no driver)   ->  AWAITING_ASSIGNMENT
+(create, DRIVER_COLLECTION, with driver) ->  ASSIGNED
+AWAITING_ASSIGNMENT   -- assign collection driver -->  ASSIGNED
+ASSIGNED              -- reassign collection driver -->  ASSIGNED
+ASSIGNED              -- driver: Collected From Sender -->  COLLECTED_FROM_SENDER
+ASSIGNED              -- driver: Collection Failed -->  FAILED
+COLLECTED_FROM_SENDER -- management: Received At Company -->  RECEIVED_AT_COMPANY
+FAILED                -- management: reschedule -->  RESCHEDULED
+RESCHEDULED           -- assign collection driver -->  ASSIGNED
+```
+
+Reassignment is **not** allowed from `COLLECTED_FROM_SENDER` onward.
+
+### What each transition does to the collection assignment and the current-driver pointer
+
+| Transition | Collection assignment row(s) | Current collection driver | Resulting status |
+|---|---|---|---|
+| Create `ALREADY_AT_COMPANY` | none created | empty | `RECEIVED_AT_COMPANY` |
+| Create `DRIVER_COLLECTION`, no driver | none created | empty | `AWAITING_ASSIGNMENT` |
+| Create `DRIVER_COLLECTION`, with driver | open a new current row | set to that driver | `ASSIGNED` |
+| Assign collection driver | open a new current row | set to that driver | `ASSIGNED` |
+| Reassign (before Collected From Sender) | end current row (reason: reassigned); open a new current row | set to the new driver | `ASSIGNED` |
+| Collected From Sender | **current row unchanged**; append a `COLLECTED` attempt; set collected-from-sender time | **unchanged — driver keeps custody** | `COLLECTED_FROM_SENDER` |
+| Collection Failed | append a `FAILED` attempt; end current row (reason: failed) | cleared | `FAILED` |
+| Reschedule after failure | no row change (none open) | empty | `RESCHEDULED` |
+| Received At Company | end current row (reason: received at company); set receipt time + confirmer | cleared | `RECEIVED_AT_COMPANY` |
+
+- Every failed attempt is a permanent `parcel_collection_attempts` row; a retry adds a new
+  row and never overwrites.
+- All rows in each transition change together in **one transaction** — the status, the
+  assignment row, and the current-driver pointer can never disagree.
+- The assignment end reason is one of a fixed set: **reassigned**, **failed**,
+  **received at company**, **order cancelled** (§5A.12).
+- `RECEIVED_AT_COMPANY` is the only state from which a delivery driver may be assigned. The
+  historical collecting driver stays visible in the collection assignment/attempt history.
+- Full lifecycle detail and the DB invariants are in
+  `/docs/parcel-intake-collection-database-contract.md` §4.1 / §4.3 / §8.
+
+## 5A.12 Order cancellation while parcel collection is active
+
+Order cancellation is an order-level action under the existing order-cancellation rules. It
+does not change `parcel_collection_status` and never fabricates a collection attempt — the
+collection status and history are kept as historical state, and the order's terminal
+**Cancelled** status is what communicates the cancellation.
+
+| Collection state when cancelled | Cancellation | Effect on the collection assignment |
+|---|---|---|
+| `AWAITING_ASSIGNMENT` | allowed | none — there is no assignment; do not create one |
+| `ASSIGNED` | allowed | in the **same transaction**: end the current assignment (end reason = order cancelled), clear the current collection driver, then apply the order cancellation |
+| `COLLECTED_FROM_SENDER` | **rejected** | — the driver physically holds the parcel; Management must confirm **Received At Company** first, then the cancellation / return workflow may proceed |
+| `FAILED` | allowed | none — no current assignment |
+| `RESCHEDULED` | allowed | none — no current assignment |
+| `RECEIVED_AT_COMPANY` | per the existing post-receipt order/delivery workflow | none — assignment already closed at receipt |
+
+Hard rules:
+
+- A cancelled order must **never** leave a parcel in unresolved driver custody. Cancellation
+  from `COLLECTED_FROM_SENDER` is rejected server-side on every cancellation path (frontend
+  disabling is UX only).
+- A cancelled order must **never** retain a current collection assignment or a current
+  collection driver. Cancellation from `ASSIGNED` closes the assignment atomically — no
+  exception.
+- V1 adds no "cancelled while driver holds the parcel" workflow and no returned-collection
+  outcome.
+- "Order cancelled" (assignment end reason) is not the same as the Failed Collection Reason
+  *"Collection cancelled by sender"* (§19A) and must not be conflated with it.
+
+### Actor policy
+
+| Transition | Actor | Permission (existing catalog) |
+|---|---|---|
+| Assign / reassign collection driver | Admin / Dispatcher | `orders.assign` |
+| Collected From Sender | the assigned collection driver | `driver.orders.update_own` |
+| Collection Failed (reason + notes) | the assigned collection driver | `driver.orders.update_own` |
+| Reschedule / reassign after failure | Admin / Dispatcher (Management) | `orders.assign` / `orders.change_status` |
+| Received At Company | Admin / Dispatcher (Management) | `orders.change_status` |
+| View parcel intake information (Management) | Admin / Dispatcher / Finance as configured | `orders.read` |
+| Driver sees own collection/delivery jobs | the assigned driver | `driver.orders.read_own` |
+| Manage Failed Collection Reasons | Admin (or role with the permission) | `settings.read` / `settings.manage` |
+
+No role-name checks: authorization is by permission code. The DRIVER role must not receive
+`settings.read`; the Driver Portal reads active Failed Collection Reasons from a narrow
+Driver-safe endpoint. If the existing permission model turns out not to express a required
+action, the change is proposed for approval — not worked around with a role check.
+
+---
+
 # 6. Order Information
 
 Each order should contain the following information.
@@ -282,6 +528,23 @@ Order numbers and tracking codes must be automatically generated.
 - Package size, optional
 
 Weight and size are optional for Version 1.
+
+## 6.5 Parcel Intake Information
+
+- Parcel Intake Method (`ALREADY_AT_COMPANY` or `DRIVER_COLLECTION`)
+- Parcel Collection Status
+- Current Collection Driver (nullable)
+- Collection contact name (snapshot, `DRIVER_COLLECTION` only)
+- Collection phone / alternative phone (snapshot)
+- Collection area (snapshot)
+- Collection address (snapshot)
+- Collection notes (snapshot)
+- Collected-from-sender timestamp (nullable)
+- Received-at-company timestamp
+- Received-at-company confirmed by (user)
+
+The current delivery driver (§6.3 area / §17) is a separate concept from the current
+collection driver and must not be confused with it.
 
 ---
 
@@ -536,25 +799,51 @@ The customer can view this transaction from their portal.
 
 # 15. Driver Assignment
 
-An order does not need to have a driver immediately when created.
+There are **two independent assignments** on an order:
+
+1. **Parcel Collection assignment** — the driver who brings the parcel from the sender to
+   the company. Applies only to `DRIVER_COLLECTION` orders.
+2. **Delivery assignment** — the driver who delivers the parcel from the company to the
+   receiver. Applies to every order.
+
+They are separate assignments with separate permanent histories. The same physical driver
+may hold both for one order at different times.
+
+## 15.1 Parcel Collection assignment
+
+- Optional at order creation; may be assigned later.
+- May be reassigned any time before successful collection; previous assignment records are
+  preserved.
+- Only active drivers should normally receive new collection assignments.
+
+## 15.2 Delivery assignment
+
+An order does not need a delivery driver immediately when created.
+
+For `DRIVER_COLLECTION` orders, a delivery driver **cannot** be assigned until the Parcel
+Collection state is `RECEIVED_AT_COMPANY` (§5A.9). For `ALREADY_AT_COMPANY` orders a
+delivery driver may be assigned as soon as the existing order workflow allows.
 
 An employee may:
 
 ### Create Order Only
 
-The order remains ready for assignment.
+The order remains awaiting collection assignment or ready for delivery assignment,
+depending on the intake method.
 
-or:
+### Create & Assign Collection Driver
 
-### Create and Assign
+For a `DRIVER_COLLECTION` order, a collection driver is selected immediately.
 
-A driver is selected immediately.
+### Create & Assign (Delivery)
+
+For an order already received at the company, a delivery driver is selected immediately.
 
 Employees must be able to:
 
-- Assign a driver
-- Change the assigned driver
-- Bulk assign multiple orders to one driver
+- Assign / change the collection driver
+- Assign / change the delivery driver
+- Bulk assign multiple **received-at-company** orders to one delivery driver
 
 Only active drivers should normally receive new assignments.
 
@@ -575,6 +864,10 @@ Assign selected orders to:
 **Driver Ali**
 
 This is particularly useful after filtering orders by area.
+
+Bulk assignment means **delivery** assignment. It is atomic: every selected order must have
+Parcel Collection state `RECEIVED_AT_COMPANY`. If any selected order has not been received
+at the company, the whole batch is rejected rather than partially assigned.
 
 ---
 
@@ -599,25 +892,39 @@ Additional exception statuses include:
 
 Not every order must pass through every exception status.
 
+## 17.1 Order status vs. physical parcel possession
+
+The order/delivery status (`RECEIVED` … `DELIVERED`) and the **physical Parcel Intake
+state** (§5A.3) are two separate things. Company possession of the parcel is determined by
+the Parcel Intake state / receipt information, **not** by `OrderStatus = RECEIVED` alone.
+A `DRIVER_COLLECTION` order can be in status `RECEIVED` while the parcel is still with the
+sender.
+
 ---
 
 # 18. Status Definitions
 
 ## Received
 
-The order was entered into the system and received by the company.
+The order has been entered and recorded in the system. This status alone does **not** prove
+that the company physically holds the parcel. For `DRIVER_COLLECTION` orders the parcel may
+still be with the sender; company possession is confirmed separately through the Parcel
+Collection workflow (`RECEIVED_AT_COMPANY`, §5A.6). For `ALREADY_AT_COMPANY` orders the
+parcel is at the company from creation.
 
 ## Ready for Pickup
 
-The package is prepared and ready for a driver.
+The parcel is at the company, prepared and ready for a delivery driver.
 
 ## Assigned
 
-A driver has been assigned.
+A delivery driver has been assigned. (Reaching this status requires the parcel to have been
+received at the company — see §5A.9. Collection-driver assignment is tracked separately in
+the Parcel Collection state, not in the order status.)
 
 ## Picked Up
 
-The driver confirms possession of the package.
+The delivery driver confirms possession of the parcel, taken from the company.
 
 ## Out for Delivery
 
@@ -647,7 +954,9 @@ The package was returned to the original sender/customer.
 
 ## Cancelled
 
-The order was cancelled.
+The order was cancelled. Cancellation is rejected while parcel collection is at
+`COLLECTED_FROM_SENDER` (a driver still holds the parcel) — see §5A.12. Cancelling from
+`ASSIGNED` also closes the active parcel collection assignment in the same transaction.
 
 ---
 
@@ -667,6 +976,31 @@ Possible reasons include:
 - Other
 
 If Other is selected, a note should be required.
+
+---
+
+# 19A. Failed Collection Reasons
+
+Failed **parcel collection** uses its own configurable reason catalog, separate from Failed
+Delivery Reasons. The datasets must not be merged.
+
+Initial reasons:
+
+- Sender unavailable
+- Parcel not ready
+- Unable to contact sender
+- Incorrect collection address
+- Sender requested reschedule
+- Collection cancelled by sender
+- Other
+
+If Other is selected, notes are required. Each reason has `requires_notes`, `is_active`, and
+`sort_order`. Inactive reasons stay visible on historical attempts but are not offered for
+new failures. There is no hard delete in normal settings management.
+
+The reason *"Collection cancelled by sender"* records a sender-driven **collection failure**
+on a `FAILED` attempt. It is not the same as cancelling the whole order (§5A.12), which is
+an order-level action with its own assignment end reason.
 
 ---
 
@@ -692,14 +1026,30 @@ An authorized employee can add an additional delivery charge where company polic
 
 The Driver Portal should be optimized for mobile use and remain simple.
 
+The portal is organized around assigned **jobs**, which are of two types:
+
+```text
+COLLECTION   Sender -> Company   (collect the parcel from the sender)
+DELIVERY     Company -> Receiver (deliver the parcel to the receiver)
+```
+
+A driver may hold both a collection job and a delivery job for the same order at different
+times.
+
 The driver's main screen should show:
 
-- Assigned
+- Collection jobs (to collect / collected)
+- Assigned (delivery)
 - Out for Delivery
 - Completed
 - Failed / Returned
 
-For each assigned order, the driver sees only information necessary for delivery.
+For a collection job the driver sees only what is needed to collect the parcel: sender /
+collection contact, collection address, collection notes, and order identification.
+Collection job actions are **Collected From Sender** and **Failed Collection** (with a
+reason). The driver does not confirm company receipt.
+
+For a delivery job the driver sees only information necessary for delivery.
 
 ---
 
@@ -858,10 +1208,13 @@ Each order row should display important information such as:
 - Receiver phone
 - Area
 - Order type
+- Intake method
+- Parcel collection status
 - Order amount
 - Delivery fee
 - Amount to collect
-- Driver
+- Collection driver
+- Delivery driver
 - Payment type
 - Status
 - Created date
@@ -886,17 +1239,21 @@ Employees should be able to search using:
 Filters should include:
 
 - Status
-- Driver
+- Intake method
+- Parcel collection status
+- Collection driver
+- Delivery driver
 - Customer
 - Order type
 - Area
 - Payment type
 - Payment method
 - Date range
-- Assigned / unassigned
+- Assigned / unassigned (delivery)
 - Delivered / undelivered
 
-Filters should be combinable.
+Filters should be combinable. The collection-driver filter and the delivery-driver filter
+are separate; do not overload a single generic "driver" filter.
 
 ---
 
@@ -941,14 +1298,30 @@ The management Order Detail page should contain several sections.
 - Company amount
 - Customer wallet amount
 
+## Parcel Intake / Collection
+
+- Parcel Intake Method
+- Parcel Collection Status
+- Collection contact snapshot
+- Collection address snapshot
+- Current collection driver
+- Collection assignment history
+- Collection attempts (permanent)
+- Collected-from-sender timestamp
+- Received-at-company timestamp
+- Received-at-company confirmed by
+
 ## Delivery
 
-- Assigned driver
+- Assigned delivery driver
 - Assignment date
 - Pickup date
 - Out-for-delivery date
 - Delivery date
 - Failure information, if applicable
+
+The Parcel Intake / Collection section and the Delivery section are kept separate. The order
+timeline combines both workflows chronologically while preserving each event's type.
 
 ## History
 
@@ -1035,7 +1408,19 @@ Customers may open an order to view basic details and tracking.
 
 Customers do not need every internal status.
 
-The customer-facing stages should be simplified to:
+The customer-facing stages should be simplified.
+
+For orders that require driver collection:
+
+1. **Order Created**
+2. **Collection Scheduled**
+3. **Parcel Collected**
+4. **Received at Company**
+5. **Preparing for Delivery**
+6. **Out for Delivery**
+7. **Delivered**
+
+For orders already at the company, the collection stages are omitted:
 
 1. **Order Received**
 2. **Ready for Delivery**
@@ -1075,14 +1460,20 @@ The public page should display only safe information such as:
 - Delivered status
 - Possibly delivery date
 
+Public tracking may expose safe simplified milestones only (e.g. Order Created, Parcel
+Collected, Received at Company, Preparing for Delivery, Out for Delivery, Delivered).
+
 The public page must not expose:
 
 - Customer wallet
 - Company revenue
 - Internal notes
-- Internal employee information
+- Internal employee information (including the employee who confirmed company receipt)
 - Driver cash information
 - Full accounting details
+- Sender / collection contact name, phone, or address
+- Collection driver identity or contact
+- Internal collection failure detail
 
 Driver contact information should only be exposed later if the company explicitly decides to allow it.
 
@@ -1095,14 +1486,23 @@ The management dashboard should provide a quick operational overview.
 ## Order Statistics
 
 - Orders received today
+- Awaiting collection assignment
+- Collection in progress
+- Collection failed / attention required
+- Collected — awaiting company receipt
+- Ready for delivery assignment
 - Ready for pickup
-- Unassigned
-- Assigned
+- Assigned (delivery)
 - Out for delivery
 - Delivered today
 - Failed today
 - Returned
 - Cancelled
+
+**"Ready for delivery assignment"** means: parcel received at the company AND no current
+delivery driver AND the order is otherwise eligible for delivery assignment. An order with
+no delivery driver whose parcel collection is still in progress is **not** a delivery
+assignment problem and must not be counted as delivery-unassigned.
 
 ## Driver Statistics
 
@@ -1110,7 +1510,11 @@ The management dashboard should provide a quick operational overview.
 - Drivers currently delivering
 - Deliveries assigned per driver
 - Deliveries completed today
+- Active collection jobs
+- Collections completed today
 - Cash currently held by drivers
+
+Collection activity is reported separately and must not be merged into delivery metrics.
 
 ## Financial Statistics
 
@@ -1149,12 +1553,21 @@ The system should eventually support reports such as:
 
 ## Driver Reports
 
-- Orders assigned
+Existing delivery metrics keep their current meaning and must not silently start including
+parcel collection activity:
+
+- Orders assigned (delivery)
 - Orders delivered
-- Failed attempts
+- Failed delivery attempts
 - Delivery success rate
 - Money collected
 - Settlement history
+
+Parcel collection metrics are reported as separate dimensions where needed for V1:
+
+- Collection assignments
+- Collections completed
+- Failed collection attempts
 
 ## Customer Reports
 
@@ -1189,8 +1602,12 @@ Examples:
 
 - Order created
 - Order edited
-- Driver assigned
-- Driver reassigned
+- Collection driver assigned
+- Collection driver reassigned
+- Company receipt confirmed (Received At Company)
+- Failed Collection Reason configuration changed
+- Delivery driver assigned
+- Delivery driver reassigned
 - Status changed
 - Delivery failed
 - Delivery completed
@@ -1199,6 +1616,11 @@ Examples:
 - Customer payout created
 - Driver settlement created
 - Financial adjustment made
+
+Operational parcel-collection events (Collected From Sender, Collection Failed, Collection
+Rescheduled, collection attempts) belong to the parcel-collection operational history, which
+is separate from the management audit log. The audit log records the sensitive management
+actions above; it does not replace collection attempt/assignment history.
 
 Each audit entry should include:
 
@@ -1246,6 +1668,12 @@ The system should enforce rules including:
 - Tracking code must be unique.
 - Order number must be unique.
 - Driver must normally be active before new assignment.
+- A delivery driver may not be assigned until the Parcel Collection state is `RECEIVED_AT_COMPANY`.
+- A collection driver may only be assigned to a `DRIVER_COLLECTION` order that has not yet been received at the company.
+- A parcel collection attempt failure requires a configured reason (and notes where the reason requires them).
+- Parcel collection actions must not create any wallet, driver-cash, or company-finance transaction.
+- An order cannot be cancelled while parcel collection is at `COLLECTED_FROM_SENDER` (§5A.12).
+- A cancelled order must never retain a current parcel collection assignment or a current collection driver.
 - Delivered order cannot be deleted through normal operations.
 - Cancelled order cannot become delivered without a valid reopening process.
 - Wallet cannot be credited twice for the same delivery.
@@ -1333,8 +1761,13 @@ A typical employee workflow is:
 11. System calculates remaining amount.
 12. System calculates amount driver must collect.
 13. Add delivery instructions.
-14. Optionally assign a driver.
-15. Save order.
+14. Choose Parcel Intake Method:
+    - Already at Company
+    - Collection by Driver Required (pre-fills collection contact/address from the customer;
+      optionally assign a collection driver now)
+15. Optionally assign a delivery driver (only when the parcel is already at the company).
+16. Save order — the action label reflects what is assigned
+    (Create Order / Create & Assign Collection Driver / Create & Assign).
 
 The system generates:
 
@@ -1379,9 +1812,12 @@ Amount to collect: $105
 
 Flow:
 
-1. Customer gives package to company.
-2. Employee creates Delivery Only order.
-3. Driver assigned.
+1. Employee creates the Delivery Only order and chooses the Parcel Intake Method.
+2. The parcel reaches the company:
+   - **Already at Company:** the sender brought it in; receipt is recorded on creation.
+   - **Driver Collection:** a collection driver is assigned, confirms "Collected From
+     Sender", brings the parcel in, and Management confirms "Received At Company".
+3. Delivery driver assigned (only allowed once the parcel is received at the company).
 4. Driver picks up package.
 5. Driver starts delivery.
 6. Receiver pays $105.
@@ -1441,7 +1877,7 @@ The complete history remains recorded.
 
 ## Driver Portal
 
-- My Orders
+- My Jobs (collection jobs + delivery jobs)
 - Out for Delivery
 - Completed
 - Failed / Returned
@@ -1470,20 +1906,22 @@ Priority features:
 4. Order creation
 5. Order types
 6. Payment calculations
-7. Driver assignment
-8. Delivery statuses
-9. Driver portal
-10. Successful/failed delivery handling
-11. Customer wallets
-12. Wallet transactions
-13. Customer payouts
-14. Driver cash balances
-15. Driver settlements
-16. Customer portal
-17. Public tracking
-18. Dashboard
-19. Search and filters
-20. Audit history
+7. Parcel intake (already at company / driver collection) and company receipt
+8. Parcel collection assignment, failure, reschedule
+9. Driver assignment (collection and delivery)
+10. Delivery statuses
+11. Driver portal
+12. Successful/failed delivery handling
+13. Customer wallets
+14. Wallet transactions
+15. Customer payouts
+16. Driver cash balances
+17. Driver settlements
+18. Customer portal
+19. Public tracking
+20. Dashboard
+21. Search and filters
+22. Audit history
 
 ---
 
@@ -1562,6 +2000,34 @@ Management has the detailed operational and financial view.
 ### Rule 14
 Public tracking exposes only safe basic delivery status information.
 
+### Rule 15
+Every order has a Parcel Intake Method (`ALREADY_AT_COMPANY` or `DRIVER_COLLECTION`) that is
+independent of Order Type.
+
+### Rule 16
+Parcel collection and financial cash collection are separate domains. Parcel collection is
+free and financially neutral in V1 (no wallet, driver-cash, or company-finance posting).
+
+### Rule 17
+Parcel collection and final delivery are separate assignments with separate permanent
+histories; the same driver may perform both for one order.
+
+### Rule 18
+The collection driver confirms "Collected From Sender"; only authorized Management confirms
+"Received At Company".
+
+### Rule 19
+A delivery driver may not be assigned until the parcel's collection state is
+`RECEIVED_AT_COMPANY`.
+
+### Rule 20
+Failed collection and failed delivery are separate, with separate reason catalogs; a failed
+collection does not cancel the order.
+
+### Rule 21
+Customer collection contact/address is snapshotted onto the order and is not rewritten by
+later customer-profile edits.
+
 ---
 
 # 53. Final System Structure
@@ -1574,20 +2040,21 @@ The complete system consists of these main business modules:
 4. **Employee Management**
 5. **Driver Management**
 6. **Order Management**
-7. **Delivery Assignment**
-8. **Delivery Workflow**
-9. **Driver Portal**
-10. **Customer Portal**
-11. **Public Tracking**
-12. **Customer Wallet**
-13. **Wallet Transactions**
-14. **Customer Payouts**
-15. **Driver Cash Management**
-16. **Driver Settlements**
-17. **Company Revenue / Finance**
-18. **Reports**
-19. **Audit Logs**
-20. **System Settings**
+7. **Parcel Intake & Collection**
+8. **Delivery Assignment**
+9. **Delivery Workflow**
+10. **Driver Portal**
+11. **Customer Portal**
+12. **Public Tracking**
+13. **Customer Wallet**
+14. **Wallet Transactions**
+15. **Customer Payouts**
+16. **Driver Cash Management**
+17. **Driver Settlements**
+18. **Company Revenue / Finance**
+19. **Reports**
+20. **Audit Logs**
+21. **System Settings**
 
 This document should be treated as the **baseline functional requirements for Version 1** of the Delivery Management System.
 

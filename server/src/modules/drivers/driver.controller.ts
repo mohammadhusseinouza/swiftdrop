@@ -1,10 +1,10 @@
 import { RequestHandler } from "express";
 import { AppError } from "../../shared/errors/app-error";
 import { createDriver, getDriverById, listDrivers, updateDriver } from "./driver.service";
-import { listDriverCurrentOrders, listDriverDeliveryHistory } from "./driver-work.service";
+import { listDriverCurrentOrders, listDriverDeliveryHistory, listDriverParcelCollectionHistory } from "./driver-work.service";
 import type { CreateDriverInput, DriverWorkListQuery, ListDriversQuery, UpdateDriverInput } from "./driver.schema";
 import type { DriverDetail, DriverSummary } from "./driver.types";
-import type { DriverDeliveryHistoryRow } from "./driver-work.types";
+import type { DriverDeliveryHistoryRow, DriverParcelCollectionHistoryRow } from "./driver-work.types";
 import type { OrderSummary } from "../orders/order.types";
 import type { ApiListResponse, ApiSuccessResponse } from "../../shared/types/api-response";
 
@@ -100,6 +100,25 @@ export const listDriverDeliveryHistoryController: RequestHandler<
   try {
     const query = req.query as unknown as DriverWorkListQuery;
     const { items, total } = await listDriverDeliveryHistory(req.params.id, query);
+    const totalPages = Math.ceil(total / query.limit);
+    res.json({
+      success: true,
+      data: items,
+      meta: { page: query.page, limit: query.limit, total, totalPages },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// GET /api/v1/drivers/:id/parcel-collection-history (Phase 11.17.6, task §27).
+export const listDriverParcelCollectionHistoryController: RequestHandler<
+  { id: string },
+  ApiListResponse<DriverParcelCollectionHistoryRow>
+> = async (req, res, next) => {
+  try {
+    const query = req.query as unknown as DriverWorkListQuery;
+    const { items, total } = await listDriverParcelCollectionHistory(req.params.id, query);
     const totalPages = Math.ceil(total / query.limit);
     res.json({
       success: true,

@@ -1,6 +1,7 @@
 import { Prisma } from "../../generated/prisma/client";
 import { prisma } from "../../db/prisma";
 import { getUtcDayBoundary } from "../../shared/date/day-boundary";
+import { buildWorkflowQueueWhere, WORKFLOW_QUEUE_VALUES } from "../orders/order-workflow-queue";
 import type {
   DashboardActivityItem,
   DashboardAttention,
@@ -9,6 +10,7 @@ import type {
   DashboardDriverMetrics,
   DashboardFinanceMetrics,
   DashboardOrderMetrics,
+  DashboardParcelCollectionMetrics,
   DashboardSummary,
 } from "./dashboard.types";
 
@@ -97,11 +99,38 @@ async function getOrderMetrics(dayBoundary: { start: Date; end: Date }): Promise
 }
 
 // ============================================================
+// PARCEL COLLECTION METRICS (Phase 11.17.6 — requirements.md §37)
+//
+// Every count reuses order-workflow-queue.ts's buildWorkflowQueueWhere — the
+// SAME predicate the Orders List `workflowQueue` filter uses — so the
+// Dashboard and the Orders List quick tabs can never disagree for the same
+// data state (task §80). Never gated by finance.read: Parcel Collection is
+// financially neutral.
+// ============================================================
+
+async function getParcelCollectionMetrics(): Promise<DashboardParcelCollectionMetrics> {
+  const [awaitingCollectionAssignment, collectionInProgress, collectionAttention, awaitingCompanyReceipt, readyForDeliveryAssignment] =
+    await Promise.all(
+      WORKFLOW_QUEUE_VALUES.map((queue) => prisma.orders.count({ where: buildWorkflowQueueWhere(queue) }))
+    );
+
+  return {
+    awaitingCollectionAssignment,
+    collectionInProgress,
+    collectionAttention,
+    awaitingCompanyReceipt,
+    readyForDeliveryAssignment,
+  };
+}
+
+// ============================================================
 // DRIVER METRICS
 // ============================================================
 
 async function getDriverMetrics(deliveredTodayCount: number, hasFinanceRead: boolean): Promise<DashboardDriverMetrics> {
-  const [activeDrivers, currentlyDeliveringRows, ordersAssigned] = await Promise.all([
+  const { start, end } = getUtcDayBoundary();
+
+  const [activeDrivers, currentlyDeliveringRows, ordersAssigned, activeCollectionJobs, collectionsCompletedToday] = await Promise.all([
     prisma.drivers.count({ where: { is_active: true } }),
     // DISTINCT current Driver IDs — one Driver with several OUT_FOR_DELIVERY
     // Orders counts once (Phase 9.1 contract), never Order count.
@@ -115,6 +144,20 @@ async function getDriverMetrics(deliveredTodayCount: number, hasFinanceRead: boo
     // assignment untouched), so it legitimately belongs here; DELIVERED/
     // CANCELLED/RETURNED/FAILED_DELIVERY historical assignments do not.
     prisma.orders.count({ where: { status: { in: [...ACTIVE_ASSIGNED_STATUSES] }, current_driver_id: { not: null } } }),
+    // "Active collection jobs" (requirements.md §37 Driver Statistics) —
+    // identical population to the COLLECTION_IN_PROGRESS queue.
+    prisma.orders.count({ where: buildWorkflowQueueWhere("COLLECTION_IN_PROGRESS") }),
+    // "Collections completed today" — company receipt confirmed today.
+    // received_at_company_at is set for BOTH intake methods (ALREADY_AT_COMPANY
+    // at creation), so this is scoped to DRIVER_COLLECTION only — an
+    // ALREADY_AT_COMPANY order never represents completed Driver collection
+    // work.
+    prisma.orders.count({
+      where: {
+        parcel_intake_method: "DRIVER_COLLECTION",
+        received_at_company_at: { gte: start, lt: end },
+      },
+    }),
   ]);
 
   let driversWithUnsettledCash: number | null = null;
@@ -135,6 +178,8 @@ async function getDriverMetrics(deliveredTodayCount: number, hasFinanceRead: boo
     deliveriesCompletedToday: deliveredTodayCount,
     driversWithUnsettledCash,
     totalDriverCashHeld,
+    activeCollectionJobs,
+    collectionsCompletedToday,
   };
 }
 
@@ -254,15 +299,28 @@ async function getAttention(): Promise<DashboardAttention> {
   // ANDed here as an integrity expectation, not merely a filter. A row
   // where they disagree is flagged (logged), never silently included or
   // silently "repaired" by this read-only endpoint (CLAUDE.md §62/§68).
+  const collectionAttentionWhere = buildWorkflowQueueWhere("COLLECTION_ATTENTION");
+  // Phase 11.17.6 correction — replaces the old UNASSIGNED_STATUSES-based
+  // query (`status IN (RECEIVED, READY_FOR_PICKUP) AND current_driver_id IS
+  // NULL`), which silently included orders whose Parcel Collection was
+  // still in progress (AWAITING_ASSIGNMENT/ASSIGNED/FAILED/RESCHEDULED/
+  // COLLECTED_FROM_SENDER) as a false Delivery-assignment problem. Reuses
+  // the exact same shared predicate as the Orders List `workflowQueue`
+  // filter and the `parcelCollection.readyForDeliveryAssignment` metric —
+  // never a second, independently-drifting definition.
+  const readyForDeliveryWhere = buildWorkflowQueueWhere("READY_FOR_DELIVERY_ASSIGNMENT");
+
   const [
     financialReviewRows,
     failedRows,
-    unassignedRows,
+    readyForDeliveryRows,
     returnedRows,
-    unassignedCount,
+    collectionAttentionRows,
+    readyForDeliveryCount,
     failedCount,
     collectionDifferenceCount,
     returnedCount,
+    collectionAttentionCount,
     inconsistentReviewCount,
   ] = await Promise.all([
     prisma.orders.findMany({
@@ -278,7 +336,7 @@ async function getAttention(): Promise<DashboardAttention> {
       take: ATTENTION_CATEGORY_QUERY_LIMIT,
     }),
     prisma.orders.findMany({
-      where: { status: { in: [...UNASSIGNED_STATUSES] }, current_driver_id: null },
+      where: readyForDeliveryWhere,
       select: attentionOrderSelect,
       orderBy: [{ created_at: "asc" }, { id: "asc" }],
       take: ATTENTION_CATEGORY_QUERY_LIMIT,
@@ -289,10 +347,20 @@ async function getAttention(): Promise<DashboardAttention> {
       orderBy: [{ updated_at: "asc" }, { id: "asc" }],
       take: ATTENTION_CATEGORY_QUERY_LIMIT,
     }),
-    prisma.orders.count({ where: { status: { in: [...UNASSIGNED_STATUSES] }, current_driver_id: null } }),
+    // Phase 11.17.6 — a FAILED Parcel Collection needs a Management decision
+    // (reassign / reschedule). Same shared queue predicate as the Orders
+    // List / Dashboard operational count — never a second definition.
+    prisma.orders.findMany({
+      where: collectionAttentionWhere,
+      select: attentionOrderSelect,
+      orderBy: [{ updated_at: "asc" }, { id: "asc" }],
+      take: ATTENTION_CATEGORY_QUERY_LIMIT,
+    }),
+    prisma.orders.count({ where: readyForDeliveryWhere }),
     prisma.orders.count({ where: { status: "FAILED_DELIVERY" } }),
     prisma.orders.count({ where: { needs_financial_review: true, financial_status: "REVIEW_REQUIRED" } }),
     prisma.orders.count({ where: { status: { in: [...RETURNED_STATUSES] } } }),
+    prisma.orders.count({ where: collectionAttentionWhere }),
     prisma.orders.count({
       where: {
         OR: [
@@ -309,22 +377,27 @@ async function getAttention(): Promise<DashboardAttention> {
     );
   }
 
-  // Deterministic priority: FINANCIAL_REVIEW > FAILED_DELIVERY > UNASSIGNED
-  // > RETURNED (Phase 9.1 contract); oldest-first within each category
+  // Deterministic priority: FINANCIAL_REVIEW > FAILED_DELIVERY >
+  // COLLECTION_ATTENTION > READY_FOR_DELIVERY_ASSIGNMENT > RETURNED (Phase
+  // 9.1 contract, extended Phase 11.17.6 — a failed collection sits
+  // alongside a failed delivery as an operational failure, ahead of the
+  // plain "needs assignment" categories); oldest-first within each category
   // (longest-waiting is most urgent), bounded to ATTENTION_ITEM_LIMIT total.
   const items: DashboardAttentionItem[] = [
     ...financialReviewRows.map((row) => toAttentionItem(row, "FINANCIAL_REVIEW", row.delivered_at ?? row.created_at)),
     ...failedRows.map((row) => toAttentionItem(row, "FAILED_DELIVERY", row.updated_at)),
-    ...unassignedRows.map((row) => toAttentionItem(row, "UNASSIGNED", row.created_at)),
+    ...collectionAttentionRows.map((row) => toAttentionItem(row, "COLLECTION_ATTENTION", row.updated_at)),
+    ...readyForDeliveryRows.map((row) => toAttentionItem(row, "READY_FOR_DELIVERY_ASSIGNMENT", row.created_at)),
     ...returnedRows.map((row) => toAttentionItem(row, "RETURNED", row.updated_at)),
   ].slice(0, ATTENTION_ITEM_LIMIT);
 
   return {
     counts: {
-      unassigned: unassignedCount,
+      readyForDeliveryAssignment: readyForDeliveryCount,
       failedDeliveries: failedCount,
       collectionDifferences: collectionDifferenceCount,
       returned: returnedCount,
+      collectionAttention: collectionAttentionCount,
     },
     items,
   };
@@ -442,10 +515,11 @@ export async function getDashboardSummary(permissions: string[]): Promise<Dashbo
   const hasFinanceRead = permissions.includes("finance.read");
   const dayBoundary = getUtcDayBoundary();
 
-  const [orderMetrics, attention, recentActivity] = await Promise.all([
+  const [orderMetrics, attention, recentActivity, parcelCollection] = await Promise.all([
     getOrderMetrics(dayBoundary),
     getAttention(),
     getRecentActivity(permissions),
+    getParcelCollectionMetrics(),
   ]);
 
   const { deliveredTodayCount, ...orders } = orderMetrics;
@@ -461,5 +535,6 @@ export async function getDashboardSummary(permissions: string[]): Promise<Dashbo
     finance,
     attention,
     recentActivity,
+    parcelCollection,
   };
 }

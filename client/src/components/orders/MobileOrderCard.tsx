@@ -3,6 +3,7 @@ import { Phone, MapPin } from 'lucide-react';
 import { cn } from '../ui/cn';
 import { StatusBadge } from './StatusBadge';
 import { OrderTypeBadge } from './OrderTypeBadge';
+import { ParcelIntakeBadge } from './ParcelCollectionBadge';
 
 export interface MobileOrderCardData {
   orderNumber: string;
@@ -13,8 +14,13 @@ export interface MobileOrderCardData {
   area?: string;
   /** Pre-formatted, display-safe money string (e.g. "$120.00"). */
   amountToCollect?: string;
+  /** The FINAL DELIVERY driver. */
   driverName?: string;
+  /** The current COLLECTION driver — DISTINCT from driverName (Phase 11.17.6). */
+  collectionDriverName?: string;
   createdAt?: string;
+  /** Parcel Intake at-a-glance (Phase 11.17.5). */
+  parcelIntake?: { method: string; status: string };
 }
 
 export interface MobileOrderCardProps {
@@ -96,17 +102,31 @@ export function MobileOrderCard({
               )}
             </div>
 
-            <div className="mt-2 flex items-center justify-between gap-2">
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
               <OrderTypeBadge orderType={order.orderType} />
-              {order.amountToCollect && (
-                <span className="text-sm font-semibold tabular-nums text-ink">
-                  {order.amountToCollect}
-                </span>
+              {order.parcelIntake && (
+                <ParcelIntakeBadge
+                  method={order.parcelIntake.method}
+                  status={order.parcelIntake.status}
+                />
               )}
             </div>
 
+            {order.amountToCollect && (
+              <div className="mt-2 flex items-center justify-end gap-2">
+                <span className="text-sm font-semibold tabular-nums text-ink">
+                  {order.amountToCollect}
+                </span>
+              </div>
+            )}
+
             <p className="mt-1.5 text-xs text-ink-subtle">
-              {order.driverName ? `Driver: ${order.driverName}` : 'Unassigned'}
+              {order.driverName
+                ? `Delivery: ${order.driverName}`
+                : 'Delivery: Unassigned'}
+              {order.collectionDriverName
+                ? ` · Collection: ${order.collectionDriverName}`
+                : ''}
               {order.createdAt ? ` · ${order.createdAt}` : ''}
             </p>
           </Wrapper>

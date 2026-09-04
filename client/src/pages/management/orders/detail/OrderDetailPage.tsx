@@ -32,6 +32,7 @@ import { ErrorState } from '../../../../components/feedback/ErrorState';
 import { getOrderDetailActions } from './orderDetailActions';
 import { ActionMenu, type ActionMenuItem } from './ActionMenu';
 import { DriverDialog } from './DriverDialog';
+import { ParcelCollectionSection } from './ParcelCollectionSection';
 import { ReasonDialog } from './ReasonDialog';
 import { EditOrderDialog } from './EditOrderDialog';
 import {
@@ -258,6 +259,15 @@ export default function OrderDetailPage() {
         Assign driver
       </Button>
     );
+  } else if (actions.assignBlockedByParcel) {
+    primaryAction = (
+      <Button
+        disabled
+        title="The parcel must be received at the company before a delivery driver can be assigned."
+      >
+        Assign driver
+      </Button>
+    );
   } else if (actions.canReassign) {
     primaryAction = (
       <Button onClick={() => openDialog('reassign')} disabled={busy}>
@@ -297,6 +307,14 @@ export default function OrderDetailPage() {
       label: 'Cancel order',
       danger: true,
       onSelect: () => openDialog('cancel'),
+    });
+  } else if (actions.cancelBlockedByCustody) {
+    menuItems.push({
+      key: 'cancel',
+      label: 'Cancel order',
+      disabled: true,
+      hint: 'The collection driver is holding the parcel. Confirm it has been received at the company first.',
+      onSelect: () => {},
     });
   }
 
@@ -444,6 +462,7 @@ export default function OrderDetailPage() {
           <OrderSummarySection order={order} />
           <ReceiverSection order={order} />
           <PackageSection order={order} />
+          <ParcelCollectionSection order={order} />
           <DeliverySection order={order} canViewDriver={canViewDriver} />
           <AssignmentHistorySection order={order} />
           <DeliveryAttemptsSection order={order} />

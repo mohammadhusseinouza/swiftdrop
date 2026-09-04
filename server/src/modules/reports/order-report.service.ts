@@ -1,6 +1,7 @@
 import { Prisma } from "../../generated/prisma/client";
 import { prisma } from "../../db/prisma";
 import { resolveRange, type ResolvedRange } from "../finance/finance-summary.service";
+import { buildWorkflowQueueWhere, WORKFLOW_QUEUE_VALUES } from "../orders/order-workflow-queue";
 import type { OrderReportQuery } from "./report.schema";
 import type {
   OrderReportAreaRow,
@@ -9,6 +10,7 @@ import type {
   OrderReportDriverRow,
   OrderReportDto,
   OrderReportOutcomeSummary,
+  OrderReportParcelSummary,
   OrderReportRow,
   OrderReportStatusRow,
   OrderReportSummary,
@@ -67,6 +69,13 @@ function baseWhere(query: OrderReportQuery, range: ResolvedRange): Prisma.orders
   if (query.areaId) where.receiver_area_id = query.areaId;
   if (query.status) where.status = query.status;
   if (query.orderType) where.order_type = query.orderType;
+  // Phase 11.17.6 (task §34) — Parcel Intake filters, independent of
+  // OrderType. parcelCollectionDriverId filters CURRENT collection work
+  // only (current_parcel_collection_driver_id), same convention as the
+  // Orders List filter.
+  if (query.parcelIntakeMethod) where.parcel_intake_method = query.parcelIntakeMethod;
+  if (query.parcelCollectionStatus) where.parcel_collection_status = query.parcelCollectionStatus;
+  if (query.parcelCollectionDriverId) where.current_parcel_collection_driver_id = query.parcelCollectionDriverId;
   return where;
 }
 
@@ -117,6 +126,37 @@ async function getSummary(where: Prisma.ordersWhereInput): Promise<OrderReportSu
     totalDeliveryFee: toAmount(totals._sum.delivery_fee),
     totalExpectedCollection: toAmount(totals._sum.amount_to_collect),
     totalActualCollection: toAmount(totals._sum.actual_amount_collected),
+  };
+}
+
+// ------------------------------------------------------------
+// PARCEL SUMMARY (Phase 11.17.6, task §34) — always computed over the base
+// population, regardless of groupBy, mirroring `summary` above. The five
+// operational-queue counts are combined with the report's own population
+// `where` via an explicit `AND: [...]` branch (never spread into one object)
+// so an overlapping key — e.g. the queue's own `status` condition and the
+// report's `status` filter — both apply, exactly like order.service.ts's
+// listOrders() workflowQueue composition. Reuses order-workflow-queue.ts's
+// single authoritative predicate — never a second, drifting definition.
+// ------------------------------------------------------------
+async function getParcelSummary(where: Prisma.ordersWhereInput): Promise<OrderReportParcelSummary> {
+  const [alreadyAtCompanyOrders, driverCollectionOrders, ...queueCounts] = await Promise.all([
+    prisma.orders.count({ where: { ...where, parcel_intake_method: "ALREADY_AT_COMPANY" } }),
+    prisma.orders.count({ where: { ...where, parcel_intake_method: "DRIVER_COLLECTION" } }),
+    ...WORKFLOW_QUEUE_VALUES.map((queue) => prisma.orders.count({ where: { AND: [where, buildWorkflowQueueWhere(queue)] } })),
+  ]);
+
+  const [awaitingCollectionAssignment, collectionInProgress, collectionAttention, awaitingCompanyReceipt, readyForDeliveryAssignment] =
+    queueCounts;
+
+  return {
+    alreadyAtCompanyOrders,
+    driverCollectionOrders,
+    awaitingCollectionAssignment,
+    collectionInProgress,
+    collectionAttention,
+    awaitingCompanyReceipt,
+    readyForDeliveryAssignment,
   };
 }
 
@@ -348,10 +388,11 @@ export async function getOrderReport(query: OrderReportQuery): Promise<OrderRepo
   const range = resolveRange(query);
   const where = baseWhere(query, range);
 
-  const [summary, outcome, rows] = await Promise.all([
+  const [summary, outcome, rows, parcel] = await Promise.all([
     getSummary(where),
     query.groupBy === "outcome" ? getOutcomeSummary(where) : Promise.resolve(null),
     getRows(query, where, range),
+    getParcelSummary(where),
   ]);
 
   return {
@@ -362,6 +403,7 @@ export async function getOrderReport(query: OrderReportQuery): Promise<OrderRepo
     summary,
     outcome,
     rows,
+    parcel,
   };
 }
 

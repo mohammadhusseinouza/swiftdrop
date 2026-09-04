@@ -14,6 +14,12 @@ import {
   getOrderTypeLabel,
   getPaymentTypePresentation,
 } from '../../../components/orders/orderStatus';
+import {
+  PARCEL_COLLECTION_STATUSES,
+  PARCEL_INTAKE_METHODS,
+  getParcelCollectionStatusPresentation,
+  getParcelIntakeMethodLabel,
+} from '../../../components/orders/parcelCollection';
 import { ServerSearchSelect } from '../../../components/forms/ServerSearchSelect';
 import type { OrdersListState } from './ordersListParams';
 
@@ -70,8 +76,10 @@ export function OrdersFilterBar({
 
   const [customerTerm, setCustomerTerm] = useState('');
   const [driverTerm, setDriverTerm] = useState('');
+  const [collectionDriverTerm, setCollectionDriverTerm] = useState('');
   const debouncedCustomerTerm = useDebouncedValue(customerTerm, 300);
   const debouncedDriverTerm = useDebouncedValue(driverTerm, 300);
+  const debouncedCollectionDriverTerm = useDebouncedValue(collectionDriverTerm, 300);
 
   const areas = useGetAreasQuery({ isActive: true, limit: 100 });
   // Bounded reference collection (plain array from the backend) — loaded whole.
@@ -86,11 +94,19 @@ export function OrdersFilterBar({
     isActive: true,
     limit: 20,
   });
+  const collectionDrivers = useGetDriversQuery({
+    search: debouncedCollectionDriverTerm.trim() || undefined,
+    isActive: true,
+    limit: 20,
+  });
   const selectedCustomer = useGetCustomerQuery(state.customerId, {
     skip: !state.customerId,
   });
   const selectedDriver = useGetDriverQuery(state.driverId, {
     skip: !state.driverId,
+  });
+  const selectedCollectionDriver = useGetDriverQuery(state.parcelCollectionDriverId, {
+    skip: !state.parcelCollectionDriverId,
   });
 
   // Secondary filters that live behind "More filters".
@@ -99,6 +115,9 @@ export function OrdersFilterBar({
       state.paymentMethodId ||
       state.deliveryStatus ||
       state.assignmentStatus ||
+      state.parcelIntakeMethod ||
+      state.parcelCollectionStatus ||
+      state.parcelCollectionDriverId ||
       state.createdFrom ||
       state.createdTo,
   );
@@ -308,6 +327,67 @@ export function OrdersFilterBar({
               <option value="UNASSIGNED">Unassigned</option>
             </select>
           </Labeled>
+
+          <Labeled label="Parcel intake method">
+            <select
+              className={fieldCls(state.parcelIntakeMethod !== '')}
+              value={state.parcelIntakeMethod}
+              onChange={(e) =>
+                onPatch({
+                  parcelIntakeMethod: e.target
+                    .value as OrdersListState['parcelIntakeMethod'],
+                })
+              }
+            >
+              <option value="">Any intake method</option>
+              {PARCEL_INTAKE_METHODS.map((m) => (
+                <option key={m} value={m}>
+                  {getParcelIntakeMethodLabel(m)}
+                </option>
+              ))}
+            </select>
+          </Labeled>
+
+          <Labeled label="Parcel collection status">
+            <select
+              className={fieldCls(state.parcelCollectionStatus !== '')}
+              value={state.parcelCollectionStatus}
+              onChange={(e) =>
+                onPatch({
+                  parcelCollectionStatus: e.target
+                    .value as OrdersListState['parcelCollectionStatus'],
+                })
+              }
+            >
+              <option value="">Any collection status</option>
+              {PARCEL_COLLECTION_STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {getParcelCollectionStatusPresentation(s).label}
+                </option>
+              ))}
+            </select>
+          </Labeled>
+
+          <ServerSearchSelect
+            label="Collection driver"
+            anyLabel="Any collection driver"
+            searchPlaceholder="Search drivers…"
+            value={state.parcelCollectionDriverId}
+            onChange={(id) => onPatch({ parcelCollectionDriverId: id })}
+            searchTerm={collectionDriverTerm}
+            onSearchTermChange={setCollectionDriverTerm}
+            loading={collectionDrivers.isFetching}
+            total={collectionDrivers.data?.meta.total}
+            options={(collectionDrivers.data?.items ?? []).map((d) => ({
+              id: d.id,
+              label: `${d.driverNumber} · ${d.user.firstName} ${d.user.lastName}`,
+            }))}
+            selectedLabel={
+              selectedCollectionDriver.data
+                ? `${selectedCollectionDriver.data.driverNumber} · ${selectedCollectionDriver.data.user.firstName} ${selectedCollectionDriver.data.user.lastName}`
+                : undefined
+            }
+          />
 
           <DateRangeFilter
             className="sm:col-span-2 lg:col-span-2"

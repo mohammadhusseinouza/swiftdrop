@@ -1,4 +1,5 @@
 import { RequestHandler } from "express";
+import { AppError } from "../../shared/errors/app-error";
 import {
   createPaymentMethod,
   getPaymentMethodById,
@@ -12,6 +13,13 @@ import type {
 } from "./payment-method.schema";
 import type { PaymentMethodSummary } from "./payment-method.types";
 import type { ApiSuccessResponse } from "../../shared/types/api-response";
+
+function requireActorId(req: { actor?: { userId: string } }): string {
+  if (!req.actor) {
+    throw new AppError({ statusCode: 401, code: "UNAUTHORIZED", message: "Authentication required" });
+  }
+  return req.actor.userId;
+}
 
 export const listPaymentMethodsController: RequestHandler<
   Record<string, never>,
@@ -32,7 +40,7 @@ export const createPaymentMethodController: RequestHandler<
   CreatePaymentMethodInput
 > = async (req, res, next) => {
   try {
-    const paymentMethod = await createPaymentMethod(req.body);
+    const paymentMethod = await createPaymentMethod(req.body, requireActorId(req));
     res.status(201).json({ success: true, data: paymentMethod });
   } catch (error) {
     next(error);
@@ -57,7 +65,7 @@ export const updatePaymentMethodController: RequestHandler<
   UpdatePaymentMethodInput
 > = async (req, res, next) => {
   try {
-    const paymentMethod = await updatePaymentMethod(req.params.id, req.body);
+    const paymentMethod = await updatePaymentMethod(req.params.id, req.body, requireActorId(req));
     res.json({ success: true, data: paymentMethod });
   } catch (error) {
     next(error);

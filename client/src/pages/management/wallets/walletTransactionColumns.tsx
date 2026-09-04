@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import type { DataTableColumn } from '../../../components/data-display/DataTable';
 import { Badge } from '../../../components/ui/Badge';
@@ -27,6 +28,8 @@ function notesCell(notes: string | null) {
 export interface WalletTransactionColumnOptions {
   /** Caller holds `orders.read` — render the related order as a link. */
   canViewOrders: boolean;
+  /** Trailing per-row actions (Reverse — Phase 11.12). Omit to hide the column. */
+  renderActions?: (row: WalletTransactionEntry) => ReactNode;
 }
 
 /**
@@ -38,8 +41,9 @@ export interface WalletTransactionColumnOptions {
  */
 export function buildWalletTransactionColumns({
   canViewOrders,
+  renderActions,
 }: WalletTransactionColumnOptions): DataTableColumn<WalletTransactionEntry>[] {
-  return [
+  const cols: DataTableColumn<WalletTransactionEntry>[] = [
     {
       id: 'date',
       header: 'Date',
@@ -136,4 +140,15 @@ export function buildWalletTransactionColumns({
       cell: (t) => notesCell(t.notes),
     },
   ];
+
+  if (renderActions) {
+    cols.push({
+      id: 'actions',
+      header: '',
+      align: 'right',
+      cell: (t) => renderActions(t),
+    });
+  }
+
+  return cols;
 }

@@ -1,4 +1,5 @@
 import { RequestHandler } from "express";
+import { AppError } from "../../shared/errors/app-error";
 import {
   createFailedDeliveryReason,
   getFailedDeliveryReasonById,
@@ -12,6 +13,13 @@ import type {
 } from "./failed-delivery-reason.schema";
 import type { FailedDeliveryReasonSummary } from "./failed-delivery-reason.types";
 import type { ApiSuccessResponse } from "../../shared/types/api-response";
+
+function requireActorId(req: { actor?: { userId: string } }): string {
+  if (!req.actor) {
+    throw new AppError({ statusCode: 401, code: "UNAUTHORIZED", message: "Authentication required" });
+  }
+  return req.actor.userId;
+}
 
 export const listFailedDeliveryReasonsController: RequestHandler<
   Record<string, never>,
@@ -32,7 +40,7 @@ export const createFailedDeliveryReasonController: RequestHandler<
   CreateFailedDeliveryReasonInput
 > = async (req, res, next) => {
   try {
-    const reason = await createFailedDeliveryReason(req.body);
+    const reason = await createFailedDeliveryReason(req.body, requireActorId(req));
     res.status(201).json({ success: true, data: reason });
   } catch (error) {
     next(error);
@@ -57,7 +65,7 @@ export const updateFailedDeliveryReasonController: RequestHandler<
   UpdateFailedDeliveryReasonInput
 > = async (req, res, next) => {
   try {
-    const reason = await updateFailedDeliveryReason(req.params.id, req.body);
+    const reason = await updateFailedDeliveryReason(req.params.id, req.body, requireActorId(req));
     res.json({ success: true, data: reason });
   } catch (error) {
     next(error);

@@ -19,17 +19,6 @@ import UnauthorizedPage from '../pages/UnauthorizedPage';
 import LoginPage from '../pages/auth/LoginPage';
 import TrackingPlaceholderPage from '../pages/public/TrackingPlaceholderPage';
 import { PERMISSIONS as P } from '../features/auth/permissions';
-import {
-  ManagementDashboardPage,
-  ManagementPayoutsPage,
-  ManagementDriverSettlementsPage,
-  ManagementFinancePage,
-  ManagementReportsPage,
-  ManagementEmployeesPage,
-  ManagementEmployeeDetailPage,
-  ManagementAuditLogsPage,
-  ManagementSettingsPage,
-} from '../pages/management/managementPages';
 import OrdersListPage from '../pages/management/orders/OrdersListPage';
 import CreateOrderPage from '../pages/management/orders/create/CreateOrderPage';
 import OrderDetailPage from '../pages/management/orders/detail/OrderDetailPage';
@@ -39,6 +28,15 @@ import DriversListPage from '../pages/management/drivers/DriversListPage';
 import DriverDetailPage from '../pages/management/drivers/DriverDetailPage';
 import WalletsListPage from '../pages/management/wallets/WalletsListPage';
 import WalletDetailPage from '../pages/management/wallets/WalletDetailPage';
+import PayoutsListPage from '../pages/management/payouts/PayoutsListPage';
+import SettlementsListPage from '../pages/management/settlements/SettlementsListPage';
+import ManagementDashboardPage from '../pages/management/dashboard/ManagementDashboardPage';
+import FinancePage from '../pages/management/finance/FinancePage';
+import ReportsPage from '../pages/management/reports/ReportsPage';
+import EmployeesListPage from '../pages/management/employees/EmployeesListPage';
+import EmployeeDetailPage from '../pages/management/employees/EmployeeDetailPage';
+import AuditLogsPage from '../pages/management/audit/AuditLogsPage';
+import SettingsPage from '../pages/management/settings/SettingsPage';
 import {
   DriverOrdersPage,
   DriverOrderDetailPage,
@@ -110,14 +108,14 @@ const managementChildren: RouteObject[] = [
   { path: 'drivers/:id', ...permitted(P.DRIVERS_READ, <DriverDetailPage />) },
   { path: 'wallets', ...permitted(P.WALLETS_READ, <WalletsListPage />) },
   { path: 'wallets/:customerId', ...permitted(P.WALLETS_READ, <WalletDetailPage />) },
-  { path: 'payouts', ...permitted(P.PAYOUTS_READ, <ManagementPayoutsPage />) },
-  { path: 'driver-settlements', ...permitted(P.SETTLEMENTS_READ, <ManagementDriverSettlementsPage />) },
-  { path: 'finance', ...permitted(P.FINANCE_READ, <ManagementFinancePage />) },
-  { path: 'reports', ...permitted(P.REPORTS_READ, <ManagementReportsPage />) },
-  { path: 'employees', ...permitted(P.EMPLOYEES_READ, <ManagementEmployeesPage />) },
-  { path: 'employees/:id', ...permitted(P.EMPLOYEES_READ, <ManagementEmployeeDetailPage />) },
-  { path: 'audit-logs', ...permitted(P.AUDIT_READ, <ManagementAuditLogsPage />) },
-  { path: 'settings', ...permitted(P.SETTINGS_READ, <ManagementSettingsPage />) },
+  { path: 'payouts', ...permitted(P.PAYOUTS_READ, <PayoutsListPage />) },
+  { path: 'driver-settlements', ...permitted(P.SETTLEMENTS_READ, <SettlementsListPage />) },
+  { path: 'finance', ...permitted(P.FINANCE_READ, <FinancePage />) },
+  { path: 'reports', ...permitted(P.REPORTS_READ, <ReportsPage />) },
+  { path: 'employees', ...permitted(P.EMPLOYEES_READ, <EmployeesListPage />) },
+  { path: 'employees/:id', ...permitted(P.EMPLOYEES_READ, <EmployeeDetailPage />) },
+  { path: 'audit-logs', ...permitted(P.AUDIT_READ, <AuditLogsPage />) },
+  { path: 'settings', ...permitted(P.SETTINGS_READ, <SettingsPage />) },
 ];
 
 const driverChildren: RouteObject[] = [

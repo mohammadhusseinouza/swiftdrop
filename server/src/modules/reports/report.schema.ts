@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { dateOnlySchema, fromNotAfterTo } from "../../shared/date/date-range.schema";
-import { OrderStatusSchema } from "../orders/order.schema";
+import { OrderStatusSchema, ParcelCollectionStatusSchema, ParcelIntakeMethodSchema } from "../orders/order.schema";
 import { OrderTypeSchema } from "../orders/order-financial.schema";
 
 // Same safe boolean-query pattern already duplicated per-module elsewhere
@@ -36,6 +36,13 @@ export const OrderReportQuerySchema = z
     areaId: uuid.optional(),
     status: OrderStatusSchema.optional(),
     orderType: OrderTypeSchema.optional(),
+    // Phase 11.17.6 (task §34) — Parcel Intake filters, independent of
+    // OrderType, reusing the exact Orders List enum schemas.
+    // parcelCollectionDriverId filters CURRENT collection work only, same
+    // convention as the Orders List filter.
+    parcelIntakeMethod: ParcelIntakeMethodSchema.optional(),
+    parcelCollectionStatus: ParcelCollectionStatusSchema.optional(),
+    parcelCollectionDriverId: uuid.optional(),
   })
   .refine(fromNotAfterTo, { message: "from must be on or before to", path: ["to"] });
 

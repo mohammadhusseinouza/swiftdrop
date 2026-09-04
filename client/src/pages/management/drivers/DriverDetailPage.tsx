@@ -31,16 +31,18 @@ import {
   CashTab,
   CurrentOrdersTab,
   DeliveryHistoryTab,
+  ParcelCollectionsTab,
   SettlementsTab,
 } from './driverDetailTabs';
 import { DriverFormDialog } from './DriverFormDialog';
 
-type TabId = 'current' | 'history' | 'cash' | 'settlements';
+type TabId = 'current' | 'history' | 'collections' | 'cash' | 'settlements';
 type DialogKind = 'deactivate' | 'reactivate' | null;
 
 const TAB_LABEL: Record<TabId, string> = {
   current: 'Current Orders',
   history: 'Delivery History',
+  collections: 'Parcel Collections',
   cash: 'Cash',
   settlements: 'Settlements',
 };
@@ -55,16 +57,22 @@ export default function DriverDetailPage() {
 
   const canManage = permissions.includes(PERMISSIONS.DRIVERS_MANAGE);
   const canViewOrders = permissions.includes(PERMISSIONS.ORDERS_READ);
+  // drivers.read — matches the backend gate on GET /drivers/:id/parcel-
+  // collection-history (Phase 11.17.6, task §27). Always true once this
+  // page itself has loaded (Driver Detail requires drivers.read), kept
+  // explicit for consistency with the other tab gates below.
+  const canViewCollections = permissions.includes(PERMISSIONS.DRIVERS_READ);
   const canViewCash = permissions.includes(PERMISSIONS.FINANCE_READ);
   const canViewSettlements = permissions.includes(PERMISSIONS.SETTLEMENTS_READ);
 
   const visibleTabs = useMemo<TabId[]>(() => {
     const tabs: TabId[] = [];
     if (canViewOrders) tabs.push('current', 'history');
+    if (canViewCollections) tabs.push('collections');
     if (canViewCash) tabs.push('cash');
     if (canViewSettlements) tabs.push('settlements');
     return tabs;
-  }, [canViewOrders, canViewCash, canViewSettlements]);
+  }, [canViewOrders, canViewCollections, canViewCash, canViewSettlements]);
 
   const requestedTab = sp.get('tab');
   const activeTab: TabId =
@@ -86,6 +94,7 @@ export default function DriverDetailPage() {
     for (const k of [
       'currentPage',
       'historyPage',
+      'collectionsPage',
       'cashPage',
       'settlementsPage',
     ])
@@ -330,8 +339,14 @@ export default function DriverDetailPage() {
             {activeTab === 'history' && canViewOrders && (
               <DeliveryHistoryTab driverId={driver.id} />
             )}
+            {activeTab === 'collections' && canViewCollections && (
+              <ParcelCollectionsTab driverId={driver.id} />
+            )}
             {activeTab === 'cash' && canViewCash && (
-              <CashTab driverId={driver.id} />
+              <CashTab
+                driverId={driver.id}
+                driverLabel={`${driver.user.firstName} ${driver.user.lastName} · ${driver.driverNumber}`}
+              />
             )}
             {activeTab === 'settlements' && canViewSettlements && (
               <SettlementsTab driverId={driver.id} />

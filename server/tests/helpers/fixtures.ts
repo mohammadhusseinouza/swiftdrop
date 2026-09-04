@@ -89,6 +89,8 @@ export interface SeededCustomerOverrides {
   customerNumber?: string;
   name?: string;
   primaryPhone?: string;
+  secondaryPhone?: string;
+  defaultAddress?: string;
   email?: string;
   isActive?: boolean;
   areaId?: string;
@@ -109,6 +111,8 @@ export async function seedCustomerRecord(
       customer_number: overrides.customerNumber ?? `PH51-CUST-${suffix}`,
       name: overrides.name ?? `Phase51 Test Customer ${suffix}`,
       primary_phone: overrides.primaryPhone ?? "+10000000000",
+      secondary_phone: overrides.secondaryPhone,
+      default_address: overrides.defaultAddress,
       email: overrides.email,
       is_active: overrides.isActive ?? true,
       default_area_id: overrides.areaId,
@@ -286,6 +290,11 @@ export async function cleanupTestSetting(key: string): Promise<void> {
 // DELETE CASCADE; order_assignments.order_id and delivery_attempts.order_id
 // are both ON DELETE RESTRICT) — never touches unrelated orders/history.
 export async function cleanupTestOrder(orderId: string): Promise<void> {
+  // Phase 11.17.3 — parcel_collection_attempts.order_id and
+  // parcel_collection_assignments.order_id are ON DELETE RESTRICT (Phase
+  // 11.17.2 contract §7), so they must be cleared before the order row.
+  await prisma.parcel_collection_attempts.deleteMany({ where: { order_id: orderId } });
+  await prisma.parcel_collection_assignments.deleteMany({ where: { order_id: orderId } });
   await prisma.order_status_history.deleteMany({ where: { order_id: orderId } });
   // order_assignments.order_id is ON DELETE RESTRICT (Phase 6.5) — must be
   // cleared before the order row itself, same reasoning as status history.
@@ -334,6 +343,21 @@ export interface SeededOrderOverrides {
   collectionPaymentMethodId?: string;
   receiverName?: string;
   receiverPhone?: string;
+  // Phase 11.17.3 — Create Order is not yet parcel-aware (that is 11.17.4),
+  // so parcel-collection tests seed DRIVER_COLLECTION orders directly here.
+  parcelIntakeMethod?: "ALREADY_AT_COMPANY" | "DRIVER_COLLECTION";
+  parcelCollectionStatus?:
+    | "AWAITING_ASSIGNMENT"
+    | "ASSIGNED"
+    | "COLLECTED_FROM_SENDER"
+    | "FAILED"
+    | "RESCHEDULED"
+    | "RECEIVED_AT_COMPANY";
+  // Phase 11.17.6 — lets workflow-queue/dashboard/reports fixtures seed a
+  // current Parcel Collection driver pointer directly (ASSIGNED /
+  // COLLECTED_FROM_SENDER scenarios) without going through the real
+  // assign/collected HTTP flow.
+  currentParcelCollectionDriverId?: string;
 }
 
 // Directly seeds an order row, bypassing POST /api/v1/orders — used for
@@ -356,6 +380,31 @@ export async function seedTestOrder(
   const remainingOrderAmount = orderAmount.minus(prepaidOrderAmount);
   const remainingDeliveryFee = deliveryFee.minus(prepaidDeliveryFee);
   const amountToCollect = remainingOrderAmount.plus(remainingDeliveryFee);
+
+  // Phase 11.17.4 — the DB no longer defaults parcel_intake_method /
+  // parcel_collection_status, so every seeded Order sets them EXPLICITLY here.
+  // Default = a coherent legacy-style ALREADY_AT_COMPANY / RECEIVED_AT_COMPANY
+  // Order (receipt time = createdAt, receipt actor = createdByUserId). A
+  // DRIVER_COLLECTION override defaults to AWAITING_ASSIGNMENT with NULL
+  // receipt metadata + a minimal collection snapshot, unless the caller passes
+  // an explicit parcelCollectionStatus.
+  const createdAt = overrides.createdAt ?? new Date();
+  const intakeMethod = overrides.parcelIntakeMethod ?? "ALREADY_AT_COMPANY";
+  const collectionStatus =
+    overrides.parcelCollectionStatus ??
+    (intakeMethod === "DRIVER_COLLECTION" ? "AWAITING_ASSIGNMENT" : "RECEIVED_AT_COMPANY");
+  // Receipt metadata is set iff the parcel is (or is treated as) at the company.
+  const hasReceipt = collectionStatus === "RECEIVED_AT_COMPANY";
+  const collectionSnapshot =
+    intakeMethod === "DRIVER_COLLECTION"
+      ? {
+          parcel_collection_contact_name: `Phase63 Sender ${suffix}`,
+          parcel_collection_phone: "+96171000000",
+          parcel_collection_area_id: overrides.areaId,
+          parcel_collection_area: overrides.areaName ?? "Phase63 Area",
+          parcel_collection_address: "1 Phase63 Pickup St",
+        }
+      : {};
 
   const order = await prisma.orders.create({
     data: {
@@ -388,7 +437,14 @@ export async function seedTestOrder(
       current_driver_id: overrides.currentDriverId,
       assigned_at: overrides.assignedAt,
       delivered_at: overrides.deliveredAt,
-      ...(overrides.createdAt ? { created_at: overrides.createdAt } : {}),
+      parcel_intake_method: intakeMethod,
+      parcel_collection_status: collectionStatus,
+      current_parcel_collection_driver_id: overrides.currentParcelCollectionDriverId,
+      ...collectionSnapshot,
+      ...(hasReceipt
+        ? { received_at_company_at: createdAt, received_at_company_by_id: createdByUserId }
+        : {}),
+      created_at: createdAt,
     },
   });
   return order.id;

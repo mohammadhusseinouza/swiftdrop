@@ -766,6 +766,7 @@ describe("Orders list backend (Phase 6.3 — List / Search / Filters / Paginatio
           "amountToCollect",
           "assignedAt",
           "createdAt",
+          "currentCollectionDriver",
           "currentDriver",
           "customer",
           "deliveredAt",
@@ -776,6 +777,9 @@ describe("Orders list backend (Phase 6.3 — List / Search / Filters / Paginatio
           "orderAmount",
           "orderNumber",
           "orderType",
+          // Parcel Intake at-a-glance — narrow list-DTO extension (Phase 11.17.5).
+          "parcelCollectionStatus",
+          "parcelIntakeMethod",
           "paymentType",
           "receiverArea",
           "receiverName",

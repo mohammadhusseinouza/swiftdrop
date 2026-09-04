@@ -139,6 +139,7 @@ export const baseQueryWithReauth: BaseQueryFn<
 export const API_TAG_TYPES = [
   'Auth',
   'Order',
+  'ParcelCollection',
   'DriverOrder',
   'Customer',
   'Driver',
@@ -152,6 +153,8 @@ export const API_TAG_TYPES = [
   'Report',
   'Settings',
   'AuditLog',
+  'Employee',
+  'Role',
 ] as const;
 
 export type ApiTagType = (typeof API_TAG_TYPES)[number];

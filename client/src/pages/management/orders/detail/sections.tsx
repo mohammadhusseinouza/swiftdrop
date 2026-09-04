@@ -8,8 +8,12 @@ import { OrderTypeBadge } from '../../../../components/orders/OrderTypeBadge';
 import { PaymentTypeBadge } from '../../../../components/orders/PaymentTypeBadge';
 import { OrderTimeline } from '../../../../components/orders/OrderTimeline';
 import { EmptyState } from '../../../../components/feedback/EmptyState';
+import { LoadingState } from '../../../../components/feedback/LoadingState';
+import { ErrorState } from '../../../../components/feedback/ErrorState';
 import { paths } from '../../../../routes/paths';
 import { formatDateTime, formatMoney, humanizeToken } from '../../../../lib/format';
+import { useGetOrderTimelineQuery } from '../../../../services/ordersApi';
+import { getApiErrorMessage, type UnknownApiError } from '../../../../services/apiError';
 import type { OrderDetail } from '../../../../services/domain.types';
 import { buildOrderTimeline } from './buildTimeline';
 
@@ -444,9 +448,23 @@ export function DeliverySection({
     });
   }
 
+  const awaitingParcel =
+    !driver &&
+    order.parcelIntakeMethod === 'DRIVER_COLLECTION' &&
+    order.parcelCollectionStatus !== 'RECEIVED_AT_COMPANY';
+
   return (
     <Section title="Delivery">
+      <p className="mb-3 text-xs text-ink-muted">
+        Company → receiver. Separate from Parcel Intake (sender → company) above.
+      </p>
       <DetailList rows={rows} />
+      {awaitingParcel && (
+        <p className="mt-3 rounded-control border border-line-subtle bg-sunken px-3 py-2 text-xs text-ink-muted">
+          A delivery driver can be assigned once the parcel is received at the
+          company (see Parcel Intake &amp; Collection above).
+        </p>
+      )}
     </Section>
   );
 }
@@ -592,14 +610,29 @@ function Pair({ label, value }: { label: string; value: ReactNode }) {
 /* ------------------------------- 9. Timeline --------------------------- */
 
 export function TimelineSection({ order }: { order: OrderDetail }) {
-  const items = buildOrderTimeline(order);
+  // Phase 11.17.6 — the server-authoritative unified timeline (Collection +
+  // Delivery events, already deduplicated/ordered) replaces the earlier
+  // client-composed version built purely from `order`'s own arrays.
+  const query = useGetOrderTimelineQuery(order.id);
+  const items = query.data ? buildOrderTimeline(query.data) : [];
+
   return (
     <Section title="Order timeline" id="order-history">
       <p className="mb-4 text-xs text-ink-muted">
-        Operational history for this order (status changes, assignments and
-        delivery attempts). Not a full system audit log.
+        Unified operational history for this order — status changes,
+        delivery assignments/attempts, parcel collection events and
+        financial events, in one chronological view. Not a full system audit
+        log.
       </p>
-      {items.length === 0 ? (
+      {query.isLoading ? (
+        <LoadingState className="py-8" />
+      ) : query.isError ? (
+        <ErrorState
+          className="py-8"
+          message={getApiErrorMessage(query.error as UnknownApiError)}
+          onRetry={() => void query.refetch()}
+        />
+      ) : items.length === 0 ? (
         <EmptyState
           className="py-8"
           title="No timeline events yet"

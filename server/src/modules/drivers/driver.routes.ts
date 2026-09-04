@@ -14,6 +14,7 @@ import {
   getDriverController,
   listDriverCurrentOrdersController,
   listDriverDeliveryHistoryController,
+  listDriverParcelCollectionHistoryController,
   listDriversController,
   updateDriverController,
 } from "./driver.controller";
@@ -71,4 +72,16 @@ driverRouter.get(
   authorize("orders.read"),
   validate({ params: DriverIdParamSchema, query: DriverWorkListQuerySchema }),
   listDriverDeliveryHistoryController
+);
+
+// Driver-scoped HISTORICAL Parcel Collection work (Phase 11.17.6, task §27) —
+// attributed via parcel_collection_assignments.driver_id, server-paginated.
+// drivers.read (NOT finance.read — Parcel Collection is financially neutral;
+// NOT orders.read — this is Driver-detail operational history, task §27).
+driverRouter.get(
+  "/:id/parcel-collection-history",
+  authenticate,
+  authorize("drivers.read"),
+  validate({ params: DriverIdParamSchema, query: DriverWorkListQuerySchema }),
+  listDriverParcelCollectionHistoryController
 );

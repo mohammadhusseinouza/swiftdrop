@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { OrderTypeSchema, PaymentTypeSchema, moneySchema } from "./order-financial.schema";
+import { WORKFLOW_QUEUE_VALUES } from "./order-workflow-queue";
 
 export const OrderIdParamSchema = z.object({
   id: z.string().uuid(),
@@ -22,6 +23,25 @@ export const OrderStatusSchema = z.enum([
 
 // Real orders.financial_status enum values (prisma/schema.prisma OrderFinancialStatus).
 export const OrderFinancialStatusSchema = z.enum(["PENDING", "FINALIZED", "REVIEW_REQUIRED", "NOT_APPLICABLE"]);
+
+// Real orders.parcel_intake_method / parcel_collection_status enum values
+// (prisma/schema.prisma ParcelIntakeMethod / ParcelCollectionStatus) — Phase
+// 11.17.6 Orders List filters (task §5-§7). Independent of OrderType.
+export const ParcelIntakeMethodSchema = z.enum(["ALREADY_AT_COMPANY", "DRIVER_COLLECTION"]);
+export const ParcelCollectionStatusSchema = z.enum([
+  "AWAITING_ASSIGNMENT",
+  "ASSIGNED",
+  "COLLECTED_FROM_SENDER",
+  "FAILED",
+  "RESCHEDULED",
+  "RECEIVED_AT_COMPANY",
+]);
+
+// Not a DB column — a derived operational-queue filter over the combination
+// of parcel_intake_method / parcel_collection_status / current_parcel_
+// collection_driver_id / current_driver_id / status (order-workflow-queue.ts
+// is the single authoritative predicate builder, Phase 11.17.6 task §12).
+export const WorkflowQueueSchema = z.enum(WORKFLOW_QUEUE_VALUES);
 
 // Not a DB enum — a derived filter concept over orders.current_driver_id,
 // which the schema exposes as a nullable FK rather than a boolean/enum
@@ -125,6 +145,14 @@ export const ListOrdersQuerySchema = z
     needsFinancialReview: booleanQueryParam.optional(),
     assignmentStatus: AssignmentStatusSchema.optional(),
     deliveryStatus: DeliveryStatusSchema.optional(),
+
+    // Phase 11.17.6 — deferred contract closed. parcelCollectionDriverId
+    // filters CURRENT collection work only (§8) — a UUID like every other
+    // driver-id filter in this schema.
+    parcelIntakeMethod: ParcelIntakeMethodSchema.optional(),
+    parcelCollectionStatus: ParcelCollectionStatusSchema.optional(),
+    parcelCollectionDriverId: uuid.optional(),
+    workflowQueue: WorkflowQueueSchema.optional(),
 
     createdFrom: strictDateSchema.optional(),
     createdTo: strictDateSchema.optional(),

@@ -75,8 +75,26 @@ export async function getDriverReport(query: DriverReportQuery): Promise<DriverR
   const driverIds = drivers.map((d) => d.id);
 
   const attemptDateClause = dateRangeSql("completed_at", range);
+  // Phase 11.17.6 (task §37) — Parcel Collection date semantics, DISTINCT
+  // from the delivery `attemptDateClause` above:
+  //   collectionAssignments   -> assigned_at in range
+  //   collectionsCompleted    -> ended_at in range AND end_reason = RECEIVED_AT_COMPANY
+  //   failedCollectionAttempts -> attempt.completed_at in range AND outcome = FAILED
+  const collectionAssignedClause = dateRangeSql("assigned_at", range);
+  const collectionEndedClause = dateRangeSql("ended_at", range);
+  const collectionAttemptDateClause = dateRangeSql("completed_at", range);
 
-  const [assignedRows, deliveredRows, failedRows, settlementRows, cashAccounts, moneyCollectedByDriver] = await Promise.all([
+  const [
+    assignedRows,
+    deliveredRows,
+    failedRows,
+    settlementRows,
+    cashAccounts,
+    moneyCollectedByDriver,
+    collectionAssignedRows,
+    collectionsCompletedRows,
+    failedCollectionAttemptRows,
+  ] = await Promise.all([
     prisma.order_assignments.groupBy({
       by: ["driver_id"],
       where: { driver_id: { in: driverIds }, assigned_at: rangeToWhere(range) },
@@ -100,6 +118,21 @@ export async function getDriverReport(query: DriverReportQuery): Promise<DriverR
     }),
     prisma.driver_cash_accounts.findMany({ where: { driver_id: { in: driverIds } }, select: { driver_id: true, current_balance: true } }),
     Promise.all(driverIds.map(async (id) => [id, await getDriverMoneyCollected(id, range)] as const)),
+    prisma.$queryRaw<{ driver_id: string; count: bigint }[]>`
+      SELECT driver_id, COUNT(*) AS count FROM parcel_collection_assignments
+      WHERE driver_id = ANY(${driverIds}::uuid[]) AND ${collectionAssignedClause}
+      GROUP BY driver_id
+    `,
+    prisma.$queryRaw<{ driver_id: string; count: bigint }[]>`
+      SELECT driver_id, COUNT(*) AS count FROM parcel_collection_assignments
+      WHERE driver_id = ANY(${driverIds}::uuid[]) AND end_reason = 'RECEIVED_AT_COMPANY' AND ${collectionEndedClause}
+      GROUP BY driver_id
+    `,
+    prisma.$queryRaw<{ driver_id: string; count: bigint }[]>`
+      SELECT driver_id, COUNT(*) AS count FROM parcel_collection_attempts
+      WHERE driver_id = ANY(${driverIds}::uuid[]) AND outcome = 'FAILED' AND ${collectionAttemptDateClause}
+      GROUP BY driver_id
+    `,
   ]);
 
   const assignedById = new Map(assignedRows.map((r) => [r.driver_id, r._count]));
@@ -108,6 +141,9 @@ export async function getDriverReport(query: DriverReportQuery): Promise<DriverR
   const settlementById = new Map(settlementRows.map((r) => [r.driver_id, r]));
   const cashById = new Map(cashAccounts.map((a) => [a.driver_id, a.current_balance]));
   const collectedById = new Map(moneyCollectedByDriver);
+  const collectionAssignedById = new Map(collectionAssignedRows.map((r) => [r.driver_id, Number(r.count)]));
+  const collectionsCompletedById = new Map(collectionsCompletedRows.map((r) => [r.driver_id, Number(r.count)]));
+  const failedCollectionAttemptsById = new Map(failedCollectionAttemptRows.map((r) => [r.driver_id, Number(r.count)]));
 
   const rows: DriverReportRow[] = drivers.map((driver) => {
     const delivered = deliveredById.get(driver.id) ?? 0;
@@ -137,6 +173,9 @@ export async function getDriverReport(query: DriverReportQuery): Promise<DriverR
       settlementCount: settlement?._count ?? 0,
       settlementAmount: toAmount(settlement?._sum.amount_received?.toString()),
       currentCashHeld: toAmount(cashById.get(driver.id)?.toString()),
+      collectionAssignments: collectionAssignedById.get(driver.id) ?? 0,
+      collectionsCompleted: collectionsCompletedById.get(driver.id) ?? 0,
+      failedCollectionAttempts: failedCollectionAttemptsById.get(driver.id) ?? 0,
     };
   });
 
