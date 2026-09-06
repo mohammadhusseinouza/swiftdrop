@@ -8,6 +8,8 @@ import { dashboardRouter } from "../modules/dashboard/dashboard.routes";
 import { driverRouter } from "../modules/drivers/driver.routes";
 import { driverCashRouter } from "../modules/driver-cash/driver-cash.routes";
 import { driverOrderActionRouter, driverOrderRouter } from "../modules/driver-orders/driver-order.routes";
+import { driverJobRouter } from "../modules/driver-jobs/driver-job.routes";
+import { driverHistoryRouter } from "../modules/driver-history/driver-history.routes";
 import { employeeRouter } from "../modules/employees/employee.routes";
 import {
   driverParcelCollectionRouter,
@@ -52,6 +54,12 @@ apiRouter.use("/driver", driverOrderActionRouter);
 // active Failed Collection Reasons list). Mounted at /api/v1/driver like the
 // existing Driver action routes.
 apiRouter.use("/driver", driverParcelCollectionRouter);
+// Phase 12.1 — "My Jobs" (read-only, Collection + Delivery combined).
+// GET /api/v1/driver/jobs.
+apiRouter.use("/driver", driverJobRouter);
+// Phase 12.5 — Driver Work History (read-only, Collection + Delivery
+// combined, chronological). GET /api/v1/driver/history.
+apiRouter.use("/driver", driverHistoryRouter);
 apiRouter.use("/orders", orderRouter);
 // Phase 11.17.3 — Parcel Collection Management read + assign/reassign/
 // reschedule/receive-at-company. A second router on /api/v1/orders,

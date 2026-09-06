@@ -375,6 +375,130 @@ export interface DriverOrderSummary {
 }
 export type DriverOrderDetail = DriverOrderSummary;
 
+/* ======================= Driver "My Jobs" (Phase 12.1) ======================= */
+/**
+ * Mirrors server/src/modules/driver-jobs/driver-job.types.ts exactly. A
+ * discriminated union on `jobType` — COLLECTION (Sender -> Company) and
+ * DELIVERY (Company -> Receiver) are separate Driver responsibilities that
+ * may both be current for the same Driver on different Orders, or even the
+ * same Order at different lifecycle stages. Never use orderId alone as a
+ * React key — use `${jobType}:${orderId}`.
+ *
+ * FINANCIAL SEPARATION: CollectionDriverJobSummary never carries money —
+ * Parcel Collection is financially neutral in V1. Only DeliveryDriverJobSummary
+ * carries `collection.amountToCollect` (the final delivery collection).
+ */
+export type DriverJobType = 'COLLECTION' | 'DELIVERY';
+
+export interface DriverJobCollectionContact {
+  name: string | null;
+  phone: string | null;
+  altPhone: string | null;
+  area: string | null;
+  address: string | null;
+  notes: string | null;
+}
+
+export interface CollectionDriverJobSummary {
+  jobType: 'COLLECTION';
+  orderId: string;
+  orderNumber: string;
+  trackingCode: string;
+  orderType: string;
+  /** ASSIGNED | COLLECTED_FROM_SENDER — the only two current Collection states. */
+  status: string;
+  assignmentId: string | null;
+  assignedAt: string | null;
+  /** Non-null only once status = COLLECTED_FROM_SENDER (custody kept). */
+  collectedFromSenderAt: string | null;
+  contact: DriverJobCollectionContact;
+}
+
+export interface DeliveryDriverJobSummary {
+  jobType: 'DELIVERY';
+  orderId: string;
+  orderNumber: string;
+  trackingCode: string;
+  orderType: string;
+  /** ASSIGNED | PICKED_UP | OUT_FOR_DELIVERY | RESCHEDULED — the only current Delivery states. */
+  status: string;
+  receiver: DriverOrderSummary['receiver'];
+  package: DriverOrderSummary['package'];
+  collection: DriverOrderSummary['collection'];
+  timestamps: {
+    assignedAt: string | null;
+    pickedUpAt: string | null;
+    outForDeliveryAt: string | null;
+  };
+}
+
+export type DriverJobSummary = CollectionDriverJobSummary | DeliveryDriverJobSummary;
+
+/* ==================== Driver Job Detail (Phase 12.2) ==================== */
+/**
+ * Mirrors server/src/modules/driver-jobs/driver-job.types.ts exactly. One
+ * shape serves both the "My Jobs" summary and the detail view wherever the
+ * summary already has everything a detail view needs (DELIVERY needs only
+ * one extra field; DeliveryDriverJobDetail therefore just extends the
+ * summary). COLLECTION detail additionally needs package/order info that
+ * the card never needed.
+ */
+export interface CollectionDriverJobDetail extends CollectionDriverJobSummary {
+  package: DriverOrderSummary['package'];
+}
+
+export interface DeliveryDriverJobDetail extends DeliveryDriverJobSummary {
+  /** CASH_ON_DELIVERY | ALREADY_PAID | PARTIALLY_PAID — detail-only; kept distinct from Payment Method. */
+  paymentType: string;
+}
+
+export type DriverJobDetail = CollectionDriverJobDetail | DeliveryDriverJobDetail;
+
+/* ================ Driver Collection Actions (Phase 12.3) ================ */
+/**
+ * Mirrors server/src/modules/parcel-collection/parcel-collection.types.ts's
+ * Driver-facing (narrow) shapes exactly — deliberately NOT the Management
+ * ParcelCollectionDetail (no assignedBy/receivedAtCompanyBy/assignment or
+ * attempt history). Financially neutral: no money field anywhere here.
+ */
+export interface DriverParcelCollectionLatestAttempt {
+  attemptNumber: number;
+  outcome: ParcelCollectionAttemptOutcome;
+  completedAt: string | null;
+}
+export interface DriverParcelCollectionResult {
+  orderId: string;
+  parcelCollectionStatus: ParcelCollectionStatus;
+  parcelCollectedFromSenderAt: string | null;
+  latestAttempt: DriverParcelCollectionLatestAttempt | null;
+}
+
+/**
+ * Mirrors server/src/modules/parcel-collection/parcel-collection.types.ts's
+ * DriverFailedCollectionReasonSummary exactly — active reasons only, no
+ * Management metadata (isActive/createdAt/updatedAt), distinct from the
+ * Management FailedCollectionReasonSummary above.
+ */
+export interface DriverFailedCollectionReasonSummary {
+  id: string;
+  name: string;
+  requiresNotes: boolean;
+  sortOrder: number;
+}
+
+/**
+ * Mirrors server/src/modules/reference-data/failed-delivery-reason.types.ts's
+ * DriverFailedDeliveryReasonSummary exactly (Phase 12.4) — active reasons
+ * only, no Management metadata, distinct from the Management
+ * FailedDeliveryReasonSummary elsewhere in this file.
+ */
+export interface DriverFailedDeliveryReasonSummary {
+  id: string;
+  name: string;
+  requiresNotes: boolean;
+  sortOrder: number;
+}
+
 export interface DriverCashTransactionEntry {
   id: string;
   type: string;
@@ -389,6 +513,102 @@ export interface DriverCashOverview {
   account: { id: string; currentBalance: string };
   transactions: DriverCashTransactionEntry[];
 }
+
+/* ==================== Driver Work History (Phase 12.5) ==================== */
+/**
+ * Mirrors server/src/modules/driver-history/driver-history.types.ts exactly.
+ * A discriminated union: the authenticated Driver's own historical COLLECTION
+ * (Sender -> Company) and DELIVERY (Company -> Receiver) work, kept
+ * semantically SEPARATE and never merged by orderId — the same Order can
+ * legitimately carry both a Collection and a Delivery history record for the
+ * same Driver.
+ *
+ * `result` is the DRIVER WORK RESULT (COMPLETED | FAILED) — NOT the Order's
+ * current status and NOT ParcelCollectionStatus. A FAILED attempt stays
+ * FAILED even after Management later reschedules / returns / receives the
+ * Order; `resultingOrderStatus` / `resultingParcelCollectionStatus` carry
+ * the current state as secondary context only.
+ *
+ * PRIVACY: never carries Customer Wallet, Company Finance, Driver Cash ledger
+ * ids, financialStatus / needsFinancialReview / collectionDifferenceReason,
+ * settlement/payout data, the receipt-confirming employee, or other Drivers'
+ * work. Completed Delivery MAY show the Driver's own actualAmountCollected.
+ * Completed Collection carries NO money.
+ */
+export type DriverHistoryJobType = 'COLLECTION' | 'DELIVERY';
+export type DriverHistoryResult = 'COMPLETED' | 'FAILED';
+
+interface DriverWorkHistoryBase {
+  /** attemptId (delivery / failed collection) or assignmentId (completed collection). */
+  id: string;
+  jobType: DriverHistoryJobType;
+  result: DriverHistoryResult;
+  orderId: string;
+  orderNumber: string;
+  trackingCode: string;
+  orderType: string;
+  occurredAt: string;
+  resultingOrderStatus: string;
+}
+
+export interface DriverHistoryCollectionContact {
+  name: string | null;
+  area: string | null;
+  address: string | null;
+}
+export interface DriverHistoryFailureInfo {
+  reasonName: string | null;
+  notes: string | null;
+}
+export interface DriverHistoryReceiver {
+  name: string;
+  area: string | null;
+}
+
+export interface CollectionCompletedHistory extends DriverWorkHistoryBase {
+  jobType: 'COLLECTION';
+  result: 'COMPLETED';
+  assignmentId: string;
+  completedAt: string;
+  collectedFromSenderAt: string | null;
+  contact: DriverHistoryCollectionContact;
+  resultingParcelCollectionStatus: string;
+}
+export interface CollectionFailedHistory extends DriverWorkHistoryBase {
+  jobType: 'COLLECTION';
+  result: 'FAILED';
+  attemptId: string;
+  attemptNumber: number;
+  failedAt: string;
+  contact: DriverHistoryCollectionContact;
+  failure: DriverHistoryFailureInfo;
+  resultingParcelCollectionStatus: string;
+}
+export interface DeliveryCompletedHistory extends DriverWorkHistoryBase {
+  jobType: 'DELIVERY';
+  result: 'COMPLETED';
+  attemptId: string;
+  attemptNumber: number;
+  completedAt: string;
+  receiver: DriverHistoryReceiver;
+  actualAmountCollected: string | null;
+  paymentMethod: PaymentMethodRef | null;
+}
+export interface DeliveryFailedHistory extends DriverWorkHistoryBase {
+  jobType: 'DELIVERY';
+  result: 'FAILED';
+  attemptId: string;
+  attemptNumber: number;
+  failedAt: string;
+  receiver: DriverHistoryReceiver;
+  failure: DriverHistoryFailureInfo;
+}
+
+export type DriverWorkHistoryItem =
+  | CollectionCompletedHistory
+  | CollectionFailedHistory
+  | DeliveryCompletedHistory
+  | DeliveryFailedHistory;
 
 /* ============================ Customers ============================ */
 

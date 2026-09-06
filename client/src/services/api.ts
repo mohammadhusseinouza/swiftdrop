@@ -141,6 +141,8 @@ export const API_TAG_TYPES = [
   'Order',
   'ParcelCollection',
   'DriverOrder',
+  'DriverJob',
+  'DriverHistory',
   'Customer',
   'Driver',
   'Wallet',

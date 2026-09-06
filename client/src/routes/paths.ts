@@ -38,11 +38,16 @@ export const paths = {
 
   driver: {
     root: '/driver',
-    orders: '/driver/orders',
-    orderDetail: (id = ':id') => `/driver/orders/${id}`,
-    outForDelivery: '/driver/out-for-delivery',
+    /** My Jobs (Phase 12.1) — the Driver Portal landing page. */
+    jobs: '/driver/jobs',
+    /** Job Detail (Phase 12.2). `jobType` is the lowercase URL segment ('collection' | 'delivery') — see driverJobRoute.ts. */
+    jobDetail: (jobType: string = ':jobType', orderId = ':orderId') =>
+      `/driver/jobs/${jobType}/${orderId}`,
+    /** Completed work history (Phase 12.5). */
     completed: '/driver/completed',
+    /** Failed / Returned work history (Phase 12.5). */
     failed: '/driver/failed',
+    /** My Cash (Phase 12.5). */
     cash: '/driver/cash',
   },
 

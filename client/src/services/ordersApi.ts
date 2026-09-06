@@ -11,8 +11,17 @@ import type {
 import type {
   BulkAssignResult,
   DriverCashOverview,
+  DriverFailedCollectionReasonSummary,
+  DriverFailedDeliveryReasonSummary,
+  DriverHistoryJobType,
+  DriverHistoryResult,
+  DriverJobDetail,
+  DriverJobSummary,
+  DriverJobType,
   DriverOrderDetail,
+  DriverParcelCollectionResult,
   DriverOrderSummary,
+  DriverWorkHistoryItem,
   OrderDetail,
   OrderHistoryResponse,
   OrderSummary,
@@ -187,6 +196,24 @@ export interface FailDriverOrderRequest {
   notes?: string;
 }
 
+export interface ListDriverJobsParams extends PaginationParams {
+  /** Omitted = All (both Collection and Delivery) — matches the approved quick-filter set. */
+  jobType?: DriverJobType;
+}
+
+export interface ListDriverHistoryParams extends PaginationParams {
+  /** Omitted = both COMPLETED and FAILED. */
+  result?: DriverHistoryResult;
+  /** Omitted = All (both Collection and Delivery). */
+  jobType?: DriverHistoryJobType;
+}
+
+/** POST /driver/orders/:id/parcel-collection/failed body — mirrors FailParcelCollectionSchema. */
+export interface FailParcelCollectionRequest {
+  failedCollectionReasonId: string;
+  notes?: string;
+}
+
 /* --------------------- shared invalidation sets --------------------- */
 
 const FINANCIAL_VIEWS = [
@@ -195,6 +222,34 @@ const FINANCIAL_VIEWS = [
   { type: 'Dashboard', id: 'ROOT' },
   { type: 'Report', id: 'LIST' },
 ] as const;
+
+/**
+ * Shared invalidation for the two Driver Collection Actions (Phase 12.3).
+ * Both mutations change the same underlying orders.parcel_collection_status
+ * / current_parcel_collection_driver_id fields Management's own
+ * parcelCollectionApi.ts mutations change — reusing the identical
+ * Order/ParcelCollection/Driver/Dashboard tag set keeps a Management view
+ * open in the same browser session correctly fresh too, exactly as safe as
+ * any other mutation on this shared `api` tag system. Deliberately NO
+ * Finance/Wallet/DriverCash/Report tag — Parcel Collection is financially
+ * neutral (never creates a ledger row), so there is nothing there to refresh.
+ */
+const COLLECTION_JOB_INVALIDATION = (orderId: string) =>
+  [
+    { type: 'DriverJob' as const, id: `COLLECTION:${orderId}` },
+    { type: 'DriverJob' as const, id: 'LIST' },
+    // A failed collection becomes Driver history immediately (a successful
+    // collection does not — custody is kept until Management confirms
+    // company receipt). Refreshing the LIST tag on both is harmless and
+    // keeps the Phase 12.5 Failed page fresh.
+    { type: 'DriverHistory' as const, id: 'LIST' },
+    { type: 'ParcelCollection' as const, id: orderId },
+    { type: 'ParcelCollection' as const, id: 'LIST' },
+    { type: 'Order' as const, id: orderId },
+    { type: 'Order' as const, id: 'LIST' },
+    { type: 'Driver' as const, id: 'LIST' },
+    { type: 'Dashboard' as const, id: 'ROOT' },
+  ] as const;
 
 export const ordersApi = api.injectEndpoints({
   endpoints: (builder) => ({
@@ -393,6 +448,127 @@ export const ordersApi = api.injectEndpoints({
       ],
     }),
 
+    /* =============== Driver "My Jobs" (Phase 12.1, read-only) =============== */
+
+    getDriverJobs: builder.query<
+      Paginated<DriverJobSummary>,
+      ListDriverJobsParams | void
+    >({
+      query: (params) => ({
+        url: '/driver/jobs',
+        params: cleanParams({ ...(params ?? {}) }),
+      }),
+      transformResponse: (r: ApiListResponse<DriverJobSummary>) =>
+        unwrapList(r),
+      providesTags: [{ type: 'DriverJob', id: 'LIST' }],
+    }),
+
+    // GET /api/v1/driver/jobs/:jobType/:orderId (Phase 12.2 "Job Detail").
+    // jobType arrives here already lowercase (the URL/route convention) and
+    // the backend maps it back to COLLECTION/DELIVERY — see
+    // driverJobRoute.ts's toDriverJobRouteSegment for the single place the
+    // frontend does the reverse mapping when building a link.
+    getDriverJobDetail: builder.query<
+      DriverJobDetail,
+      { jobType: DriverJobType; orderId: string }
+    >({
+      query: ({ jobType, orderId }) => ({
+        url: `/driver/jobs/${jobType.toLowerCase()}/${orderId}`,
+      }),
+      transformResponse: (r: ApiSuccessResponse<DriverJobDetail>) =>
+        unwrapData(r),
+      providesTags: (_res, _err, { jobType, orderId }) => [
+        { type: 'DriverJob', id: `${jobType}:${orderId}` },
+      ],
+    }),
+
+    /* ========= Driver Work History (Phase 12.5, read-only) ========= */
+    // GET /api/v1/driver/history — the authenticated Driver's own historical
+    // COLLECTION + DELIVERY work, one chronological (occurredAt DESC) list,
+    // server-paginated. driver.orders.read_own, own-Driver scoped (no
+    // client driverId). Backing "Completed" and "Failed / Returned".
+    getDriverWorkHistory: builder.query<
+      Paginated<DriverWorkHistoryItem>,
+      ListDriverHistoryParams | void
+    >({
+      query: (params) => ({
+        url: '/driver/history',
+        params: cleanParams({ ...(params ?? {}) }),
+      }),
+      transformResponse: (r: ApiListResponse<DriverWorkHistoryItem>) =>
+        unwrapList(r),
+      providesTags: [{ type: 'DriverHistory', id: 'LIST' }],
+    }),
+
+    /* ============== Driver Collection Actions (Phase 12.3) ============== */
+    // Backend: server/src/modules/parcel-collection — the existing Phase
+    // 11.17.3 Driver own-job routes (mounted at /api/v1/driver), unchanged.
+    // Financially neutral — no Wallet/DriverCash/Finance tag anywhere below.
+
+    // GET /api/v1/driver/failed-collection-reasons — driver.orders.read_own,
+    // NOT /settings/failed-collection-reasons (that needs settings.read,
+    // which the Driver role must never hold). Reuses the Management
+    // Settings page's own 'FAILED_COLLECTION_REASONS' tag id so an edit
+    // made there also invalidates this cached list.
+    getDriverFailedCollectionReasons: builder.query<
+      DriverFailedCollectionReasonSummary[],
+      void
+    >({
+      query: () => ({ url: '/driver/failed-collection-reasons' }),
+      transformResponse: (r: ApiSuccessResponse<DriverFailedCollectionReasonSummary[]>) =>
+        unwrapData(r),
+      providesTags: [{ type: 'Settings', id: 'FAILED_COLLECTION_REASONS' }],
+    }),
+
+    // POST /api/v1/driver/orders/:id/parcel-collection/collected
+    // ASSIGNED -> COLLECTED_FROM_SENDER. The job stays current (custody kept)
+    // — invalidate rather than remove it from every list/detail view it
+    // appears in.
+    markParcelCollected: builder.mutation<DriverParcelCollectionResult, string>({
+      query: (orderId) => ({
+        url: `/driver/orders/${orderId}/parcel-collection/collected`,
+        method: 'POST',
+      }),
+      transformResponse: (r: ApiSuccessResponse<DriverParcelCollectionResult>) =>
+        unwrapData(r),
+      invalidatesTags: (_res, _err, orderId) => COLLECTION_JOB_INVALIDATION(orderId),
+    }),
+
+    // POST /api/v1/driver/orders/:id/parcel-collection/failed
+    // ASSIGNED -> FAILED. The job is no longer current for this Driver —
+    // same invalidation set; My Jobs/Job Detail both correctly stop
+    // returning it once the tagged queries refetch.
+    reportParcelCollectionFailed: builder.mutation<
+      DriverParcelCollectionResult,
+      { orderId: string; body: FailParcelCollectionRequest }
+    >({
+      query: ({ orderId, body }) => ({
+        url: `/driver/orders/${orderId}/parcel-collection/failed`,
+        method: 'POST',
+        body,
+      }),
+      transformResponse: (r: ApiSuccessResponse<DriverParcelCollectionResult>) =>
+        unwrapData(r),
+      invalidatesTags: (_res, _err, { orderId }) => COLLECTION_JOB_INVALIDATION(orderId),
+    }),
+
+    /* ================= Driver Delivery Actions (Phase 12.4) ================= */
+
+    // GET /api/v1/driver/failed-delivery-reasons — resolves the Phase
+    // 12.1/12.2/12.3-documented blocker. driver.orders.read_own, NOT
+    // /settings/failed-delivery-reasons (settings.read). Reuses the
+    // Management Settings page's own 'FAILED_DELIVERY_REASONS' tag id so an
+    // edit made there also invalidates this cached list.
+    getDriverFailedDeliveryReasons: builder.query<
+      DriverFailedDeliveryReasonSummary[],
+      void
+    >({
+      query: () => ({ url: '/driver/failed-delivery-reasons' }),
+      transformResponse: (r: ApiSuccessResponse<DriverFailedDeliveryReasonSummary[]>) =>
+        unwrapData(r),
+      providesTags: [{ type: 'Settings', id: 'FAILED_DELIVERY_REASONS' }],
+    }),
+
     /* ================= Driver self-service (Phase 7) ================= */
 
     getDriverOrders: builder.query<
@@ -428,6 +604,11 @@ export const ordersApi = api.injectEndpoints({
       providesTags: [{ type: 'DriverCash', id: 'ME' }],
     }),
 
+    // Phase 12.4 — reused unchanged from Phase 7 (identical endpoint, no
+    // duplicate query logic). `invalidatesTags` now ALSO covers the Phase
+    // 12.1/12.2 DriverJob tag family so the new My Jobs / Job Detail views
+    // refresh correctly too — Phase 7's own DriverOrder-tagged views
+    // (pre-Phase-12 placeholders) keep working exactly as before.
     pickupDriverOrder: builder.mutation<DriverOrderDetail, string>({
       query: (id) => ({ url: `/driver/orders/${id}/pickup`, method: 'POST' }),
       transformResponse: (r: ApiSuccessResponse<DriverOrderDetail>) =>
@@ -435,6 +616,8 @@ export const ordersApi = api.injectEndpoints({
       invalidatesTags: (_res, _err, id) => [
         { type: 'DriverOrder', id },
         { type: 'DriverOrder', id: 'LIST' },
+        { type: 'DriverJob', id: `DELIVERY:${id}` },
+        { type: 'DriverJob', id: 'LIST' },
         { type: 'Order', id },
         { type: 'Order', id: 'LIST' },
         { type: 'Dashboard', id: 'ROOT' },
@@ -451,6 +634,8 @@ export const ordersApi = api.injectEndpoints({
       invalidatesTags: (_res, _err, id) => [
         { type: 'DriverOrder', id },
         { type: 'DriverOrder', id: 'LIST' },
+        { type: 'DriverJob', id: `DELIVERY:${id}` },
+        { type: 'DriverJob', id: 'LIST' },
         { type: 'Order', id },
         { type: 'Order', id: 'LIST' },
         { type: 'Dashboard', id: 'ROOT' },
@@ -472,6 +657,10 @@ export const ordersApi = api.injectEndpoints({
       invalidatesTags: (_res, _err, { id }) => [
         { type: 'DriverOrder', id },
         { type: 'DriverOrder', id: 'LIST' },
+        { type: 'DriverJob', id: `DELIVERY:${id}` },
+        { type: 'DriverJob', id: 'LIST' },
+        // The failed attempt is now Driver history (Phase 12.5 Failed page).
+        { type: 'DriverHistory', id: 'LIST' },
         { type: 'Order', id },
         { type: 'Order', id: 'LIST' },
         { type: 'Dashboard', id: 'ROOT' },
@@ -492,10 +681,18 @@ export const ordersApi = api.injectEndpoints({
         unwrapData(r),
       // Delivery: Driver Cash always; Customer Wallet for DELIVERY_ONLY;
       // Company delivery-fee revenue; plus Dashboard/Reports. Never a
-      // Settlement (that is a separate cash-handover action).
+      // Settlement (that is a separate cash-handover action). Financial tag
+      // invalidation is identical to Phase 7/8 — this Driver action can
+      // finalize real ledger rows, so Finance/Dashboard/Report must refresh
+      // exactly as they already did before Phase 12 existed.
       invalidatesTags: (_res, _err, { id }) => [
         { type: 'DriverOrder', id },
         { type: 'DriverOrder', id: 'LIST' },
+        { type: 'DriverJob', id: `DELIVERY:${id}` },
+        { type: 'DriverJob', id: 'LIST' },
+        // The successful (or failed-difference) attempt is now Driver
+        // history (Phase 12.5 Completed page).
+        { type: 'DriverHistory', id: 'LIST' },
         { type: 'Order', id },
         { type: 'Order', id: 'LIST' },
         { type: 'DriverCash', id: 'ME' },
@@ -521,6 +718,13 @@ export const {
   useRescheduleOrderMutation,
   useCancelOrderMutation,
   useResolveCollectionDifferenceMutation,
+  useGetDriverJobsQuery,
+  useGetDriverJobDetailQuery,
+  useGetDriverWorkHistoryQuery,
+  useGetDriverFailedCollectionReasonsQuery,
+  useGetDriverFailedDeliveryReasonsQuery,
+  useMarkParcelCollectedMutation,
+  useReportParcelCollectionFailedMutation,
   useGetDriverOrdersQuery,
   useGetDriverOrderQuery,
   useGetDriverCashQuery,

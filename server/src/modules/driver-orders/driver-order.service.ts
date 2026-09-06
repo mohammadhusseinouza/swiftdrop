@@ -8,7 +8,7 @@ import { creditWalletForOrder } from "../wallets/wallet-ledger.service";
 import { recordDeliveryFeeRevenue, recordCompanyOrderProductRevenue } from "../company-finance/company-finance-ledger.service";
 import { createAuditLog } from "../../shared/audit/audit.service";
 import type { ListDriverOrdersQuery } from "./driver-order.schema";
-import type { DriverOrderDetail, DriverOrderSummary } from "./driver-order.types";
+import type { DriverOrderDetail, DriverOrderPackageSummary, DriverOrderSummary } from "./driver-order.types";
 
 // ============================================================
 // QUERY SECURITY (Phase 7.1): every function in this module takes a
@@ -21,12 +21,22 @@ import type { DriverOrderDetail, DriverOrderSummary } from "./driver-order.types
 // away by a filter.
 // ============================================================
 
-const driverOrderSelect = {
+// Exported for reuse by modules/driver-jobs (Phase 12.1) — the My Jobs
+// endpoint's DELIVERY job DTO is built from this exact select/mapper so
+// there is never a second, independently-drifting Driver Order DTO mapping.
+export const driverOrderSelect = {
   id: true,
   order_number: true,
   tracking_code: true,
   order_type: true,
   status: true,
+  // Selected for reuse by modules/driver-jobs's Phase 12.2 Delivery Job
+  // Detail (task §14/§16 — Payment Type, kept distinct from Payment
+  // Method) — deliberately NOT added to DriverOrderSummary/
+  // toDriverOrderSummary below, so this stays byte-for-byte invisible to
+  // the existing Phase 7.1 /driver/me/orders JSON response and its
+  // exact-field-set regression tests.
+  payment_type: true,
 
   receiver_name: true,
   receiver_phone: true,
@@ -58,9 +68,30 @@ const driverOrderSelect = {
   delivered_at: true,
 } satisfies Prisma.ordersSelect;
 
-type DriverOrderRow = Prisma.ordersGetPayload<{ select: typeof driverOrderSelect }>;
+export type DriverOrderRow = Prisma.ordersGetPayload<{ select: typeof driverOrderSelect }>;
 
-function toDriverOrderSummary(row: DriverOrderRow): DriverOrderSummary {
+// Package info is a property of the parcel itself — shared by BOTH the
+// Collection (Sender -> Company) and Delivery (Company -> Receiver) phases
+// of the same Order. Exported so modules/driver-jobs's Phase 12.2 Collection
+// Job Detail (task §11/§17) can reuse this exact mapping instead of a second,
+// independently-drifting package-field interpretation.
+export function toDriverPackageSummary(row: {
+  description: string;
+  package_count: number;
+  quantity: number | null;
+  weight_kg: Prisma.Decimal | null;
+  package_notes: string | null;
+}): DriverOrderPackageSummary {
+  return {
+    description: row.description,
+    packageCount: row.package_count,
+    quantity: row.quantity,
+    weightKg: row.weight_kg ? row.weight_kg.toString() : null,
+    notes: row.package_notes,
+  };
+}
+
+export function toDriverOrderSummary(row: DriverOrderRow): DriverOrderSummary {
   return {
     id: row.id,
     orderNumber: row.order_number,
@@ -79,13 +110,7 @@ function toDriverOrderSummary(row: DriverOrderRow): DriverOrderSummary {
       instructions: row.receiver_instructions,
     },
 
-    package: {
-      description: row.description,
-      packageCount: row.package_count,
-      quantity: row.quantity,
-      weightKg: row.weight_kg ? row.weight_kg.toString() : null,
-      notes: row.package_notes,
-    },
+    package: toDriverPackageSummary(row),
 
     collection: {
       amountToCollect: row.amount_to_collect.toString(),

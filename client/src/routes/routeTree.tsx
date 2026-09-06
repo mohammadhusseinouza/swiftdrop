@@ -37,14 +37,11 @@ import EmployeesListPage from '../pages/management/employees/EmployeesListPage';
 import EmployeeDetailPage from '../pages/management/employees/EmployeeDetailPage';
 import AuditLogsPage from '../pages/management/audit/AuditLogsPage';
 import SettingsPage from '../pages/management/settings/SettingsPage';
-import {
-  DriverOrdersPage,
-  DriverOrderDetailPage,
-  DriverOutForDeliveryPage,
-  DriverCompletedPage,
-  DriverFailedPage,
-  DriverCashPage,
-} from '../pages/driver/driverPages';
+import MyJobsPage from '../pages/driver/MyJobsPage';
+import DriverJobDetailPage from '../pages/driver/DriverJobDetailPage';
+import DriverCompletedPage from '../pages/driver/DriverCompletedPage';
+import DriverFailedPage from '../pages/driver/DriverFailedPage';
+import DriverCashPage from '../pages/driver/DriverCashPage';
 import {
   CustomerDashboardPage,
   CustomerOrdersPage,
@@ -119,13 +116,25 @@ const managementChildren: RouteObject[] = [
 ];
 
 const driverChildren: RouteObject[] = [
-  { index: true, element: <Navigate to="/driver/orders" replace /> },
-  { path: 'orders', element: <DriverOrdersPage /> },
-  { path: 'orders/:id', element: <DriverOrderDetailPage /> },
-  { path: 'out-for-delivery', element: <DriverOutForDeliveryPage /> },
+  { index: true, element: <Navigate to="/driver/jobs" replace /> },
+  // My Jobs (Phase 12.1) — the Driver Portal landing page. Unified
+  // Collection + Delivery current-work list; see MyJobsPage.
+  { path: 'jobs', element: <MyJobsPage /> },
+  // Job Detail (Phase 12.2) — deep-link safe, jobType is validated inside
+  // the page itself (route-safe fallback for an unrecognized segment).
+  { path: 'jobs/:jobType/:orderId', element: <DriverJobDetailPage /> },
+  // Phase 12.5 — the remaining READ-ONLY Driver surfaces.
   { path: 'completed', element: <DriverCompletedPage /> },
   { path: 'failed', element: <DriverFailedPage /> },
   { path: 'cash', element: <DriverCashPage /> },
+  // Legacy Phase 10.2 placeholder routes (task §53/§85). The job-oriented
+  // "My Jobs" experience (Phase 12.1) replaced the order-oriented list, and
+  // there is deliberately NO exact "out for delivery" filtered page — so
+  // both legacy paths redirect to the canonical Driver landing route rather
+  // than pretending to be something they are not.
+  { path: 'orders', element: <Navigate to="/driver/jobs" replace /> },
+  { path: 'orders/:id', element: <Navigate to="/driver/jobs" replace /> },
+  { path: 'out-for-delivery', element: <Navigate to="/driver/jobs" replace /> },
 ];
 
 const customerChildren: RouteObject[] = [

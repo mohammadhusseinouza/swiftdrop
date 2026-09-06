@@ -9,7 +9,7 @@ import type {
   ListFailedDeliveryReasonsQuery,
   UpdateFailedDeliveryReasonInput,
 } from "./failed-delivery-reason.schema";
-import type { FailedDeliveryReasonSummary } from "./failed-delivery-reason.types";
+import type { DriverFailedDeliveryReasonSummary, FailedDeliveryReasonSummary } from "./failed-delivery-reason.types";
 
 function toFailedDeliveryReasonSummary(reason: failed_delivery_reasons): FailedDeliveryReasonSummary {
   return {
@@ -63,6 +63,19 @@ export async function listFailedDeliveryReasons(
   });
 
   return rows.map(toFailedDeliveryReasonSummary);
+}
+
+// Driver-facing: ACTIVE reasons only, narrow shape (Phase 12.4). Used by
+// GET /api/v1/driver/failed-delivery-reasons — the DRIVER role must NOT be
+// granted settings.read. Mirrors listActiveFailedCollectionReasonsForDriver
+// (failed-collection-reason.service.ts) exactly.
+export async function listActiveFailedDeliveryReasonsForDriver(): Promise<DriverFailedDeliveryReasonSummary[]> {
+  const rows = await prisma.failed_delivery_reasons.findMany({
+    where: { is_active: true },
+    orderBy: [{ sort_order: "asc" }, { name: "asc" }],
+    select: { id: true, name: true, requires_notes: true, sort_order: true },
+  });
+  return rows.map((r) => ({ id: r.id, name: r.name, requiresNotes: r.requires_notes, sortOrder: r.sort_order }));
 }
 
 export async function createFailedDeliveryReason(

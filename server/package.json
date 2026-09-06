@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
     "admin:create": "tsx src/bootstrap/create-first-admin.ts",
     "seed:visual": "tsx src/bootstrap/seed-visual-users.ts",
-    "test": "tsx --test \"tests/**/*.test.ts\"",
+    "seed:visual:driver-12-5": "tsx src/bootstrap/seed-visual-driver-12-5.ts",
+    "test": "tsx --test --test-concurrency=1 \"tests/**/*.test.ts\"",
     "test:auth": "tsx --test \"tests/auth/**/*.test.ts\"",
     "test:customers": "tsx --test \"tests/customers/**/*.test.ts\""
   },

@@ -36,7 +36,7 @@ export function getDefaultAuthenticatedPath(
     case 'management':
       return '/management/dashboard';
     case 'driver':
-      return '/driver/orders';
+      return '/driver/jobs';
     case 'customer':
       return '/customer/dashboard';
     default:

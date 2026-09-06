@@ -3,6 +3,7 @@ import { AppError } from "../../shared/errors/app-error";
 import {
   createFailedDeliveryReason,
   getFailedDeliveryReasonById,
+  listActiveFailedDeliveryReasonsForDriver,
   listFailedDeliveryReasons,
   updateFailedDeliveryReason,
 } from "./failed-delivery-reason.service";
@@ -11,7 +12,7 @@ import type {
   ListFailedDeliveryReasonsQuery,
   UpdateFailedDeliveryReasonInput,
 } from "./failed-delivery-reason.schema";
-import type { FailedDeliveryReasonSummary } from "./failed-delivery-reason.types";
+import type { DriverFailedDeliveryReasonSummary, FailedDeliveryReasonSummary } from "./failed-delivery-reason.types";
 import type { ApiSuccessResponse } from "../../shared/types/api-response";
 
 function requireActorId(req: { actor?: { userId: string } }): string {
@@ -67,6 +68,20 @@ export const updateFailedDeliveryReasonController: RequestHandler<
   try {
     const reason = await updateFailedDeliveryReason(req.params.id, req.body, requireActorId(req));
     res.json({ success: true, data: reason });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// GET /api/v1/driver/failed-delivery-reasons (Phase 12.4) — narrow,
+// active-only, authorized by driver.orders.read_own (NOT settings.read).
+// Mirrors listDriverFailedCollectionReasonsController exactly.
+export const listDriverFailedDeliveryReasonsController: RequestHandler<
+  Record<string, never>,
+  ApiSuccessResponse<DriverFailedDeliveryReasonSummary[]>
+> = async (_req, res, next) => {
+  try {
+    res.json({ success: true, data: await listActiveFailedDeliveryReasonsForDriver() });
   } catch (error) {
     next(error);
   }
