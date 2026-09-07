@@ -1782,7 +1782,14 @@ export async function readyOrder(orderId: string, actorUserId: string): Promise<
 
   const now = new Date();
 
-  return prisma.$transaction(async (tx) => {
+  // Only the atomic state transition + its history row belong inside the
+  // interactive transaction. The full OrderDetail response (rich order row +
+  // five history/financial collections — roughly nine further sequential
+  // reads) is pure response-building with no atomicity requirement; rebuilding
+  // it inside the transaction kept the transaction open long enough to exceed
+  // its 5s lifetime on the deployed Vercel + Supabase stack (Prisma P2028), so
+  // it is reconstructed after commit instead.
+  await prisma.$transaction(async (tx) => {
     const claim = await tx.orders.updateMany({
       where: { id: orderId, status: "RECEIVED", current_driver_id: null },
       data: { status: "READY_FOR_PICKUP", updated_at: now },
@@ -1798,10 +1805,9 @@ export async function readyOrder(orderId: string, actorUserId: string): Promise<
     await tx.order_status_history.create({
       data: { order_id: orderId, from_status: "RECEIVED", to_status: "READY_FOR_PICKUP", changed_by_id: actorUserId },
     });
-
-    const updated = await tx.orders.findUniqueOrThrow({ where: { id: orderId }, include: orderDetailInclude });
-    return assembleOrderDetail(tx, updated);
   });
+
+  return getOrderById(orderId);
 }
 
 // POST /:id/reschedule — FAILED_DELIVERY -> RESCHEDULED only. Preserves
