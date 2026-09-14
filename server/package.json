@@ -14,7 +14,13 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
     "admin:create": "tsx src/bootstrap/create-first-admin.ts",
     "seed:visual": "tsx src/bootstrap/seed-visual-users.ts",
+    "seed:visual:customer-13-1": "tsx src/bootstrap/seed-visual-customer-13-1.ts",
+    "seed:visual:customer-13-2": "tsx src/bootstrap/seed-visual-customer-13-2.ts",
+    "seed:visual:customer-13-3": "tsx src/bootstrap/seed-visual-customer-13-3.ts",
+    "seed:visual:customer-13-5": "tsx src/bootstrap/seed-visual-customer-13-5.ts",
+    "seed:visual:customer-13-7": "tsx src/bootstrap/seed-visual-customer-13-7.ts",
     "seed:visual:driver-12-5": "tsx src/bootstrap/seed-visual-driver-12-5.ts",
+    "seed:visual:tracking-14-1": "tsx src/bootstrap/seed-visual-tracking-14-1.ts",
     "test": "tsx --test --test-concurrency=1 \"tests/**/*.test.ts\"",
     "test:auth": "tsx --test \"tests/auth/**/*.test.ts\"",
     "test:customers": "tsx --test \"tests/customers/**/*.test.ts\""

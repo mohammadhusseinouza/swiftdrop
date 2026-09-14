@@ -14,7 +14,11 @@ import type { CustomerTrackingDetail, PublicTrackingDetail, TrackingException, T
 // Customer only), never by this builder selecting different raw source data.
 // ============================================================
 
-const trackingSourceSelect = {
+// Exported (Phase 13.3) so the Customer Order Detail service can select
+// exactly these columns as part of its own single query and then build the
+// SAME safe progress via buildCustomerTrackingProgress — one privacy model,
+// no second timeline, no extra request.
+export const trackingSourceSelect = {
   id: true,
   order_number: true,
   tracking_code: true,
@@ -30,7 +34,7 @@ const trackingSourceSelect = {
   delivered_at: true,
 } satisfies Prisma.ordersSelect;
 
-type TrackingSourceOrder = Prisma.ordersGetPayload<{ select: typeof trackingSourceSelect }>;
+export type TrackingSourceOrder = Prisma.ordersGetPayload<{ select: typeof trackingSourceSelect }>;
 
 type Audience = "customer" | "public";
 
@@ -184,6 +188,16 @@ function buildTrackingProgress(
     isDelivered,
     deliveredAt: order.delivered_at ? order.delivered_at.toISOString() : null,
   };
+}
+
+// Exported (Phase 13.3) — the Customer Order Detail page's tracking section
+// is EXACTLY the "customer" audience progress from this one builder. There
+// is no second timeline: same stage vocabulary, same exception wording, same
+// privacy (no actor / Driver / attempt / assignment / audit).
+export function buildCustomerTrackingProgress(
+  order: TrackingSourceOrder
+): Pick<PublicTrackingDetail, "stages" | "exception" | "isDelivered" | "deliveredAt"> {
+  return buildTrackingProgress(order, "customer");
 }
 
 // ============================================================

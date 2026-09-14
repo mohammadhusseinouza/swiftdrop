@@ -17,7 +17,7 @@ import RequirePermission from './guards/RequirePermission';
 import NotFoundPage from '../pages/NotFoundPage';
 import UnauthorizedPage from '../pages/UnauthorizedPage';
 import LoginPage from '../pages/auth/LoginPage';
-import TrackingPlaceholderPage from '../pages/public/TrackingPlaceholderPage';
+import PublicTrackingPage from '../pages/public/PublicTrackingPage';
 import { PERMISSIONS as P } from '../features/auth/permissions';
 import OrdersListPage from '../pages/management/orders/OrdersListPage';
 import CreateOrderPage from '../pages/management/orders/create/CreateOrderPage';
@@ -189,11 +189,11 @@ export const routeTree: RouteObject[] = [
     ],
   },
 
-  // Public — outside the auth bootstrap boundary.
+  // Public — outside the auth bootstrap boundary (Phase 14.1).
   {
     path: 'track',
     element: <PublicLayout />,
-    children: [{ index: true, element: <TrackingPlaceholderPage /> }],
+    children: [{ index: true, element: <PublicTrackingPage /> }],
   },
 
   { path: '*', element: <NotFoundPage /> },

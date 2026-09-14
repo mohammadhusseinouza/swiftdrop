@@ -8,12 +8,15 @@ import { prisma } from "../../src/db/prisma";
 import {
   cleanupTestArea,
   cleanupTestCustomerRecord,
+  cleanupTestDriverRecord,
   cleanupTestOrder,
   cleanupTestUser,
   createTestArea,
   createTestCustomer,
+  createTestDriver,
   createTestUser,
   loginTestUser,
+  seedCustomerRecord,
   seedTestOrder,
   type TestUser,
 } from "../helpers/fixtures";
@@ -239,6 +242,119 @@ describe("Customer / Public Tracking backend contracts (Phase 11.17.6)", () => {
       assert.ok(res.body.data.deliveredAt);
       const stages = res.body.data.stages as Array<{ state: string }>;
       assert.ok(stages.every((s) => s.state === "done"));
+    });
+  });
+
+  // ===========================================================
+  // Phase 14.1 — defense-in-depth privacy tests (task §32-§37). The exact-key
+  // assertions above already prove the public DTO can never carry these
+  // fields; these tests additionally prove no ACTUAL sensitive value ever
+  // reaches the response body, seeding every sensitive dimension (Driver,
+  // Customer, receiver, money, financial review) on ONE order together.
+  // ===========================================================
+  describe("Phase 14.1 — public DTO privacy (defense-in-depth)", () => {
+    test("Driver identity/contact, rich Customer profile, receiver phone, money and REVIEW_REQUIRED finance are all absent from a delivered order's public response", async () => {
+      const driverUser = await createTestUser("DRIVER");
+      createdUserIds.push(driverUser.id);
+      const driverId = await createTestDriver(driverUser.id);
+
+      const richCustomerId = await seedCustomerRecord(admin.id, {
+        name: "Marker Sensitive Customer Name",
+        primaryPhone: "+96179999999",
+        email: "marker-sensitive-customer@example.com",
+      });
+      createdCustomerIds.push(richCustomerId);
+
+      const now = new Date();
+      const orderId = await seedTestOrder(richCustomerId, admin.id, {
+        areaId: area.id,
+        areaName: area.name,
+        status: "DELIVERED",
+        financialStatus: "REVIEW_REQUIRED",
+        needsFinancialReview: true,
+        parcelIntakeMethod: "ALREADY_AT_COMPANY",
+        receiverPhone: "+96178888888",
+        orderAmount: "543.21",
+        deliveryFee: "12.34",
+        actualAmountCollected: "500.00",
+        collectionDifferenceReason: "Marker sensitive shortage reason",
+        paymentType: "PARTIALLY_PAID",
+        currentDriverId: driverId,
+        assignedAt: now,
+        deliveredAt: now,
+      });
+      orderIds.push(orderId);
+
+      const order = await prisma.orders.findUniqueOrThrow({ where: { id: orderId } });
+      const res = await request(app).get(`/api/v1/track/${order.tracking_code}`);
+      assert.equal(res.status, 200, JSON.stringify(res.body));
+
+      // Structural: still ONLY the 5 public-safe keys.
+      assert.deepEqual(Object.keys(res.body.data).sort(), PUBLIC_SAFE_KEYS);
+      // A delivered REVIEW_REQUIRED order still reads as plain "Delivered".
+      assert.equal(res.body.data.isDelivered, true);
+      assert.equal(res.body.data.exception, null);
+
+      const json = JSON.stringify(res.body);
+      const forbiddenValues = [
+        // Driver identity/contact
+        driverUser.email,
+        // Customer profile
+        "Marker Sensitive Customer Name",
+        "+96179999999",
+        "marker-sensitive-customer@example.com",
+        // Receiver contact
+        "+96178888888",
+        // Money / payment
+        "543.21",
+        "12.34",
+        "500.00",
+        "PARTIALLY_PAID",
+        "Marker sensitive shortage reason",
+        // Financial review internals
+        "REVIEW_REQUIRED",
+        "needsFinancialReview",
+        "needs_financial_review",
+        // Raw ids/actors
+        orderId,
+        driverId,
+        admin.id,
+        admin.email,
+      ];
+      for (const value of forbiddenValues) {
+        assert.ok(!json.includes(value), `public response leaked sensitive value "${value}"`);
+      }
+
+      await cleanupTestDriverRecord(driverId);
+    });
+
+    test("Read-only: repeated public GETs create zero writes to orders/audit_logs/finance tables", async () => {
+      const orderId = await seedOrder({ parcelIntakeMethod: "DRIVER_COLLECTION", parcelCollectionStatus: "ASSIGNED" });
+      const order = await prisma.orders.findUniqueOrThrow({ where: { id: orderId } });
+
+      const [before, auditBefore] = await Promise.all([
+        prisma.orders.findUniqueOrThrow({ where: { id: orderId } }),
+        prisma.audit_logs.count({ where: { entity_id: orderId } }),
+      ]);
+
+      await request(app).get(`/api/v1/track/${order.tracking_code}`);
+      await request(app).get(`/api/v1/track/${order.tracking_code}`);
+      await request(app).get(`/api/v1/track/${order.tracking_code}`);
+
+      const [after, auditAfter] = await Promise.all([
+        prisma.orders.findUniqueOrThrow({ where: { id: orderId } }),
+        prisma.audit_logs.count({ where: { entity_id: orderId } }),
+      ]);
+
+      assert.deepEqual(after, before);
+      assert.equal(auditAfter, auditBefore);
+    });
+
+    test("Malformed/empty tracking code -> validation rejects before any DB lookup", async () => {
+      const empty = await request(app).get(`/api/v1/track/${encodeURIComponent(" ")}`);
+      assert.equal(empty.status, 400);
+      assert.equal(empty.body.success, false);
+      assert.ok(!JSON.stringify(empty.body).match(/prisma|sql|stack/i));
     });
   });
 });

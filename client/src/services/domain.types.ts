@@ -1285,6 +1285,250 @@ export interface RoleConfigResponse {
   lockedRoleCodes: string[];
 }
 
+/* ==================== Customer Portal — Dashboard ==================== */
+
+/**
+ * Mirrors server/src/modules/customer-dashboard/customer-dashboard.types.ts
+ * (Phase 13.1). Self-scoped, read-only. Money is a decimal string; counts are
+ * integers. Carries no internal accounting / financial-review / Driver Cash /
+ * Company Finance / Parcel Collection data.
+ */
+export interface CustomerDashboardSummary {
+  customer: { name: string; customerNumber: string };
+  availableWalletBalance: string;
+  pendingAmount: string;
+  activeOrders: number;
+  deliveredOrders: number;
+}
+
+/* ====================== Customer Portal — My Orders ================== */
+
+/**
+ * Mirrors server/src/modules/tracking/customer-collection-stage.ts
+ * (Phase 13.2). The Customer-safe single-line Parcel Collection stage —
+ * FAILED / RESCHEDULED both surface as one neutral "COLLECTION_DELAYED".
+ */
+export type CustomerCollectionStageCode =
+  | 'AWAITING_COLLECTION'
+  | 'COLLECTION_SCHEDULED'
+  | 'PARCEL_COLLECTED'
+  | 'RECEIVED_AT_COMPANY'
+  | 'COLLECTION_DELAYED';
+
+export interface CustomerCollectionStage {
+  code: CustomerCollectionStageCode;
+  label: string;
+}
+
+export type CustomerOrderView = 'all' | 'active' | 'delivered';
+
+/**
+ * Mirrors server/src/modules/customer-orders/customer-order.types.ts
+ * (Phase 13.2). A narrow Customer-safe list row — NOT the Management
+ * OrderSummary. `status` / `orderType` / `parcelIntakeMethod` are raw enums
+ * carried as data and rendered through the shared Customer-safe presentation
+ * helpers; the raw token is never shown.
+ */
+export interface CustomerOrderSummary {
+  id: string;
+  orderNumber: string;
+  trackingCode: string;
+  /** Raw OrderType enum — rendered via getOrderTypeLabel. */
+  orderType: string;
+  /** Raw OrderStatus enum — rendered via getCustomerStatusPresentation. */
+  status: string;
+  createdAt: string;
+  deliveredAt: string | null;
+  receiverName: string;
+  receiverArea: string;
+  orderAmount: string;
+  deliveryFee: string;
+  amountToCollect: string;
+  parcelIntakeMethod: ParcelIntakeMethod;
+  collectionStage: CustomerCollectionStage | null;
+}
+
+/* ============ Customer Portal — Order Detail (Phase 13.3) ============ */
+
+/** Mirrors server/src/modules/tracking/tracking.types.ts. */
+export type TrackingStageState = 'done' | 'current' | 'upcoming';
+export interface TrackingStageEntry {
+  code: string;
+  label: string;
+  state: TrackingStageState;
+  occurredAt: string | null;
+}
+export interface TrackingException {
+  code: string;
+  message: string;
+}
+
+export interface CustomerOrderReceiver {
+  name: string;
+  phone: string;
+  altPhone: string | null;
+  area: string;
+  address: string;
+  buildingFloor: string | null;
+  instructions: string | null;
+  mapLink: string | null;
+}
+export interface CustomerOrderPackage {
+  description: string;
+  packageCount: number;
+  quantity: number | null;
+  weightKg: string | null;
+}
+export interface CustomerOrderPayment {
+  /** Raw PaymentType enum — rendered via getPaymentTypePresentation. */
+  type: string;
+  orderAmount: string;
+  deliveryFee: string;
+  amountToCollect: string;
+}
+export interface CustomerOrderTracking {
+  stages: TrackingStageEntry[];
+  exception: TrackingException | null;
+  isDelivered: boolean;
+}
+
+/* ============ Public Tracking (Phase 14.1) ============ */
+
+/**
+ * Mirrors server/src/modules/tracking/tracking.types.ts `PublicTrackingDetail`
+ * exactly — the narrowest, UNAUTHENTICATED-safe shape. Deliberately a
+ * superset-compatible sibling of `CustomerOrderTracking` (same `stages` /
+ * `exception` / `isDelivered` fields) so the Customer-safe timeline
+ * presentation can be reused as-is; never adds a Customer/Driver/financial
+ * field.
+ */
+export interface PublicTrackingDetail {
+  trackingCode: string;
+  stages: TrackingStageEntry[];
+  exception: TrackingException | null;
+  isDelivered: boolean;
+  deliveredAt: string | null;
+}
+
+/**
+ * Mirrors server/src/modules/customer-orders/customer-order.types.ts
+ * `CustomerOrderDetail` (Phase 13.3). Narrow Customer-safe — same privacy
+ * envelope as the list row plus the Customer's own Order snapshot and the
+ * shared Customer-safe tracking progress. No Driver / employee / assignment /
+ * attempt / audit / finance-internal fields.
+ */
+export interface CustomerOrderDetail {
+  id: string;
+  orderNumber: string;
+  trackingCode: string;
+  orderType: string;
+  status: string;
+  createdAt: string;
+  deliveredAt: string | null;
+  receiver: CustomerOrderReceiver;
+  package: CustomerOrderPackage;
+  payment: CustomerOrderPayment;
+  parcelIntakeMethod: ParcelIntakeMethod;
+  collectionStage: CustomerCollectionStage | null;
+  tracking: CustomerOrderTracking;
+}
+
+/* ============ Customer Portal — Wallet (Phase 13.4) ============ */
+
+/**
+ * Mirrors server/src/modules/customer-wallet/customer-wallet.types.ts. The
+ * two figures also shown on the Dashboard (same shared backend helper) plus
+ * minimal display identity. Money as decimal strings. No wallet id, no
+ * timestamps, no transaction / payout / finance data.
+ */
+export interface CustomerWalletSummary {
+  customer: { name: string; customerNumber: string };
+  availableBalance: string;
+  pendingAmount: string;
+}
+
+/**
+ * Mirrors server/src/modules/customer-wallet/customer-wallet.types.ts
+ * (Phase 13.5). Narrow Customer-safe row over the append-only
+ * wallet_transactions ledger — no balanceBefore, no credit/debit columns, no
+ * notes/reason, no processedBy, no paymentMethod, no reversalOfId, no
+ * idempotency key. `direction` + `amount` are the server's exact-Decimal
+ * balance movement; the raw enum `type` is rendered via the shared helper.
+ */
+export type CustomerWalletTransactionType = 'ORDER_CREDIT' | 'PAYOUT' | 'ADJUSTMENT' | 'REVERSAL';
+export type CustomerWalletTransactionDirection = 'CREDIT' | 'DEBIT' | 'NONE';
+export type CustomerWalletTransactionFilter =
+  | 'all'
+  | 'order_credit'
+  | 'payout'
+  | 'adjustment'
+  | 'reversal';
+
+export interface CustomerWalletTransactionReference {
+  kind: 'ORDER' | 'PAYOUT';
+  label: string;
+}
+export interface CustomerWalletTransactionSummary {
+  id: string;
+  type: CustomerWalletTransactionType;
+  occurredAt: string;
+  direction: CustomerWalletTransactionDirection;
+  amount: string;
+  balanceAfter: string;
+  reference: CustomerWalletTransactionReference | null;
+}
+
+/**
+ * Mirrors server/src/modules/customer-payouts/customer-payout.types.ts
+ * (Phase 13.6). Narrow Customer-safe view of the customer_payouts business
+ * record — no processedBy / Finance identity, no notes, no idempotency key,
+ * no payment_method_id / code, no linked wallet-transaction id, no reversal
+ * id, no audit / financial-review data. `amount` is a positive decimal
+ * string (unsigned — the page establishes it is a payout); the raw `status`
+ * enum is rendered via the shared presentation helper.
+ */
+export type CustomerPayoutStatus = 'COMPLETED' | 'REVERSED' | 'CANCELLED';
+
+export interface CustomerPayoutPaymentMethod {
+  name: string;
+}
+
+export interface CustomerPayoutSummary {
+  id: string;
+  payoutNumber: string;
+  amount: string;
+  paymentMethod: CustomerPayoutPaymentMethod;
+  status: CustomerPayoutStatus;
+  createdAt: string;
+}
+
+/* ====================== Customer Portal — Profile ==================== */
+
+/**
+ * Mirrors server/src/modules/customer-profile/customer-profile.types.ts
+ * (Phase 13.7). Self-scoped, READ-ONLY. Narrow Customer-safe identity /
+ * contact / default-delivery view — NOT the Management Customer DTO.
+ *
+ * `email` is the Customer CONTACT email (customers.email), never the portal
+ * login/account email (users.email, which may differ). Carries no internal
+ * ids, no Management notes, no is_active / portal metadata, no timestamps,
+ * no auth/security internals, and no wallet / order / tracking data.
+ * Optional fields are explicit `null` when unset.
+ */
+export interface CustomerProfileArea {
+  name: string;
+}
+
+export interface CustomerProfile {
+  customerNumber: string;
+  name: string;
+  primaryPhone: string;
+  secondaryPhone: string | null;
+  email: string | null;
+  defaultArea: CustomerProfileArea | null;
+  defaultAddress: string | null;
+}
+
 /* ============================ Audit ============================ */
 
 export interface AuditLogEntry {

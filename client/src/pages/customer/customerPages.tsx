@@ -1,17 +1,13 @@
-import RoutePlaceholder from '../RoutePlaceholder';
-
 /**
- * Phase 10.2 route-target placeholders for the Customer route group.
- * The real Customer Portal is Phase 13.
+ * Customer route-target exports.
+ *
+ * Every Customer Portal page is now a real implementation (Phases 13.1–13.7).
+ * No placeholder remains in the active Customer route family.
  */
-const customer = (title: string) => (
-  <RoutePlaceholder section="Customer" title={title} phase="Phase 13" />
-);
-
-export const CustomerDashboardPage = () => customer('Dashboard');
-export const CustomerOrdersPage = () => customer('Orders');
-export const CustomerOrderDetailPage = () => customer('Order Detail');
-export const CustomerWalletPage = () => customer('Wallet');
-export const CustomerTransactionsPage = () => customer('Transactions');
-export const CustomerPayoutsPage = () => customer('Payout History');
-export const CustomerProfilePage = () => customer('Profile');
+export { default as CustomerDashboardPage } from './CustomerDashboardPage';
+export { default as CustomerOrdersPage } from './CustomerOrdersPage';
+export { default as CustomerOrderDetailPage } from './CustomerOrderDetailPage';
+export { default as CustomerWalletPage } from './CustomerWalletPage';
+export { default as CustomerTransactionsPage } from './CustomerTransactionsPage';
+export { default as CustomerPayoutsPage } from './CustomerPayoutsPage';
+export { default as CustomerProfilePage } from './CustomerProfilePage';

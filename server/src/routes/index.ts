@@ -4,6 +4,11 @@ import { AppError } from "../shared/errors/app-error";
 import { authRouter } from "../modules/auth/auth.routes";
 import { auditRouter } from "../modules/audit/audit-read.routes";
 import { customerRouter } from "../modules/customers/customer.routes";
+import { customerDashboardRouter } from "../modules/customer-dashboard/customer-dashboard.routes";
+import { customerOrderRouter } from "../modules/customer-orders/customer-order.routes";
+import { customerPayoutRouter } from "../modules/customer-payouts/customer-payout.routes";
+import { customerProfileRouter } from "../modules/customer-profile/customer-profile.routes";
+import { customerWalletRouter } from "../modules/customer-wallet/customer-wallet.routes";
 import { dashboardRouter } from "../modules/dashboard/dashboard.routes";
 import { driverRouter } from "../modules/drivers/driver.routes";
 import { driverCashRouter } from "../modules/driver-cash/driver-cash.routes";
@@ -83,6 +88,23 @@ apiRouter.use("/reports", reportRouter);
 // Customer Portal / Public Tracking UI yet). Own-scope, customer.orders.
 // read_own — matches the existing "/driver/me" own-scope namespace pattern.
 apiRouter.use("/customer/me", customerTrackingRouter);
+// Phase 13.1 — Customer Portal Dashboard (self-scoped, read-only). Same
+// "/customer/me" own-scope namespace; authenticate -> requirePortal
+// ("customer") -> authorize("customer.dashboard.read_own").
+apiRouter.use("/customer/me", customerDashboardRouter);
+// Phase 13.2 — Customer "My Orders" (self-scoped, read-only, paginated).
+// GET /api/v1/customer/me/orders; authorize("customer.orders.read_own").
+apiRouter.use("/customer/me", customerOrderRouter);
+// Phase 13.4 — Customer Wallet summary (self-scoped, read-only).
+// GET /api/v1/customer/me/wallet; authorize("customer.wallet.read_own").
+apiRouter.use("/customer/me", customerWalletRouter);
+// Phase 13.6 — Customer Payout History (self-scoped, read-only, paginated).
+// GET /api/v1/customer/me/payouts; authorize("customer.payouts.read_own").
+apiRouter.use("/customer/me", customerPayoutRouter);
+// Phase 13.7 — Customer Profile (self-scoped, read-only). Same "/customer/me"
+// own-scope namespace; authenticate -> requirePortal("customer") ->
+// authorize("customer.profile.read_own"). GET /api/v1/customer/me/profile.
+apiRouter.use("/customer/me", customerProfileRouter);
 // UNAUTHENTICATED public route (requirements.md §36) — deliberately mounted
 // directly on apiRouter, not nested under any authenticated namespace.
 apiRouter.use("/track", publicTrackingRouter);

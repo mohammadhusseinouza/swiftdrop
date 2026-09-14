@@ -1,8 +1,0 @@
-{
-    "claudeCode.environmentVariables": {
-      "CLAUDE_CONFIG_DIR": "C:\\Users\\mohammad\\.claude-work"
-    },
-    "terminal.integrated.env.windows": {
-      "CLAUDE_CONFIG_DIR": "C:\\Users\\mohammad\\.claude-work"
-    }
-  }

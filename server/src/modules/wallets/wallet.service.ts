@@ -60,6 +60,49 @@ export async function getPendingAmountsForCustomers(customerIds: string[]): Prom
 }
 
 // ============================================================
+// CUSTOMER-FACING WALLET FIGURES (Phase 13.4)
+//
+// The ONE authoritative source for the two numbers the Customer Portal shows
+// on BOTH /customer/dashboard and /customer/wallet:
+//   availableBalance -> customer_wallets.available_balance (the Phase 8.2
+//                       authoritative cached balance — never a re-sum of
+//                       wallet_transactions or of delivered orders)
+//   pendingAmount    -> getPendingAmountForCustomer (the approved Phase 8.2
+//                       pending rule, above)
+//
+// customer-dashboard.service.ts and customer-wallet.service.ts both call
+// this, so the Dashboard and the Wallet page can never disagree (task
+// §34 / §39). A missing wallet row for a real Customer is a data-integrity
+// failure — fail closed, identical to the rest of this module (task §20 /
+// §57).
+// ============================================================
+
+export interface CustomerWalletFigures {
+  availableBalance: string;
+  pendingAmount: string;
+}
+
+export async function getCustomerWalletFigures(customerId: string): Promise<CustomerWalletFigures> {
+  const [wallet, pending] = await Promise.all([
+    prisma.customer_wallets.findUnique({
+      where: { customer_id: customerId },
+      select: { available_balance: true },
+    }),
+    getPendingAmountForCustomer(customerId),
+  ]);
+
+  if (!wallet) {
+    console.error(`[wallet.service] data-integrity failure: customer ${customerId} has no linked customer_wallets row`);
+    throw new AppError({ statusCode: 500, code: "INTERNAL_ERROR", message: "Customer wallet is missing" });
+  }
+
+  return {
+    availableBalance: wallet.available_balance.toString(),
+    pendingAmount: pending.toString(),
+  };
+}
+
+// ============================================================
 // GET /api/v1/wallets
 // ============================================================
 
