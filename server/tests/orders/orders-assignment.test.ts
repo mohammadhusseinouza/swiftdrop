@@ -876,6 +876,151 @@ describe("Orders assignment backend (Phase 6.5 — Assign / Reassign / Bulk Assi
   });
 
   // ===========================================================
+  // TRANSACTION BOUNDARY (71) — production P2028 regression
+  // ===========================================================
+  //
+  // Production hit Prisma P2028 ("transaction... expired") on /assign
+  // because the full OrderDetail response (order_status_history,
+  // order_assignments, delivery_attempts, and every financial-events query,
+  // including company_financial_transactions.findMany — the exact query in
+  // the crash stack trace) was being reconstructed INSIDE the interactive
+  // transaction. The fix moves that reconstruction to run against the base
+  // `prisma` client after the transaction commits (same boundary as the
+  // already-corrected readyOrder()). This test proves that property
+  // directly — not just that the HTTP response still looks right — by
+  // instrumenting the real Prisma client (no mocking framework, same
+  // real-DB integration style as the rest of this suite): it records when
+  // the assign transaction's outer promise settles and when the
+  // response-assembly financial-events query actually runs, and asserts
+  // the latter never happens before the former.
+  describe("Transaction boundary (production P2028 regression)", () => {
+    test("71. company_financial_transactions.findMany for the OrderDetail response runs only after the assign transaction commits", async () => {
+      const eligible = await createEligibleDriver();
+      const order = await createBaseOrder();
+
+      const originalTransaction = prisma.$transaction.bind(prisma);
+      const originalFindMany = prisma.company_financial_transactions.findMany.bind(prisma.company_financial_transactions);
+
+      let transactionSettledAt: number | null = null;
+      let financialEventsQueriedAt: number | null = null;
+      let financialEventsQueriedOrderId: string | undefined;
+
+      // Records the moment the OUTER `prisma.$transaction(...)` promise
+      // resolves — i.e. commit — regardless of what assignOrder() does inside it.
+      (prisma as { $transaction: typeof prisma.$transaction }).$transaction = (async (
+        ...args: Parameters<typeof originalTransaction>
+      ) => {
+        const result = await (originalTransaction as (...a: typeof args) => Promise<unknown>)(...args);
+        transactionSettledAt = Date.now();
+        return result;
+      }) as typeof prisma.$transaction;
+
+      // Records when the base (non-transactional) client is used for the
+      // financial-events read. If a regression reintroduces
+      // `assembleOrderDetail(tx, ...)` inside the transaction, this query
+      // would run on `tx.company_financial_transactions`, not this patched
+      // base-client delegate, and would never fire for this order.
+      (prisma.company_financial_transactions as { findMany: typeof prisma.company_financial_transactions.findMany }).findMany = (async (
+        args: Parameters<typeof originalFindMany>[0]
+      ) => {
+        const orderId = (args as { where?: { order_id?: string } } | undefined)?.where?.order_id;
+        if (orderId === order.id) {
+          financialEventsQueriedAt = Date.now();
+          financialEventsQueriedOrderId = orderId;
+        }
+        return originalFindMany(args);
+      }) as typeof prisma.company_financial_transactions.findMany;
+
+      try {
+        const res = await request(app).post(assignPath(order.id)).set(auth(tokens.admin)).send({ driverId: eligible.driverId });
+        assert.equal(res.status, 200, JSON.stringify(res.body));
+        assert.equal(res.body.data.status, "ASSIGNED");
+        assert.equal(res.body.data.currentDriver.id, eligible.driverId);
+
+        assert.ok(transactionSettledAt !== null, "expected the assign transaction to run and settle");
+        assert.ok(
+          financialEventsQueriedAt !== null,
+          "expected the OrderDetail response assembly to query company_financial_transactions for this order"
+        );
+        assert.equal(financialEventsQueriedOrderId, order.id);
+        assert.ok(
+          (financialEventsQueriedAt as number) >= (transactionSettledAt as number),
+          "the response-assembly financial-events query must not run before the assign transaction has committed"
+        );
+      } finally {
+        (prisma as { $transaction: typeof prisma.$transaction }).$transaction = originalTransaction;
+        (prisma.company_financial_transactions as { findMany: typeof prisma.company_financial_transactions.findMany }).findMany =
+          originalFindMany;
+      }
+    });
+
+    test("72. order_assignments.findMany for the OrderDetail response runs only after the reassign transaction commits", async () => {
+      const eligibleA = await createEligibleDriver();
+      const eligibleB = await createEligibleDriver();
+      const order = await createBaseOrder();
+      const assign = await request(app).post(assignPath(order.id)).set(auth(tokens.admin)).send({ driverId: eligibleA.driverId });
+      assert.equal(assign.status, 200, JSON.stringify(assign.body));
+
+      const originalTransaction = prisma.$transaction.bind(prisma);
+      const originalFindMany = prisma.order_assignments.findMany.bind(prisma.order_assignments);
+
+      let transactionSettledAt: number | null = null;
+      let assignmentHistoryQueriedAt: number | null = null;
+      let assignmentHistoryQueriedOrderId: string | undefined;
+
+      (prisma as { $transaction: typeof prisma.$transaction }).$transaction = (async (
+        ...args: Parameters<typeof originalTransaction>
+      ) => {
+        const result = await (originalTransaction as (...a: typeof args) => Promise<unknown>)(...args);
+        transactionSettledAt = Date.now();
+        return result;
+      }) as typeof prisma.$transaction;
+
+      // If a regression reintroduces `assembleOrderDetail(tx, ...)` inside
+      // reassignOrder's transaction, the assignment-history read would run on
+      // `tx.order_assignments`, not this patched base-client delegate, and
+      // would never fire for this order — this excludes the earlier
+      // `assertConsistentCurrentAssignment` pre-read, which queries with
+      // `is_current: true` only (no `order_id`-only shape matches below).
+      (prisma.order_assignments as { findMany: typeof prisma.order_assignments.findMany }).findMany = (async (
+        args: Parameters<typeof originalFindMany>[0]
+      ) => {
+        const whereClause = (args as { where?: { order_id?: string; is_current?: boolean } } | undefined)?.where;
+        const orderIdArg = whereClause?.order_id;
+        const isCurrentArg = whereClause?.is_current;
+        if (orderIdArg === order.id && isCurrentArg === undefined) {
+          assignmentHistoryQueriedAt = Date.now();
+          assignmentHistoryQueriedOrderId = orderIdArg;
+        }
+        return originalFindMany(args);
+      }) as typeof prisma.order_assignments.findMany;
+
+      try {
+        const res = await request(app)
+          .post(reassignPath(order.id))
+          .set(auth(tokens.admin))
+          .send({ driverId: eligibleB.driverId, reason: "Transaction boundary check" });
+        assert.equal(res.status, 200, JSON.stringify(res.body));
+        assert.equal(res.body.data.currentDriver.id, eligibleB.driverId);
+
+        assert.ok(transactionSettledAt !== null, "expected the reassign transaction to run and settle");
+        assert.ok(
+          assignmentHistoryQueriedAt !== null,
+          "expected the OrderDetail response assembly to query order_assignments for this order"
+        );
+        assert.equal(assignmentHistoryQueriedOrderId, order.id);
+        assert.ok(
+          (assignmentHistoryQueriedAt as number) >= (transactionSettledAt as number),
+          "the response-assembly assignment-history query must not run before the reassign transaction has committed"
+        );
+      } finally {
+        (prisma as { $transaction: typeof prisma.$transaction }).$transaction = originalTransaction;
+        (prisma.order_assignments as { findMany: typeof prisma.order_assignments.findMany }).findMany = originalFindMany;
+      }
+    });
+  });
+
+  // ===========================================================
   // REGRESSION SMOKE (67-70)
   // ===========================================================
 

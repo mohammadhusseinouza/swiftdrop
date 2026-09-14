@@ -897,4 +897,119 @@ describe("Orders workflow backend (Phase 6.6 — Ready / Reschedule / Cancel / H
       assert.equal(ready.status, 200);
     });
   });
+
+  // ===========================================================
+  // TRANSACTION BOUNDARY (90-91) — production P2028 regression
+  // ===========================================================
+  //
+  // Same architectural bug class as /assign (see orders-assignment.test.ts
+  // test 71): rescheduleOrder() and cancelOrder() used to reconstruct the
+  // full OrderDetail response (order_status_history, order_assignments,
+  // delivery_attempts, and every financial-events query) INSIDE the
+  // interactive transaction, via `assembleOrderDetail(tx, updated)`. The fix
+  // moves that reconstruction to run against the base `prisma` client after
+  // the transaction commits — this proves it directly with real-DB timing
+  // instrumentation, the same way as the /assign regression test.
+  describe("Transaction boundary (production P2028 regression)", () => {
+    test("90. order_status_history.findMany for the OrderDetail response runs only after the reschedule transaction commits", async () => {
+      const eligible = await createEligibleDriver();
+      const orderId = await assignedOrderInStatus("FAILED_DELIVERY", eligible.driverId);
+
+      const originalTransaction = prisma.$transaction.bind(prisma);
+      const originalFindMany = prisma.order_status_history.findMany.bind(prisma.order_status_history);
+
+      let transactionSettledAt: number | null = null;
+      let statusHistoryQueriedAt: number | null = null;
+      let statusHistoryQueriedOrderId: string | undefined;
+
+      (prisma as { $transaction: typeof prisma.$transaction }).$transaction = (async (
+        ...args: Parameters<typeof originalTransaction>
+      ) => {
+        const result = await (originalTransaction as (...a: typeof args) => Promise<unknown>)(...args);
+        transactionSettledAt = Date.now();
+        return result;
+      }) as typeof prisma.$transaction;
+
+      (prisma.order_status_history as { findMany: typeof prisma.order_status_history.findMany }).findMany = (async (
+        args: Parameters<typeof originalFindMany>[0]
+      ) => {
+        const orderIdArg = (args as { where?: { order_id?: string } } | undefined)?.where?.order_id;
+        if (orderIdArg === orderId) {
+          statusHistoryQueriedAt = Date.now();
+          statusHistoryQueriedOrderId = orderIdArg;
+        }
+        return originalFindMany(args);
+      }) as typeof prisma.order_status_history.findMany;
+
+      try {
+        const res = await request(app)
+          .post(reschedulePath(orderId))
+          .set(auth(tokens.admin))
+          .send({ reason: "Transaction boundary check" });
+        assert.equal(res.status, 200, JSON.stringify(res.body));
+        assert.equal(res.body.data.status, "RESCHEDULED");
+
+        assert.ok(transactionSettledAt !== null, "expected the reschedule transaction to run and settle");
+        assert.ok(statusHistoryQueriedAt !== null, "expected the OrderDetail response assembly to query order_status_history");
+        assert.equal(statusHistoryQueriedOrderId, orderId);
+        assert.ok(
+          (statusHistoryQueriedAt as number) >= (transactionSettledAt as number),
+          "the response-assembly status-history query must not run before the reschedule transaction has committed"
+        );
+      } finally {
+        (prisma as { $transaction: typeof prisma.$transaction }).$transaction = originalTransaction;
+        (prisma.order_status_history as { findMany: typeof prisma.order_status_history.findMany }).findMany = originalFindMany;
+      }
+    });
+
+    test("91. order_status_history.findMany for the OrderDetail response runs only after the cancel transaction commits", async () => {
+      const order = await createBaseOrder();
+
+      const originalTransaction = prisma.$transaction.bind(prisma);
+      const originalFindMany = prisma.order_status_history.findMany.bind(prisma.order_status_history);
+
+      let transactionSettledAt: number | null = null;
+      let statusHistoryQueriedAt: number | null = null;
+      let statusHistoryQueriedOrderId: string | undefined;
+
+      (prisma as { $transaction: typeof prisma.$transaction }).$transaction = (async (
+        ...args: Parameters<typeof originalTransaction>
+      ) => {
+        const result = await (originalTransaction as (...a: typeof args) => Promise<unknown>)(...args);
+        transactionSettledAt = Date.now();
+        return result;
+      }) as typeof prisma.$transaction;
+
+      (prisma.order_status_history as { findMany: typeof prisma.order_status_history.findMany }).findMany = (async (
+        args: Parameters<typeof originalFindMany>[0]
+      ) => {
+        const orderIdArg = (args as { where?: { order_id?: string } } | undefined)?.where?.order_id;
+        if (orderIdArg === order.id) {
+          statusHistoryQueriedAt = Date.now();
+          statusHistoryQueriedOrderId = orderIdArg;
+        }
+        return originalFindMany(args);
+      }) as typeof prisma.order_status_history.findMany;
+
+      try {
+        const res = await request(app)
+          .post(cancelPath(order.id))
+          .set(auth(tokens.admin))
+          .send({ reason: "Transaction boundary check" });
+        assert.equal(res.status, 200, JSON.stringify(res.body));
+        assert.equal(res.body.data.status, "CANCELLED");
+
+        assert.ok(transactionSettledAt !== null, "expected the cancel transaction to run and settle");
+        assert.ok(statusHistoryQueriedAt !== null, "expected the OrderDetail response assembly to query order_status_history");
+        assert.equal(statusHistoryQueriedOrderId, order.id);
+        assert.ok(
+          (statusHistoryQueriedAt as number) >= (transactionSettledAt as number),
+          "the response-assembly status-history query must not run before the cancel transaction has committed"
+        );
+      } finally {
+        (prisma as { $transaction: typeof prisma.$transaction }).$transaction = originalTransaction;
+        (prisma.order_status_history as { findMany: typeof prisma.order_status_history.findMany }).findMany = originalFindMany;
+      }
+    });
+  });
 });

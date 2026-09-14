@@ -1150,4 +1150,115 @@ describe("Collection Difference Review (Phase 8.7)", () => {
       assert.equal(deleteAttempt.status, 404);
     });
   });
+
+  // ============================================================
+  // TRANSACTION BOUNDARY (43) — production P2028 regression
+  // ============================================================
+  //
+  // Same architectural bug class as /assign (see orders-assignment.test.ts
+  // test 71): resolveCollectionDifference() used to reconstruct the full
+  // OrderDetail response (order_status_history, order_assignments,
+  // delivery_attempts, and every financial-events query, including
+  // wallet_transactions.findMany) INSIDE the interactive transaction, via
+  // `assembleOrderDetail(tx, updated)`. The fix removes ONLY that trailing
+  // response reconstruction — the claim, the wallet-credit / company-fee
+  // ledger writes, and the audit log all stay exactly where they were,
+  // inside the same atomic transaction. This test proves BOTH properties at
+  // once with real-DB timing instrumentation (no mocking framework): the
+  // ledger writes are already durably committed and financially correct by
+  // the moment the response-assembly financial-events query fires, and that
+  // query never fires before the transaction (all of it — claim, ledger
+  // writes, audit log) has settled.
+  describe("Transaction boundary (production P2028 regression)", () => {
+    test("43. wallet_transactions.findMany for the OrderDetail response runs only after the resolve transaction — ledger writes and audit log included — commits", async () => {
+      const customerId = await freshCustomer();
+      const driver = await createDriverWithToken("driver-tx-boundary");
+      const orderId = await deliverWithDifference(customerId, driver.token, driver.driverId, "95.00");
+
+      const originalTransaction = prisma.$transaction.bind(prisma);
+      const originalFindMany = prisma.wallet_transactions.findMany.bind(prisma.wallet_transactions);
+
+      let transactionSettledAt: number | null = null;
+      let walletEventsQueriedAt: number | null = null;
+      let walletEventsQueriedOrderId: string | undefined;
+      // Captured at the moment the response-assembly read fires, using the
+      // SAME patched-but-passthrough client — proves the ledger rows and
+      // audit log are already committed and correct by then, not merely
+      // that the query ran late. Converted to strings immediately to avoid
+      // any ambiguity, matching how the API itself serializes money.
+      let walletCreditAtQueryTime: string | null = null;
+      let walletDebitAtQueryTime: string | null = null;
+      let companyFeeAmountAtQueryTime: string | null = null;
+      let auditRowCountAtQueryTime = 0;
+
+      (prisma as { $transaction: typeof prisma.$transaction }).$transaction = (async (
+        ...args: Parameters<typeof originalTransaction>
+      ) => {
+        const result = await (originalTransaction as (...a: typeof args) => Promise<unknown>)(...args);
+        transactionSettledAt = Date.now();
+        return result;
+      }) as typeof prisma.$transaction;
+
+      // If a regression reintroduces `assembleOrderDetail(tx, ...)` inside
+      // resolveCollectionDifference's transaction, this read would run on
+      // `tx.wallet_transactions`, not this patched base-client delegate, and
+      // would never fire for this order.
+      (prisma.wallet_transactions as { findMany: typeof prisma.wallet_transactions.findMany }).findMany = (async (
+        args: Parameters<typeof originalFindMany>[0]
+      ) => {
+        const orderIdArg = (args as { where?: { order_id?: string } } | undefined)?.where?.order_id;
+        if (orderIdArg === orderId) {
+          walletEventsQueriedAt = Date.now();
+          walletEventsQueriedOrderId = orderIdArg;
+          const walletRow = await prisma.wallet_transactions.findFirst({ where: { order_id: orderId, type: "ORDER_CREDIT" } });
+          walletCreditAtQueryTime = walletRow ? walletRow.credit.toString() : null;
+          walletDebitAtQueryTime = walletRow ? walletRow.debit.toString() : null;
+          const feeRow = await prisma.company_financial_transactions.findFirst({
+            where: { order_id: orderId, type: "DELIVERY_FEE_REVENUE" },
+          });
+          companyFeeAmountAtQueryTime = feeRow ? feeRow.amount.toString() : null;
+          auditRowCountAtQueryTime = await prisma.audit_logs.count({
+            where: { entity_type: "ORDER", entity_id: orderId, action: "COLLECTION_DIFFERENCE_RESOLVED" },
+          });
+        }
+        return originalFindMany(args);
+      }) as typeof prisma.wallet_transactions.findMany;
+
+      try {
+        const res = await postResolve(tokens.admin, orderId, {
+          customerWalletCredit: "90.00",
+          companyProductRevenue: "0.00",
+          companyDeliveryFeeRevenue: "5.00",
+          resolutionNotes: "transaction boundary check",
+        });
+        assert.equal(res.status, 200, JSON.stringify(res.body));
+        assert.equal(res.body.data.financialStatus, "FINALIZED");
+
+        assert.ok(transactionSettledAt !== null, "expected the resolve transaction to run and settle");
+        assert.ok(walletEventsQueriedAt !== null, "expected the OrderDetail response assembly to query wallet_transactions");
+        assert.equal(walletEventsQueriedOrderId, orderId);
+        assert.ok(
+          (walletEventsQueriedAt as number) >= (transactionSettledAt as number),
+          "the response-assembly financial-events query must not run before the resolve transaction has committed"
+        );
+
+        // Financial integrity: the ledger writes and audit log were already
+        // fully committed — not merely started — by query time.
+        assert.equal(walletCreditAtQueryTime, "90", "expected the wallet ORDER_CREDIT row to already be committed at query time");
+        assert.equal(walletDebitAtQueryTime, "0");
+        assert.equal(companyFeeAmountAtQueryTime, "5", "expected the company DELIVERY_FEE_REVENUE row to already be committed at query time");
+        assert.equal(auditRowCountAtQueryTime, 1, "expected exactly one COLLECTION_DIFFERENCE_RESOLVED audit row to already exist at query time");
+
+        // And unchanged after the request: confirms the read above observed
+        // the final, not merely a transient, state.
+        const walletCount = await prisma.wallet_transactions.count({ where: { order_id: orderId } });
+        assert.equal(walletCount, 1);
+        const companyCount = await prisma.company_financial_transactions.count({ where: { order_id: orderId } });
+        assert.equal(companyCount, 1);
+      } finally {
+        (prisma as { $transaction: typeof prisma.$transaction }).$transaction = originalTransaction;
+        (prisma.wallet_transactions as { findMany: typeof prisma.wallet_transactions.findMany }).findMany = originalFindMany;
+      }
+    });
+  });
 });

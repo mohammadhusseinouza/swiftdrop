@@ -868,12 +868,17 @@ export async function createOrder(input: OrderCreateFoundationInput, actorUserId
   // 5. Persist atomically, with a bounded retry on order_number/tracking_code
   // collisions only (never on unrelated P2002 conflicts).
   let lastConflict: unknown;
+  // Set once the transaction below commits successfully. `detail` is the
+  // already-in-memory fast-path DTO (see below) when no driver was assigned
+  // at creation, or null when a post-commit reload is needed.
+  let created: { orderId: string; detail: OrderDetail | null } | undefined;
+
   for (let attempt = 0; attempt < MAX_IDENTIFIER_ATTEMPTS; attempt++) {
     const orderNumber = generateOrderNumber();
     const trackingCode = generateTrackingCode();
 
     try {
-      return await prisma.$transaction(async (tx) => {
+      created = await prisma.$transaction(async (tx) => {
         const order = await tx.orders.create({
           data: {
             order_number: orderNumber,
@@ -955,14 +960,23 @@ export async function createOrder(input: OrderCreateFoundationInput, actorUserId
 
         // Fast path when nothing was assigned (the overwhelmingly common
         // case) — a brand-new Order has no assignment / attempt / ledger row
-        // and its status history is exactly the one RECEIVED row above.
-        // Only reload + fully assemble when an assign helper mutated state.
+        // and its status history is exactly the one RECEIVED row above, so
+        // the DTO is built from data already in memory: no extra queries at
+        // all, inside or outside the transaction.
         if (!parcel.collectionDriverId && !parcel.deliveryDriverId) {
-          return toOrderDetail(order, [historyRow], [], [], { companyAmount: "0", customerWalletAmount: "0" }, []);
+          return {
+            orderId: order.id,
+            detail: toOrderDetail(order, [historyRow], [], [], { companyAmount: "0", customerWalletAmount: "0" }, []),
+          };
         }
-        const finalOrder = await tx.orders.findUniqueOrThrow({ where: { id: order.id }, include: orderDetailInclude });
-        return assembleOrderDetail(tx, finalOrder);
+        // A driver was assigned at creation — reloading + fully assembling
+        // the OrderDetail is pure response-building with no atomicity
+        // requirement (same class of fix as readyOrder() / assignOrder(),
+        // Prisma P2028), so only the order id is returned here and the full
+        // response is reconstructed after commit, using the base client.
+        return { orderId: order.id, detail: null };
       });
+      break;
     } catch (error) {
       if (isIdentifierConflict(error)) {
         lastConflict = error;
@@ -978,12 +992,16 @@ export async function createOrder(input: OrderCreateFoundationInput, actorUserId
     }
   }
 
-  throw new AppError({
-    statusCode: 500,
-    code: "INTERNAL_ERROR",
-    message: "Failed to generate a unique order identifier after multiple attempts",
-    details: lastConflict instanceof Error ? undefined : lastConflict,
-  });
+  if (!created) {
+    throw new AppError({
+      statusCode: 500,
+      code: "INTERNAL_ERROR",
+      message: "Failed to generate a unique order identifier after multiple attempts",
+      details: lastConflict instanceof Error ? undefined : lastConflict,
+    });
+  }
+
+  return created.detail ?? getOrderById(created.orderId);
 }
 
 // ============================================================
@@ -1179,7 +1197,14 @@ export async function updateOrder(id: string, input: OrderUpdateInput): Promise<
   // concurrent change — reassignment, for instance, only touches
   // assignment/current-driver fields that PATCH never writes, so the two
   // may safely proceed together while status stays ASSIGNED.
-  return prisma.$transaction(async (tx) => {
+  // Only the conditional claim above is concurrency-sensitive (Phase 6.6
+  // CONCURRENCY GUARD) and belongs inside the interactive transaction. The
+  // full OrderDetail response is pure response-building with no atomicity
+  // requirement; rebuilding it inside the transaction is the same
+  // architectural mistake already corrected in readyOrder() / assignOrder()
+  // (Prisma P2028 — the transaction outliving its lifetime on the deployed
+  // Vercel + Supabase stack), so it is reconstructed after commit instead.
+  await prisma.$transaction(async (tx) => {
     const claim = await tx.orders.updateMany({
       where: { id, status: existing.status },
       data,
@@ -1191,17 +1216,15 @@ export async function updateOrder(id: string, input: OrderUpdateInput): Promise<
         message: "Order was changed by another request — please retry",
       });
     }
-
-    const updated = await tx.orders.findUniqueOrThrow({ where: { id }, include: orderDetailInclude });
-
-    // No order_status_history row is written — status is not changing, and
-    // status history is not a general edit-audit log (deferred to the
-    // Audit infrastructure phase, same decision as Phases 5.1/5.2).
-    // Assignment history / financial ledgers are untouched by a generic edit
-    // (an editable Order is pre-DELIVERED, so its financialAllocation is "0"
-    // and financialEvents is empty) but the full DTO is still assembled.
-    return assembleOrderDetail(tx, updated);
   });
+
+  // No order_status_history row is written — status is not changing, and
+  // status history is not a general edit-audit log (deferred to the Audit
+  // infrastructure phase, same decision as Phases 5.1/5.2). Assignment
+  // history / financial ledgers are untouched by a generic edit (an
+  // editable Order is pre-DELIVERED, so its financialAllocation is "0" and
+  // financialEvents is empty) but the full DTO is still assembled.
+  return getOrderById(id);
 }
 
 // ============================================================
@@ -1433,7 +1456,16 @@ export async function assignOrder(orderId: string, driverId: string, actorUserId
 
   const now = new Date();
 
-  return prisma.$transaction(async (tx) => {
+  // Only the atomic state transition + its assignment/history rows belong
+  // inside the interactive transaction. The full OrderDetail response (rich
+  // order row + five history/financial collections — roughly nine further
+  // sequential reads) is pure response-building with no atomicity
+  // requirement; rebuilding it inside the transaction is the same
+  // architectural mistake readyOrder() already hit in production (Prisma
+  // P2028 — the transaction outlived its 5s lifetime on the deployed
+  // Vercel + Supabase stack), so it is reconstructed after commit instead,
+  // matching readyOrder()'s corrected boundary.
+  await prisma.$transaction(async (tx) => {
     // Authoritative driver eligibility — re-checked inside the transaction so a
     // driver deactivated between the pre-read above and this commit cannot be
     // assigned (no TOCTOU — Phase 11.17.4 correction). The pre-read stays for
@@ -1474,10 +1506,9 @@ export async function assignOrder(orderId: string, driverId: string, actorUserId
     await tx.order_status_history.create({
       data: { order_id: orderId, from_status: existing.status, to_status: "ASSIGNED", changed_by_id: actorUserId },
     });
-
-    const updated = await tx.orders.findUniqueOrThrow({ where: { id: orderId }, include: orderDetailInclude });
-    return assembleOrderDetail(tx, updated);
   });
+
+  return getOrderById(orderId);
 }
 
 // Phase 6.6: extended from Phase 6.5's ASSIGNED-only rule to also allow
@@ -1544,7 +1575,13 @@ export async function reassignOrder(
 
   const now = new Date();
 
-  return prisma.$transaction(async (tx) => {
+  // Only the atomic state transition + its assignment/history rows belong
+  // inside the interactive transaction. The full OrderDetail response is
+  // pure response-building with no atomicity requirement; rebuilding it
+  // inside the transaction is the same architectural mistake already
+  // corrected in readyOrder() / assignOrder() (Prisma P2028), so it is
+  // reconstructed after commit instead.
+  await prisma.$transaction(async (tx) => {
     // Authoritative NEW-driver eligibility — in-transaction (no TOCTOU;
     // Phase 11.17.4). Pre-read above is the friendly early error only.
     await assertDriverEligibleForAssignment(tx, newDriver.id);
@@ -1601,10 +1638,9 @@ export async function reassignOrder(
         data: { order_id: orderId, from_status: "RESCHEDULED", to_status: "ASSIGNED", changed_by_id: actorUserId },
       });
     }
-
-    const updated = await tx.orders.findUniqueOrThrow({ where: { id: orderId }, include: orderDetailInclude });
-    return assembleOrderDetail(tx, updated);
   });
+
+  return getOrderById(orderId);
 }
 
 export async function bulkAssignOrders(
@@ -1838,7 +1874,13 @@ export async function rescheduleOrder(
 
   const now = new Date();
 
-  return prisma.$transaction(async (tx) => {
+  // Only the atomic state transition + its history row belong inside the
+  // interactive transaction. The full OrderDetail response is pure
+  // response-building with no atomicity requirement; rebuilding it inside
+  // the transaction is the same architectural mistake already corrected in
+  // readyOrder() / assignOrder() (Prisma P2028), so it is reconstructed
+  // after commit instead.
+  await prisma.$transaction(async (tx) => {
     const claim = await tx.orders.updateMany({
       where: { id: orderId, status: "FAILED_DELIVERY", current_driver_id: currentDriverId },
       data: { status: "RESCHEDULED", updated_at: now },
@@ -1863,10 +1905,9 @@ export async function rescheduleOrder(
         notes: notes ?? null,
       },
     });
-
-    const updated = await tx.orders.findUniqueOrThrow({ where: { id: orderId }, include: orderDetailInclude });
-    return assembleOrderDetail(tx, updated);
   });
+
+  return getOrderById(orderId);
 }
 
 // POST /:id/cancel
@@ -1955,7 +1996,13 @@ export async function cancelOrder(
   const sourceStatus = existing.status;
   const currentDriverId = existing.current_driver_id;
 
-  return prisma.$transaction(async (tx) => {
+  // Only the atomic state transition + its assignment/history rows belong
+  // inside the interactive transaction. The full OrderDetail response is
+  // pure response-building with no atomicity requirement; rebuilding it
+  // inside the transaction is the same architectural mistake already
+  // corrected in readyOrder() / assignOrder() (Prisma P2028), so it is
+  // reconstructed after commit instead.
+  await prisma.$transaction(async (tx) => {
     const claim = await tx.orders.updateMany({
       // parcel_collection_status is part of the claim: a concurrent
       // driver `collected`/`failed` (which moves it off ASSIGNED) makes this
@@ -2033,10 +2080,9 @@ export async function cancelOrder(
         notes: notes ?? null,
       },
     });
-
-    const updated = await tx.orders.findUniqueOrThrow({ where: { id: orderId }, include: orderDetailInclude });
-    return assembleOrderDetail(tx, updated);
   });
+
+  return getOrderById(orderId);
 }
 
 // ============================================================
@@ -2123,7 +2169,16 @@ export async function resolveCollectionDifference(
   const existing = await loadEligibleReviewOrder(orderId);
   validateCollectionDifferenceAllocation(existing, input);
 
-  return prisma.$transaction(async (tx) => {
+  // Every write below (the claim, the wallet/company-finance ledger entries,
+  // and the audit log) is genuinely atomic — a real financial posting that
+  // must commit or roll back together — and stays inside the interactive
+  // transaction unchanged. ONLY the trailing full OrderDetail response
+  // reconstruction is removed from it: that is pure response-building with
+  // no atomicity requirement, and rebuilding it inside the transaction is
+  // the same architectural mistake already corrected in readyOrder() /
+  // assignOrder() (Prisma P2028). It is reconstructed after commit instead,
+  // once every financial write above has safely committed.
+  await prisma.$transaction(async (tx) => {
     // The conditional claim (not the earlier read) is the real concurrency
     // mutex — identical pattern to every other Order action in this file.
     const claim = await tx.orders.updateMany({
@@ -2220,10 +2275,9 @@ export async function resolveCollectionDifference(
         companyFeeTransactionId,
       },
     });
-
-    const updated = await tx.orders.findUniqueOrThrow({ where: { id: orderId }, include: orderDetailInclude });
-    return assembleOrderDetail(tx, updated);
   });
+
+  return getOrderById(orderId);
 }
 
 // ============================================================

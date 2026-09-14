@@ -680,4 +680,66 @@ describe("Orders update backend (Phase 6.4 — Order Editing)", () => {
       assert.ok(list.body.data.some((o: { id: string }) => o.id === order.id));
     });
   });
+
+  // ===========================================================
+  // TRANSACTION BOUNDARY (64) — production P2028 regression
+  // ===========================================================
+  //
+  // Same architectural bug class as /assign (see orders-assignment.test.ts
+  // test 71): updateOrder() used to reconstruct the full OrderDetail
+  // response (order_status_history, order_assignments, delivery_attempts,
+  // and every financial-events query) INSIDE the interactive transaction,
+  // via `assembleOrderDetail(tx, updated)`. The fix moves that
+  // reconstruction to run against the base `prisma` client after the
+  // transaction commits. This test proves that directly, the same way —
+  // real DB, no mocking framework, just timing instrumentation on the
+  // actual Prisma client.
+  describe("Transaction boundary (production P2028 regression)", () => {
+    test("64. the OrderDetail response-assembly read runs only after the update transaction commits", async () => {
+      const order = await createBaseOrder();
+
+      const originalTransaction = prisma.$transaction.bind(prisma);
+      const originalFindMany = prisma.order_status_history.findMany.bind(prisma.order_status_history);
+
+      let transactionSettledAt: number | null = null;
+      let statusHistoryQueriedAt: number | null = null;
+      let statusHistoryQueriedOrderId: string | undefined;
+
+      (prisma as { $transaction: typeof prisma.$transaction }).$transaction = (async (
+        ...args: Parameters<typeof originalTransaction>
+      ) => {
+        const result = await (originalTransaction as (...a: typeof args) => Promise<unknown>)(...args);
+        transactionSettledAt = Date.now();
+        return result;
+      }) as typeof prisma.$transaction;
+
+      (prisma.order_status_history as { findMany: typeof prisma.order_status_history.findMany }).findMany = (async (
+        args: Parameters<typeof originalFindMany>[0]
+      ) => {
+        const orderId = (args as { where?: { order_id?: string } } | undefined)?.where?.order_id;
+        if (orderId === order.id) {
+          statusHistoryQueriedAt = Date.now();
+          statusHistoryQueriedOrderId = orderId;
+        }
+        return originalFindMany(args);
+      }) as typeof prisma.order_status_history.findMany;
+
+      try {
+        const res = await patchOrder(order.id, { receiverName: "Transaction Boundary Check" });
+        assert.equal(res.status, 200, JSON.stringify(res.body));
+        assert.equal(res.body.data.receiver.name, "Transaction Boundary Check");
+
+        assert.ok(transactionSettledAt !== null, "expected the update transaction to run and settle");
+        assert.ok(statusHistoryQueriedAt !== null, "expected the OrderDetail response assembly to query order_status_history");
+        assert.equal(statusHistoryQueriedOrderId, order.id);
+        assert.ok(
+          (statusHistoryQueriedAt as number) >= (transactionSettledAt as number),
+          "the response-assembly status-history query must not run before the update transaction has committed"
+        );
+      } finally {
+        (prisma as { $transaction: typeof prisma.$transaction }).$transaction = originalTransaction;
+        (prisma.order_status_history as { findMany: typeof prisma.order_status_history.findMany }).findMany = originalFindMany;
+      }
+    });
+  });
 });
