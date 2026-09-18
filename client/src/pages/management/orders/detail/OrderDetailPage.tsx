@@ -21,6 +21,7 @@ import {
   type UnknownApiError,
 } from '../../../../services/apiError';
 import { formatDateTime, formatMoney } from '../../../../lib/format';
+import { printOrderLabel } from '../../../../lib/orderLabelPrint';
 
 import { PageHeader } from '../../../../components/data-display/PageHeader';
 import { Button } from '../../../../components/ui/Button';
@@ -97,6 +98,7 @@ export default function OrderDetailPage() {
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [printing, setPrinting] = useState(false);
 
   const navState = location.state as CreatedNavState | null;
   const [showCreatedBanner, setShowCreatedBanner] = useState(
@@ -171,6 +173,17 @@ export default function OrderDetailPage() {
     document
       .getElementById('order-history')
       ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const printLabel = () => {
+    if (!order || printing) return;
+    setPrinting(true);
+    setActionError(null);
+    printOrderLabel(order)
+      .catch(() => {
+        setActionError('Could not prepare the print preview. Please try again.');
+      })
+      .finally(() => setPrinting(false));
   };
 
   /* ----------------------------- loading / error --------------------------- */
@@ -277,6 +290,12 @@ export default function OrderDetailPage() {
   }
 
   const menuItems: ActionMenuItem[] = [];
+  menuItems.push({
+    key: 'print-a5',
+    label: printing ? 'Preparing print…' : 'Print A5 label',
+    disabled: printing,
+    onSelect: printLabel,
+  });
   if (actions.canReschedule) {
     menuItems.push({
       key: 'reschedule',

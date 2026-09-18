@@ -10,10 +10,11 @@ import {
   selectSelectedOrderIds,
   setSelectedOrderIds,
 } from '../../../features/orders/ordersUiSlice';
-import { useGetOrdersQuery } from '../../../services/ordersApi';
+import { useGetOrdersQuery, useLazyGetOrderQuery } from '../../../services/ordersApi';
 import { getApiErrorMessage } from '../../../services/apiError';
 import type { UnknownApiError } from '../../../services/apiError';
 import type { OrderSummary } from '../../../services/domain.types';
+import { printOrderLabel } from '../../../lib/orderLabelPrint';
 
 import { PageHeader } from '../../../components/data-display/PageHeader';
 import { Pagination } from '../../../components/data-display/Pagination';
@@ -150,6 +151,31 @@ export default function OrdersListPage() {
   );
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  // ---- row-level Print A5 (reuses the existing GET /orders/:id endpoint —
+  // the row DTO doesn't carry the receiver/package/payment-method detail the
+  // label needs, so the full authorized order is fetched on demand). ----
+  const [triggerGetOrder] = useLazyGetOrderQuery();
+  const [printingOrderId, setPrintingOrderId] = useState<string | null>(null);
+  const printLabel = useCallback(
+    (order: OrderSummary) => {
+      if (printingOrderId) return;
+      setActionError(null);
+      setPrintingOrderId(order.id);
+      void (async () => {
+        try {
+          const detail = await triggerGetOrder(order.id).unwrap();
+          await printOrderLabel(detail);
+        } catch (e) {
+          setActionError(getApiErrorMessage(e as UnknownApiError));
+        } finally {
+          setPrintingOrderId(null);
+        }
+      })();
+    },
+    [printingOrderId, triggerGetOrder],
+  );
+
   const columns = useMemo(
     () =>
       buildOrderColumns({
@@ -158,8 +184,10 @@ export default function OrdersListPage() {
           setActionError(null);
           setMarkReadyOrder(order);
         },
+        onPrintLabel: printLabel,
+        printingOrderId,
       }),
-    [permissions],
+    [permissions, printLabel, printingOrderId],
   );
 
   const createOrderLink = (
@@ -347,18 +375,31 @@ export default function OrdersListPage() {
                 }}
                 onClick={() => navigate(`/management/orders/${o.id}`)}
                 actions={
-                  canMarkReadyOrder(o.status, permissions) ? (
+                  <>
+                    {canMarkReadyOrder(o.status, permissions) && (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => {
+                          setActionError(null);
+                          setMarkReadyOrder(o);
+                        }}
+                      >
+                        Mark ready
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       variant="secondary"
-                      onClick={() => {
-                        setActionError(null);
-                        setMarkReadyOrder(o);
-                      }}
+                      loading={printingOrderId === o.id}
+                      disabled={
+                        printingOrderId != null && printingOrderId !== o.id
+                      }
+                      onClick={() => printLabel(o)}
                     >
-                      Mark ready
+                      Print A5
                     </Button>
-                  ) : undefined
+                  </>
                 }
                 selected={
                   canAssign ? selectedOnPage.includes(o.id) : undefined

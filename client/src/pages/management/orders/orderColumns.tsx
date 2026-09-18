@@ -21,6 +21,9 @@ export interface OrderRowActionsOptions {
   /** Permission-hydrated array from `usePermissions()` — never re-derived here. */
   permissions: readonly string[];
   onMarkReady: (order: OrderSummary) => void;
+  onPrintLabel: (order: OrderSummary) => void;
+  /** Order id currently generating its A5 label (disables/loads only that row's button). */
+  printingOrderId: string | null;
 }
 
 /**
@@ -161,37 +164,57 @@ export const orderColumns: DataTableColumn<OrderSummary>[] = [
 ];
 
 /**
- * Orders table columns plus the row-level "Mark ready" action.
+ * Orders table columns plus the row-level "Mark ready" / "Print A5" actions.
  *
- * Eligibility reuses `canMarkReadyOrder` — the exact same rule the Order
- * Detail action bar uses (`RECEIVED` + `orders.change-status`). No transition
- * or permission logic is duplicated here; this column only decides whether to
- * render the button and delegates the click to the caller, which owns the
- * confirmation dialog and the `readyOrder` mutation.
+ * Mark ready eligibility reuses `canMarkReadyOrder` — the exact same rule the
+ * Order Detail action bar uses (`RECEIVED` + `orders.change-status`). No
+ * transition or permission logic is duplicated here; this column only decides
+ * whether to render each button and delegates the click to the caller, which
+ * owns the confirmation dialog / mutation / PDF generation.
+ *
+ * Print A5 has no status eligibility gate — any order the user can see in
+ * this (already `orders.read`-gated) table may be printed.
  */
 export function buildOrderColumns({
   permissions,
   onMarkReady,
+  onPrintLabel,
+  printingOrderId,
 }: OrderRowActionsOptions): DataTableColumn<OrderSummary>[] {
   const actionsColumn: DataTableColumn<OrderSummary> = {
     id: 'actions',
     header: 'Actions',
-    cell: (o) =>
-      canMarkReadyOrder(o.status, permissions) ? (
+    cell: (o) => (
+      <div className="flex items-center gap-1.5">
+        {canMarkReadyOrder(o.status, permissions) && (
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={(e) => {
+              // Row navigation lives on the "Order" cell's <Link>, not a
+              // row-level onClick — stopPropagation is defensive in case one
+              // is ever added.
+              e.stopPropagation();
+              onMarkReady(o);
+            }}
+          >
+            Mark ready
+          </Button>
+        )}
         <Button
           size="sm"
           variant="secondary"
+          loading={printingOrderId === o.id}
+          disabled={printingOrderId != null && printingOrderId !== o.id}
           onClick={(e) => {
-            // Row navigation lives on the "Order" cell's <Link>, not a
-            // row-level onClick — stopPropagation is defensive in case one
-            // is ever added.
             e.stopPropagation();
-            onMarkReady(o);
+            onPrintLabel(o);
           }}
         >
-          Mark ready
+          Print A5
         </Button>
-      ) : null,
+      </div>
+    ),
   };
 
   // Positioned right after "Order" and before "Customer" per UI request.

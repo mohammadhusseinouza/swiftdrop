@@ -707,6 +707,7 @@ export const ordersApi = api.injectEndpoints({
 export const {
   useGetOrdersQuery,
   useGetOrderQuery,
+  useLazyGetOrderQuery,
   useGetOrderHistoryQuery,
   useGetOrderTimelineQuery,
   useCreateOrderMutation,
