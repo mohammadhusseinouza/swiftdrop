@@ -4,8 +4,10 @@ import { StatusBadge } from '../../../components/orders/StatusBadge';
 import { OrderTypeBadge } from '../../../components/orders/OrderTypeBadge';
 import { PaymentTypeBadge } from '../../../components/orders/PaymentTypeBadge';
 import { ParcelIntakeBadge } from '../../../components/orders/ParcelCollectionBadge';
+import { Button } from '../../../components/ui/Button';
 import { formatDate, formatDateTime, formatMoney } from '../../../lib/format';
 import type { OrderSummary } from '../../../services/domain.types';
+import { canMarkReadyOrder } from './detail/orderDetailActions';
 
 const DASH = '—';
 
@@ -13,6 +15,12 @@ function driverLabel(driver: OrderSummary['currentDriver']): string {
   if (!driver) return 'Unassigned';
   const { user, driverNumber } = driver;
   return `${user.firstName} ${user.lastName} (${driverNumber})`;
+}
+
+export interface OrderRowActionsOptions {
+  /** Permission-hydrated array from `usePermissions()` — never re-derived here. */
+  permissions: readonly string[];
+  onMarkReady: (order: OrderSummary) => void;
 }
 
 /**
@@ -151,3 +159,42 @@ export const orderColumns: DataTableColumn<OrderSummary>[] = [
     hideBelow: 'xl',
   },
 ];
+
+/**
+ * Orders table columns plus the row-level "Mark ready" action.
+ *
+ * Eligibility reuses `canMarkReadyOrder` — the exact same rule the Order
+ * Detail action bar uses (`RECEIVED` + `orders.change-status`). No transition
+ * or permission logic is duplicated here; this column only decides whether to
+ * render the button and delegates the click to the caller, which owns the
+ * confirmation dialog and the `readyOrder` mutation.
+ */
+export function buildOrderColumns({
+  permissions,
+  onMarkReady,
+}: OrderRowActionsOptions): DataTableColumn<OrderSummary>[] {
+  const actionsColumn: DataTableColumn<OrderSummary> = {
+    id: 'actions',
+    header: 'Actions',
+    cell: (o) =>
+      canMarkReadyOrder(o.status, permissions) ? (
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={(e) => {
+            // Row navigation lives on the "Order" cell's <Link>, not a
+            // row-level onClick — stopPropagation is defensive in case one
+            // is ever added.
+            e.stopPropagation();
+            onMarkReady(o);
+          }}
+        >
+          Mark ready
+        </Button>
+      ) : null,
+  };
+
+  // Positioned right after "Order" and before "Customer" per UI request.
+  const [orderCol, ...rest] = orderColumns;
+  return [orderCol, actionsColumn, ...rest];
+}

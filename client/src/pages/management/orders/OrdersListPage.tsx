@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Plus, RefreshCw } from 'lucide-react';
 
 import { useAppDispatch, useAppSelector } from '../../../app/hooks';
-import { useHasPermission } from '../../../features/auth/usePermissions';
+import { useHasPermission, usePermissions } from '../../../features/auth/usePermissions';
 import { PERMISSIONS } from '../../../features/auth/permissions';
 import {
   clearOrderSelection,
@@ -13,6 +13,7 @@ import {
 import { useGetOrdersQuery } from '../../../services/ordersApi';
 import { getApiErrorMessage } from '../../../services/apiError';
 import type { UnknownApiError } from '../../../services/apiError';
+import type { OrderSummary } from '../../../services/domain.types';
 
 import { PageHeader } from '../../../components/data-display/PageHeader';
 import { Pagination } from '../../../components/data-display/Pagination';
@@ -31,7 +32,9 @@ import { formatDateTime, formatMoney } from '../../../lib/format';
 import { OrdersFilterBar } from './OrdersFilterBar';
 import { OrdersQuickTabs } from './OrdersQuickTabs';
 import { BulkAssignDialog } from './BulkAssignDialog';
-import { orderColumns } from './orderColumns';
+import { MarkReadyDialog } from './MarkReadyDialog';
+import { buildOrderColumns } from './orderColumns';
+import { canMarkReadyOrder } from './detail/orderDetailActions';
 import {
   EMPTY_ORDERS_STATE,
   applyQuickTab,
@@ -58,7 +61,8 @@ import {
  * mount / any URL change (incl. sort) / unmount / successful bulk assign.
  *
  * Remaining Orders workflow gap: no atomic bulk "mark ready" endpoint exists,
- * so no bulk Mark Ready control (single-order ready is Order Detail, 11.5).
+ * so there is still no bulk Mark Ready control — only the single-order
+ * action, available from both Order Detail (11.5) and a row action here.
  */
 export default function OrdersListPage() {
   const [sp, setSp] = useSearchParams();
@@ -69,6 +73,7 @@ export default function OrdersListPage() {
 
   const canCreate = useHasPermission(PERMISSIONS.ORDERS_CREATE);
   const canAssign = useHasPermission(PERMISSIONS.ORDERS_ASSIGN);
+  const permissions = usePermissions();
 
   const state = useMemo(() => parseOrdersListParams(sp), [sp]);
   const activeTab = getActiveQuickTab(state);
@@ -139,6 +144,24 @@ export default function OrdersListPage() {
 
   const [assignOpen, setAssignOpen] = useState(false);
 
+  // ---- row-level Mark ready (reuses the Order Detail mutation/eligibility) ----
+  const [markReadyOrder, setMarkReadyOrder] = useState<OrderSummary | null>(
+    null,
+  );
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const columns = useMemo(
+    () =>
+      buildOrderColumns({
+        permissions,
+        onMarkReady: (order) => {
+          setActionError(null);
+          setMarkReadyOrder(order);
+        },
+      }),
+    [permissions],
+  );
+
   const createOrderLink = (
     <Link
       to="/management/orders/new"
@@ -170,6 +193,37 @@ export default function OrdersListPage() {
           </>
         }
       />
+
+      {actionNotice && (
+        <div
+          role="status"
+          className="flex items-start justify-between gap-3 rounded-card border border-line bg-card px-4 py-2.5 text-sm text-ink-secondary"
+        >
+          <span>{actionNotice}</span>
+          <button
+            type="button"
+            onClick={() => setActionNotice(null)}
+            className="text-xs font-medium text-ink-muted hover:underline"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+      {actionError && (
+        <div
+          role="alert"
+          className="flex items-start justify-between gap-3 rounded-card border border-danger-200 bg-danger-50 px-4 py-2.5 text-sm text-danger-700"
+        >
+          <span>{actionError}</span>
+          <button
+            type="button"
+            onClick={() => setActionError(null)}
+            className="text-xs font-medium hover:underline"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* One controls surface: search, then quick tabs, then filters. */}
       <Card flush className="space-y-4 p-4 sm:space-y-5 sm:p-6">
@@ -252,7 +306,7 @@ export default function OrdersListPage() {
       ) : isDesktop ? (
         <Card flush>
           <DataTable
-            columns={orderColumns}
+            columns={columns}
             rows={rows}
             getRowId={(o) => o.id}
             caption="Orders"
@@ -292,6 +346,20 @@ export default function OrdersListPage() {
                   },
                 }}
                 onClick={() => navigate(`/management/orders/${o.id}`)}
+                actions={
+                  canMarkReadyOrder(o.status, permissions) ? (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => {
+                        setActionError(null);
+                        setMarkReadyOrder(o);
+                      }}
+                    >
+                      Mark ready
+                    </Button>
+                  ) : undefined
+                }
                 selected={
                   canAssign ? selectedOnPage.includes(o.id) : undefined
                 }
@@ -339,6 +407,19 @@ export default function OrdersListPage() {
           setAssignOpen(false);
           dispatch(clearOrderSelection());
           // RTK Query tag invalidation (Order:LIST) refetches the list.
+        }}
+      />
+
+      <MarkReadyDialog
+        open={markReadyOrder != null}
+        orderId={markReadyOrder?.id ?? null}
+        orderNumber={markReadyOrder?.orderNumber ?? null}
+        onClose={() => setMarkReadyOrder(null)}
+        onReady={(orderNumber) => {
+          setMarkReadyOrder(null);
+          setActionNotice(`${orderNumber} marked ready for pickup.`);
+          // RTK Query tag invalidation (Order:id, Order:LIST, Dashboard:ROOT)
+          // refetches the row and any open dashboard/finance summaries.
         }}
       />
     </div>

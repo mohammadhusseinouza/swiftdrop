@@ -61,6 +61,21 @@ const CANCELLABLE_STATUSES = new Set([
   'RESCHEDULED',
 ]);
 
+/**
+ * Mark Ready eligibility rule (RECEIVED -> READY_FOR_PICKUP), extracted so it
+ * has exactly one implementation. Used by both the Order Detail action bar
+ * and the Orders table row action — never duplicate this check.
+ */
+export function canMarkReadyOrder(
+  status: string,
+  permissions: readonly string[],
+): boolean {
+  return (
+    permissions.includes(PERMISSIONS.ORDERS_CHANGE_STATUS) &&
+    status === 'RECEIVED'
+  );
+}
+
 export function getOrderDetailActions(
   order: Pick<OrderDetail, 'status' | 'currentDriver' | 'parcelCollectionStatus'>,
   permissions: readonly string[],
@@ -73,8 +88,7 @@ export function getOrderDetailActions(
 
   const canEdit =
     has(PERMISSIONS.ORDERS_UPDATE) && EDITABLE_STATUSES.has(status);
-  const canMarkReady =
-    has(PERMISSIONS.ORDERS_CHANGE_STATUS) && status === 'RECEIVED';
+  const canMarkReady = canMarkReadyOrder(status, permissions);
   const assignOtherwiseAvailable =
     has(PERMISSIONS.ORDERS_ASSIGN) &&
     !assigned &&
