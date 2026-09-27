@@ -18,6 +18,15 @@ export function describeTarget(url) {
 
 export async function connectReadOnly(url) {
   const client = new pg.Client({ connectionString: url });
+  // pg parses connection strings differently from `new URL()` (used for the logged target).
+  // Refuse to connect anywhere other than the host that was logged.
+  const expected = describeTarget(url).host;
+  if (client.host !== expected) {
+    throw new Error(
+      `pg resolved host "${client.host}" but the connection URL's host is "${expected}" — ` +
+        "the URL likely contains whitespace or unencoded special characters",
+    );
+  }
   await client.connect();
   await client.query("SET default_transaction_read_only = on");
   return client;

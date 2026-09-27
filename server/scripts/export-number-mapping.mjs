@@ -15,7 +15,7 @@ import { connectReadOnly, describeTarget, mappingFingerprint } from "./db-inspec
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const i = process.argv.indexOf("--out");
 const out = i > 0 ? process.argv[i + 1] : undefined;
-const url = process.env.MIGRATION_DATABASE_URL;
+const url = process.env.MIGRATION_DATABASE_URL?.trim();
 
 if (!url) {
   console.error("MIGRATION_DATABASE_URL is not set (this tool never falls back to .env).");

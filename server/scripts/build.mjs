@@ -58,8 +58,12 @@ function productionTarget() {
   }
   if (!MODES.includes(mode)) throw new BuildError(`PRISMA_MIGRATE_MODE="${mode}" is invalid; expected one of: ${MODES.join(", ")}`);
 
-  const url = process.env.MIGRATION_DATABASE_URL;
+  const raw = process.env.MIGRATION_DATABASE_URL;
+  // Surrounding whitespace (easy to paste into Vercel) is ignored by `new URL()` but NOT by
+  // pg: a leading space makes pg resolve the URL relative to its placeholder "postgres://base".
+  const url = raw?.trim();
   if (!url) throw new BuildError("MIGRATION_DATABASE_URL is not set for this Production deployment.");
+  if (url !== raw) log("note: MIGRATION_DATABASE_URL had leading/trailing whitespace; it was trimmed (fix the Vercel value).");
   let target;
   try {
     target = describeTarget(url);
@@ -181,6 +185,15 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(`[build] FAILED: ${err instanceof BuildError ? err.message : err?.message ?? err}`);
+  if (err instanceof BuildError) {
+    console.error(`[build] FAILED: ${err.message}`);
+  } else {
+    // Connection errors can carry an empty message (e.g. AggregateError on ECONNREFUSED),
+    // so always print the error name and code too. pg error messages never contain the URL.
+    const detail = [err?.name, err?.code, err?.message, ...(err?.errors ?? []).map((e) => `${e.code ?? ""} ${e.message ?? ""}`.trim())]
+      .filter(Boolean)
+      .join(" | ");
+    console.error(`[build] FAILED: ${detail || String(err)}`);
+  }
   process.exit(1);
 });
