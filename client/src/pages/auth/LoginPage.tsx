@@ -83,7 +83,7 @@ export default function LoginPage() {
           <Truck className="size-5" />
         </span>
         <span className="text-lg font-semibold tracking-tight text-ink">
-          SwiftDrop
+          Spring Cargo
         </span>
       </div>
 

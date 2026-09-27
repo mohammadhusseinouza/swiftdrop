@@ -62,7 +62,10 @@ export interface DashboardDriverMetrics {
 export interface DashboardFinanceMetrics {
   deliveryFeeRevenue: string;
   companyOrderRevenue: string;
+  // totalCollected = driverCollected + directCompanyCollected (bypass methods).
   totalCollected: string;
+  driverCollected: string;
+  directCompanyCollected: string;
   customerWalletLiability: string;
   customerPayouts: string;
   driverCashOutstanding: string;

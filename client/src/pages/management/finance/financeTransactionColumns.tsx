@@ -7,14 +7,20 @@ import { paths } from '../../../routes/paths';
 import { formatDateTime, formatMoney } from '../../../lib/format';
 import type { FinanceTransactionEntry } from '../../../services/domain.types';
 
-import { LEDGER_LABEL, ledgerTypeLabel } from '../../../components/finance/ledgerCorrection';
+import { FEED_LEDGER_LABEL, ledgerTypeLabel } from '../../../components/finance/ledgerCorrection';
 
 const DASH = '—';
+
+const ROUTE_LABEL: Record<'DRIVER_CASH' | 'DIRECT_COMPANY', string> = {
+  DRIVER_CASH: 'Held by driver',
+  DIRECT_COMPANY: 'Direct to company',
+};
 
 const LEDGER_TONE: Record<string, 'brand' | 'info' | 'neutral'> = {
   WALLET: 'brand',
   DRIVER_CASH: 'info',
   COMPANY_FINANCE: 'neutral',
+  DIRECT_COMPANY_COLLECTION: 'info',
 };
 
 /**
@@ -41,7 +47,7 @@ export function buildFinanceColumns(opts: {
       header: 'Ledger',
       cell: (t) => (
         <Badge tone={LEDGER_TONE[t.ledger] ?? 'neutral'}>
-          {LEDGER_LABEL[t.ledger]}
+          {FEED_LEDGER_LABEL[t.ledger]}
         </Badge>
       ),
     },
@@ -51,6 +57,11 @@ export function buildFinanceColumns(opts: {
       cell: (t) => (
         <span className="flex flex-col gap-0.5">
           <span>{ledgerTypeLabel(t.type)}</span>
+          {t.collectionRoute && (
+            <span className="text-xs text-ink-muted">
+              {ROUTE_LABEL[t.collectionRoute]}
+            </span>
+          )}
           {t.reversalOf && (
             <span className="text-xs text-ink-muted">
               reverses {ledgerTypeLabel(t.reversalOf.type)}

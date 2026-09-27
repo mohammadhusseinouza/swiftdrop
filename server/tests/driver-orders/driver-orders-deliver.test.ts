@@ -11,6 +11,7 @@ import {
   cleanupTestCustomerRecord,
   cleanupTestDriverRecord,
   cleanupTestOrder,
+  cleanupTestPaymentMethod,
   cleanupTestUser,
   createTestArea,
   createTestUser,
@@ -31,6 +32,8 @@ describe("Driver Portal — Successful Delivery (Phase 7.5)", () => {
   let customerActive: string;
   let areaActive: { id: string; name: string };
   let cashMethodId: string;
+  let whishMethodId: string;
+  let inactiveMethodId: string;
   let reasonId: string;
 
   const createdOrderIds: string[] = [];
@@ -69,6 +72,12 @@ describe("Driver Portal — Successful Delivery (Phase 7.5)", () => {
 
     const cashMethod = await prisma.payment_methods.findFirstOrThrow({ where: { code: "CASH" } });
     cashMethodId = cashMethod.id;
+    const whishMethod = await prisma.payment_methods.findFirstOrThrow({ where: { code: "WHISH" } });
+    whishMethodId = whishMethod.id;
+    const inactiveMethod = await prisma.payment_methods.create({
+      data: { code: `PH75-INACTIVE-${Math.random().toString(36).slice(2)}`, name: "Phase75 Inactive Method", is_active: false },
+    });
+    inactiveMethodId = inactiveMethod.id;
     const reason = await prisma.failed_delivery_reasons.findFirstOrThrow();
     reasonId = reason.id;
   });
@@ -79,6 +88,7 @@ describe("Driver Portal — Successful Delivery (Phase 7.5)", () => {
     for (const id of createdCustomerIds) await cleanupTestCustomerRecord(id);
     for (const id of createdAreaIds) await cleanupTestArea(id);
     for (const id of createdUserIds) await cleanupTestUser(id);
+    await cleanupTestPaymentMethod(inactiveMethodId);
     await Promise.all([admin, dispatcher, finance, customerActor].map((u) => cleanupTestUser(u.id)));
   });
 
@@ -966,6 +976,237 @@ describe("Driver Portal — Successful Delivery (Phase 7.5)", () => {
       assert.equal(row.remaining_order_amount.toString(), "100");
       assert.equal(row.remaining_delivery_fee.toString(), "5");
       await assertNoWalletOrCompanySideEffects([orderId]);
+    });
+  });
+
+  // ============================================================
+  // PAYMENT METHOD CORRECTION AT DELIVERY
+  //
+  // The Driver may correct the Order's EXISTING collection_payment_method_id
+  // (set by the employee at Create Order) to whatever was actually used at
+  // delivery. There is no second "actual payment method" field/enum — the
+  // request either omits paymentMethodId (unchanged) or supplies a valid
+  // active payment_methods id (the SAME reference data Create Order uses).
+  // ============================================================
+
+  describe("Payment method", () => {
+    test("unchanged: omitting paymentMethodId leaves the order's existing method untouched", async () => {
+      const driver = await createDriverWithToken("driver-pm-unchanged");
+      const orderId = await createOutForDeliveryOrder(driver.token, driver.driverId, {
+        collectionPaymentMethodId: cashMethodId,
+      });
+
+      const res = await request(app)
+        .post(deliverPath(orderId))
+        .set(auth(driver.token))
+        .send({ actualAmountCollected: "105.00" });
+      assert.equal(res.status, 200, JSON.stringify(res.body));
+      assert.equal(res.body.data.status, "DELIVERED");
+      assert.equal(res.body.data.collection.paymentMethod.id, cashMethodId);
+
+      const row = await prisma.orders.findUniqueOrThrow({ where: { id: orderId } });
+      assert.equal(row.collection_payment_method_id, cashMethodId);
+
+      // No second payment-method field/column exists anywhere on the row.
+      assert.equal("actual_payment_method_id" in row, false);
+      assert.equal("actual_collection_payment_method_id" in row, false);
+    });
+
+    test("driver changes payment method: Cash -> Whish is saved on the existing field, delivery still succeeds", async () => {
+      const driver = await createDriverWithToken("driver-pm-changed");
+      const orderId = await createOutForDeliveryOrder(driver.token, driver.driverId, {
+        collectionPaymentMethodId: cashMethodId,
+      });
+
+      const res = await request(app)
+        .post(deliverPath(orderId))
+        .set(auth(driver.token))
+        .send({ actualAmountCollected: "105.00", paymentMethodId: whishMethodId });
+      assert.equal(res.status, 200, JSON.stringify(res.body));
+      assert.equal(res.body.data.status, "DELIVERED");
+      assert.equal(res.body.data.collection.paymentMethod.id, whishMethodId);
+      assert.equal(res.body.data.collection.paymentMethod.code, "WHISH");
+
+      const row = await prisma.orders.findUniqueOrThrow({ where: { id: orderId } });
+      assert.equal(row.collection_payment_method_id, whishMethodId);
+
+      // Management Order Detail reflects the SAME single field, no
+      // Expected/Actual split.
+      const mgmt = await request(app).get(mgmtDetailPath(orderId)).set(auth(tokens.admin));
+      assert.equal(mgmt.status, 200);
+      assert.equal(mgmt.body.data.collectionPaymentMethod.id, whishMethodId);
+      assert.equal("actualPaymentMethod" in mgmt.body.data, false);
+      assert.equal("expectedPaymentMethod" in mgmt.body.data, false);
+      assert.equal("actualCollectionPaymentMethod" in mgmt.body.data, false);
+
+      // Financial finalization is unaffected — an exact DELIVERY_ONLY
+      // delivery still posts identically regardless of which method it used.
+      await assertExactDeliveryOnlyFinanceFinalized(orderId);
+
+      // Audit traceability records the change without a second column.
+      const audit = await prisma.audit_logs.findFirst({
+        where: { entity_type: "ORDER", entity_id: orderId, action: "DELIVERY_ONLY_FINANCE_FINALIZED" },
+      });
+      assert.ok(audit);
+      const metadata = audit!.metadata as Record<string, unknown>;
+      assert.equal(metadata.collectionPaymentMethodChanged, true);
+      assert.equal(metadata.previousCollectionPaymentMethodId, cashMethodId);
+      assert.equal(metadata.newCollectionPaymentMethodId, whishMethodId);
+    });
+
+    test("leaving the payment method unchanged never fabricates a change event in the audit metadata", async () => {
+      const driver = await createDriverWithToken("driver-pm-noop-audit");
+      const orderId = await createOutForDeliveryOrder(driver.token, driver.driverId, {
+        collectionPaymentMethodId: cashMethodId,
+      });
+
+      // Explicitly re-submitting the SAME id must also be treated as unchanged.
+      const res = await request(app)
+        .post(deliverPath(orderId))
+        .set(auth(driver.token))
+        .send({ actualAmountCollected: "105.00", paymentMethodId: cashMethodId });
+      assert.equal(res.status, 200);
+
+      const audit = await prisma.audit_logs.findFirst({
+        where: { entity_type: "ORDER", entity_id: orderId, action: "DELIVERY_ONLY_FINANCE_FINALIZED" },
+      });
+      assert.ok(audit);
+      const metadata = audit!.metadata as Record<string, unknown>;
+      assert.equal(metadata.collectionPaymentMethodChanged, false);
+      assert.equal("previousCollectionPaymentMethodId" in metadata, false);
+      assert.equal("newCollectionPaymentMethodId" in metadata, false);
+    });
+
+    test("collection difference: reason still required, and the corrected payment method is saved alongside it", async () => {
+      const driver = await createDriverWithToken("driver-pm-difference");
+      const orderId = await createOutForDeliveryOrder(driver.token, driver.driverId, {
+        collectionPaymentMethodId: cashMethodId,
+      });
+
+      // The difference-reason rule is untouched by paymentMethodId.
+      const missingReason = await request(app)
+        .post(deliverPath(orderId))
+        .set(auth(driver.token))
+        .send({ actualAmountCollected: "100.00", paymentMethodId: whishMethodId });
+      assert.equal(missingReason.status, 400);
+      assert.equal(missingReason.body.error.code, "VALIDATION_ERROR");
+
+      const res = await request(app)
+        .post(deliverPath(orderId))
+        .set(auth(driver.token))
+        .send({
+          actualAmountCollected: "100.00",
+          collectionDifferenceReason: "Receiver paid only $100",
+          paymentMethodId: whishMethodId,
+        });
+      assert.equal(res.status, 200, JSON.stringify(res.body));
+      assert.equal(res.body.data.status, "DELIVERED");
+      assert.equal(res.body.data.collection.paymentMethod.id, whishMethodId);
+
+      const row = await prisma.orders.findUniqueOrThrow({ where: { id: orderId } });
+      assert.equal(row.financial_status, "REVIEW_REQUIRED");
+      assert.equal(row.needs_financial_review, true);
+      assert.equal(row.collection_difference_reason, "Receiver paid only $100");
+      assert.equal(row.collection_payment_method_id, whishMethodId);
+      // The Financial Difference Rule is untouched — no split is guessed.
+      await assertNoWalletOrCompanySideEffects([orderId]);
+
+      const audit = await prisma.audit_logs.findFirst({
+        where: { entity_type: "ORDER", entity_id: orderId, action: "COLLECTION_DIFFERENCE_RECORDED" },
+      });
+      assert.ok(audit);
+      const metadata = audit!.metadata as Record<string, unknown>;
+      assert.equal(metadata.collectionPaymentMethodChanged, true);
+      assert.equal(metadata.newCollectionPaymentMethodId, whishMethodId);
+    });
+
+    test("invalid method: a nonexistent paymentMethodId is rejected, order left untouched", async () => {
+      const driver = await createDriverWithToken("driver-pm-nonexistent");
+      const orderId = await createOutForDeliveryOrder(driver.token, driver.driverId, {
+        collectionPaymentMethodId: cashMethodId,
+      });
+
+      const res = await request(app)
+        .post(deliverPath(orderId))
+        .set(auth(driver.token))
+        .send({ actualAmountCollected: "105.00", paymentMethodId: "00000000-0000-0000-0000-000000000000" });
+      assert.equal(res.status, 400);
+      assert.equal(res.body.error.code, "VALIDATION_ERROR");
+
+      const row = await prisma.orders.findUniqueOrThrow({ where: { id: orderId } });
+      assert.equal(row.status, "OUT_FOR_DELIVERY", "a rejected paymentMethodId must not deliver the order");
+      assert.equal(row.collection_payment_method_id, cashMethodId);
+    });
+
+    test("invalid method: an inactive paymentMethodId is rejected, order left untouched", async () => {
+      const driver = await createDriverWithToken("driver-pm-inactive");
+      const orderId = await createOutForDeliveryOrder(driver.token, driver.driverId, {
+        collectionPaymentMethodId: cashMethodId,
+      });
+
+      const res = await request(app)
+        .post(deliverPath(orderId))
+        .set(auth(driver.token))
+        .send({ actualAmountCollected: "105.00", paymentMethodId: inactiveMethodId });
+      assert.equal(res.status, 400);
+      assert.equal(res.body.error.code, "VALIDATION_ERROR");
+
+      const row = await prisma.orders.findUniqueOrThrow({ where: { id: orderId } });
+      assert.equal(row.status, "OUT_FOR_DELIVERY");
+      assert.equal(row.collection_payment_method_id, cashMethodId);
+    });
+
+    test("malformed method: a non-uuid paymentMethodId is a 400 shape error", async () => {
+      const driver = await createDriverWithToken("driver-pm-malformed");
+      const orderId = await createOutForDeliveryOrder(driver.token, driver.driverId);
+
+      const res = await request(app)
+        .post(deliverPath(orderId))
+        .set(auth(driver.token))
+        .send({ actualAmountCollected: "105.00", paymentMethodId: "not-a-uuid" });
+      assert.equal(res.status, 400);
+      assert.equal(res.body.error.code, "VALIDATION_ERROR");
+    });
+
+    test("authorization: a different (non-assigned) driver cannot complete delivery or change the payment method", async () => {
+      const driverA = await createDriverWithToken("driver-pm-auth-a");
+      const driverB = await createDriverWithToken("driver-pm-auth-b");
+      const orderId = await createOutForDeliveryOrder(driverA.token, driverA.driverId, {
+        collectionPaymentMethodId: cashMethodId,
+      });
+
+      const res = await request(app)
+        .post(deliverPath(orderId))
+        .set(auth(driverB.token))
+        .send({ actualAmountCollected: "105.00", paymentMethodId: whishMethodId });
+      assert.equal(res.status, 404, "a non-owning driver must get the same safe 404 as a nonexistent order");
+
+      const row = await prisma.orders.findUniqueOrThrow({ where: { id: orderId } });
+      assert.equal(row.status, "OUT_FOR_DELIVERY");
+      assert.equal(row.collection_payment_method_id, cashMethodId, "an unauthorized attempt must never change the payment method");
+    });
+
+    test("completed order: /deliver cannot be replayed to change the payment method after DELIVERED", async () => {
+      const driver = await createDriverWithToken("driver-pm-already-delivered");
+      const orderId = await createOutForDeliveryOrder(driver.token, driver.driverId, {
+        collectionPaymentMethodId: cashMethodId,
+      });
+
+      const first = await request(app)
+        .post(deliverPath(orderId))
+        .set(auth(driver.token))
+        .send({ actualAmountCollected: "105.00" });
+      assert.equal(first.status, 200);
+
+      const replay = await request(app)
+        .post(deliverPath(orderId))
+        .set(auth(driver.token))
+        .send({ actualAmountCollected: "105.00", paymentMethodId: whishMethodId });
+      assert.equal(replay.status, 400, "deliver must reject once the order is no longer OUT_FOR_DELIVERY");
+
+      const row = await prisma.orders.findUniqueOrThrow({ where: { id: orderId } });
+      assert.equal(row.status, "DELIVERED");
+      assert.equal(row.collection_payment_method_id, cashMethodId, "a rejected post-delivery attempt must never change the payment method");
     });
   });
 

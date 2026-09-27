@@ -236,10 +236,13 @@ async function getNetDriverCollected(): Promise<Prisma.Decimal> {
 }
 
 async function getFinanceMetrics(): Promise<DashboardFinanceMetrics> {
-  const [deliveryFeeRevenue, companyOrderRevenue, totalCollected, walletSum, payoutSum, driverCashSum] = await Promise.all([
+  const [deliveryFeeRevenue, companyOrderRevenue, driverCollected, directSum, walletSum, payoutSum, driverCashSum] = await Promise.all([
     getNetCompanyRevenue("DELIVERY_FEE_REVENUE"),
     getNetCompanyRevenue("COMPANY_ORDER_PRODUCT_REVENUE"),
     getNetDriverCollected(),
+    // Direct Payment Settlement — append-only, positive-only, no reversal
+    // type: a plain SUM is the net amount received directly by the company.
+    prisma.company_direct_collections.aggregate({ _sum: { amount: true } }),
     prisma.customer_wallets.aggregate({ _sum: { available_balance: true } }),
     prisma.customer_payouts.aggregate({ _sum: { amount: true }, where: { status: "COMPLETED" } }),
     prisma.driver_cash_accounts.aggregate({ _sum: { current_balance: true } }),
@@ -248,7 +251,9 @@ async function getFinanceMetrics(): Promise<DashboardFinanceMetrics> {
   return {
     deliveryFeeRevenue: deliveryFeeRevenue.toString(),
     companyOrderRevenue: companyOrderRevenue.toString(),
-    totalCollected: totalCollected.toString(),
+    totalCollected: driverCollected.plus(directSum._sum.amount ?? 0).toString(),
+    driverCollected: driverCollected.toString(),
+    directCompanyCollected: decimalToString(directSum._sum.amount),
     customerWalletLiability: decimalToString(walletSum._sum.available_balance),
     customerPayouts: decimalToString(payoutSum._sum.amount),
     driverCashOutstanding: decimalToString(driverCashSum._sum.current_balance),

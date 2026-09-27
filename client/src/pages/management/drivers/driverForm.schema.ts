@@ -10,17 +10,16 @@ import type { DriverDetail } from '../../../services/domain.types';
  * (server/src/modules/drivers/driver.schema.ts). UX validation only; the
  * backend re-validates and is the security boundary.
  *
- *   Create uses NEW-LOGIN mode only: `{ driverNumber, user: { email,
- *   password, firstName, lastName, phone? } }`. No role selector, no
- *   permissions — the backend FORCES role = DRIVER.
+ *   Create uses NEW-LOGIN mode only: `{ user: { email, password, firstName,
+ *   lastName, phone? } }`. No role selector, no permissions — the backend
+ *   FORCES role = DRIVER. driverNumber is BACKEND-GENERATED (sequential
+ *   DRV-###### convention) and is never part of this form.
  *
- *   Edit manages `driverNumber` is immutable and absent from the edit form;
- *   the editable set is the linked User profile (firstName / lastName /
- *   email / phone). isActive is a separate confirmed deactivate/reactivate
+ *   Edit manages the linked User profile (firstName / lastName / email /
+ *   phone) only. isActive is a separate confirmed deactivate/reactivate
  *   action, never this form.
  */
 
-const DRIVER_NUMBER_MAX = 50;
 const NAME_MAX = 100;
 const EMAIL_MAX = 255;
 const PHONE_MAX = 30;
@@ -37,11 +36,6 @@ const emailField = z
 const phoneField = z.string().trim().max(PHONE_MAX, `At most ${PHONE_MAX} characters`);
 
 export const driverCreateSchema = z.object({
-  driverNumber: z
-    .string()
-    .trim()
-    .min(1, 'Driver number is required')
-    .max(DRIVER_NUMBER_MAX, `At most ${DRIVER_NUMBER_MAX} characters`),
   firstName: nameField('First name'),
   lastName: nameField('Last name'),
   email: emailField,
@@ -53,7 +47,6 @@ export const driverCreateSchema = z.object({
 export type DriverCreateValues = z.infer<typeof driverCreateSchema>;
 
 export const DRIVER_CREATE_DEFAULTS: DriverCreateValues = {
-  driverNumber: '',
   firstName: '',
   lastName: '',
   email: '',
@@ -87,7 +80,6 @@ export function toCreateDriverRequest(
   values: DriverCreateValues,
 ): CreateDriverNewLoginRequest {
   return {
-    driverNumber: values.driverNumber.trim(),
     user: {
       email: values.email.trim().toLowerCase(),
       password: values.password,
@@ -111,7 +103,6 @@ export function toUpdateDriverRequest(
 }
 
 export const DRIVER_CREATE_FIELDS = new Set<string>([
-  'driverNumber',
   'firstName',
   'lastName',
   'email',

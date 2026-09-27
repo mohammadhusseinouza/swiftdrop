@@ -11,7 +11,7 @@ import type {
   FinanceSummaryDto,
   FinanceTransactionEntry,
   LedgerCorrectionResult,
-  LedgerName,
+  FinanceFeedLedger,
 } from './domain.types';
 
 /**
@@ -37,7 +37,7 @@ export interface FinanceSummaryParams {
 export interface FinanceTransactionsParams extends PaginationParams {
   from?: string;
   to?: string;
-  ledger?: LedgerName;
+  ledger?: FinanceFeedLedger;
   type?: string;
 }
 

@@ -477,32 +477,32 @@ describe("Phase 5.4 — Core Management Data Integration", () => {
       assert.equal(walletRow.available_balance.toString(), "0");
     });
 
-    test("concurrent duplicate customerNumber creates: exactly one succeeds, exactly one customer + one wallet exist", async () => {
-      const customerNumber = `PH54-RACE-CUST-${uniqueSuffix()}`;
-      const payload = {
-        customerNumber,
-        name: "Phase54 Race Customer",
-        primaryPhone: "+10000000011",
-      };
+    // customerNumber is now backend-generated (sequential, Postgres-sequence-
+    // backed — see migrations/2026-09-22__5152__customer_driver_sequential_
+    // numbers.sql), so a client-supplied duplicate can no longer race at all:
+    // the field is simply not accepted from the request. The concurrency
+    // property that matters now is that the SEQUENCE itself never hands out
+    // the same number twice under concurrent creates.
+    test("concurrent creates: both succeed, each gets a distinct backend-generated customerNumber + its own wallet", async () => {
+      const payload = { name: "Phase54 Race Customer", primaryPhone: "+10000000011" };
 
       const [first, second] = await Promise.all([
         request(app).post("/api/v1/customers").set(auth(tokens.dispatcher)).send(payload),
         request(app).post("/api/v1/customers").set(auth(tokens.dispatcher)).send(payload),
       ]);
 
-      const statuses = [first.status, second.status].sort();
-      assert.deepEqual(statuses, [201, 409], "exactly one of the two concurrent creates must succeed");
+      assert.equal(first.status, 201);
+      assert.equal(second.status, 201);
+      cleanup.customerIds.push(first.body.data.id, second.body.data.id);
 
-      const winner = first.status === 201 ? first : second;
-      const loser = first.status === 201 ? second : first;
-      assert.equal(loser.body.error.code, "CONFLICT");
-      cleanup.customerIds.push(winner.body.data.id);
+      assert.match(first.body.data.customerNumber, /^CUST-\d{6,}$/);
+      assert.match(second.body.data.customerNumber, /^CUST-\d{6,}$/);
+      assert.notEqual(first.body.data.customerNumber, second.body.data.customerNumber);
 
-      const matchingCustomers = await prisma.customers.findMany({ where: { customer_number: customerNumber } });
-      assert.equal(matchingCustomers.length, 1);
-
-      const wallets = await prisma.customer_wallets.findMany({ where: { customer_id: matchingCustomers[0].id } });
-      assert.equal(wallets.length, 1, "no orphan wallet from the losing concurrent request");
+      for (const id of [first.body.data.id, second.body.data.id]) {
+        const wallets = await prisma.customer_wallets.findMany({ where: { customer_id: id } });
+        assert.equal(wallets.length, 1, "each concurrently created customer must have exactly one wallet");
+      }
     });
   });
 
@@ -615,32 +615,33 @@ describe("Phase 5.4 — Core Management Data Integration", () => {
       assert.equal(driverRow, null, "no driver row may exist after a rejected link attempt");
     });
 
-    test("concurrent duplicate driverNumber creates: exactly one succeeds, exactly one driver + one cash account exist", async () => {
-      const driverNumber = `PH54-RACE-DRV-${uniqueSuffix()}`;
+    // driverNumber is now backend-generated (sequential, Postgres-sequence-
+    // backed — see migrations/2026-09-22__5152__customer_driver_sequential_
+    // numbers.sql), so a client-supplied duplicate can no longer race at all
+    // (existing-link mode simply ignores it). The concurrency property that
+    // matters now is that the SEQUENCE itself never hands out the same
+    // number twice under concurrent creates.
+    test("concurrent creates (distinct users): both succeed, each gets a distinct backend-generated driverNumber + its own cash account", async () => {
       const userA = await newLinkableDriverUser();
       const userB = await newLinkableDriverUser();
 
       const [first, second] = await Promise.all([
-        request(app).post("/api/v1/drivers").set(auth(tokens.admin)).send({ driverNumber, userId: userA.id }),
-        request(app).post("/api/v1/drivers").set(auth(tokens.admin)).send({ driverNumber, userId: userB.id }),
+        request(app).post("/api/v1/drivers").set(auth(tokens.admin)).send({ userId: userA.id }),
+        request(app).post("/api/v1/drivers").set(auth(tokens.admin)).send({ userId: userB.id }),
       ]);
 
-      const statuses = [first.status, second.status].sort();
-      assert.deepEqual(statuses, [201, 409]);
+      assert.equal(first.status, 201);
+      assert.equal(second.status, 201);
+      cleanup.driverIds.push(first.body.data.id, second.body.data.id);
 
-      const winner = first.status === 201 ? first : second;
-      cleanup.driverIds.push(winner.body.data.id);
+      assert.match(first.body.data.driverNumber, /^DRV-\d{6,}$/);
+      assert.match(second.body.data.driverNumber, /^DRV-\d{6,}$/);
+      assert.notEqual(first.body.data.driverNumber, second.body.data.driverNumber);
 
-      const matchingDrivers = await prisma.drivers.findMany({ where: { driver_number: driverNumber } });
-      assert.equal(matchingDrivers.length, 1);
-
-      const accounts = await prisma.driver_cash_accounts.findMany({ where: { driver_id: matchingDrivers[0].id } });
-      assert.equal(accounts.length, 1, "no orphan cash account from the losing concurrent request");
-
-      // The losing user must remain unlinked — no partial driver row for it.
-      const loserUserId = matchingDrivers[0].user_id === userA.id ? userB.id : userA.id;
-      const loserDriverRow = await prisma.drivers.findUnique({ where: { user_id: loserUserId } });
-      assert.equal(loserDriverRow, null);
+      for (const id of [first.body.data.id, second.body.data.id]) {
+        const accounts = await prisma.driver_cash_accounts.findMany({ where: { driver_id: id } });
+        assert.equal(accounts.length, 1, "each concurrently created driver must have exactly one cash account");
+      }
     });
 
     test("concurrent duplicate userId link: exactly one succeeds, exactly one driver + one cash account exist for that user", async () => {

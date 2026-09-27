@@ -54,7 +54,7 @@ Expected documentation files:
 The project may also contain:
 
 ```text
-/docs/ui-reference/SwiftDrop.html
+/docs/ui-reference/Spring Cargo.html
 ```
 
 or another equivalent Claude Design HTML file.

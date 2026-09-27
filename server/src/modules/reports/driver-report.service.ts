@@ -32,11 +32,12 @@ function dateRangeSql(column: string, range: ResolvedRange): Prisma.Sql {
   return clauses.length ? Prisma.join(clauses, " AND ") : Prisma.sql`TRUE`;
 }
 
-// Mirrors Phase 9.2's getNetCollectedFlow (finance-summary.service.ts)
+// Mirrors Phase 9.2's getNetDriverCollectedFlow (finance-summary.service.ts)
 // exactly, scoped to one Driver — driver_cash_transactions.amount is always
 // a positive magnitude, so a COLLECTION reversal is explicitly subtracted,
-// never added. Reconciles with Finance Report's totalCollected when summed
-// across every Driver for the same range.
+// never added. Reconciles with Finance Report's driverCollected when summed
+// across every Driver for the same range. Direct company collections (bypass
+// payment methods) are deliberately excluded — the Driver never held them.
 async function getDriverMoneyCollected(driverId: string, range: ResolvedRange): Promise<string> {
   const rows = await prisma.$queryRaw<NetSumRow[]>`
     SELECT (
@@ -91,6 +92,7 @@ export async function getDriverReport(query: DriverReportQuery): Promise<DriverR
     settlementRows,
     cashAccounts,
     moneyCollectedByDriver,
+    directCollectedRows,
     collectionAssignedRows,
     collectionsCompletedRows,
     failedCollectionAttemptRows,
@@ -118,6 +120,14 @@ export async function getDriverReport(query: DriverReportQuery): Promise<DriverR
     }),
     prisma.driver_cash_accounts.findMany({ where: { driver_id: { in: driverIds } }, select: { driver_id: true, current_balance: true } }),
     Promise.all(driverIds.map(async (id) => [id, await getDriverMoneyCollected(id, range)] as const)),
+    // Direct company collections, attributed to the driver who completed the
+    // delivery (company_direct_collections.driver_id). Append-only, positive,
+    // no reversal type -> a plain SUM. Never part of currentCashHeld.
+    prisma.company_direct_collections.groupBy({
+      by: ["driver_id"],
+      where: { driver_id: { in: driverIds }, created_at: rangeToWhere(range) },
+      _sum: { amount: true },
+    }),
     prisma.$queryRaw<{ driver_id: string; count: bigint }[]>`
       SELECT driver_id, COUNT(*) AS count FROM parcel_collection_assignments
       WHERE driver_id = ANY(${driverIds}::uuid[]) AND ${collectionAssignedClause}
@@ -141,6 +151,7 @@ export async function getDriverReport(query: DriverReportQuery): Promise<DriverR
   const settlementById = new Map(settlementRows.map((r) => [r.driver_id, r]));
   const cashById = new Map(cashAccounts.map((a) => [a.driver_id, a.current_balance]));
   const collectedById = new Map(moneyCollectedByDriver);
+  const directCollectedById = new Map(directCollectedRows.map((r) => [r.driver_id, r._sum.amount]));
   const collectionAssignedById = new Map(collectionAssignedRows.map((r) => [r.driver_id, Number(r.count)]));
   const collectionsCompletedById = new Map(collectionsCompletedRows.map((r) => [r.driver_id, Number(r.count)]));
   const failedCollectionAttemptsById = new Map(failedCollectionAttemptRows.map((r) => [r.driver_id, Number(r.count)]));
@@ -150,6 +161,8 @@ export async function getDriverReport(query: DriverReportQuery): Promise<DriverR
     const failed = failedById.get(driver.id) ?? 0;
     const attempts = delivered + failed;
     const settlement = settlementById.get(driver.id);
+    const driverCashCollected = collectedById.get(driver.id) ?? "0";
+    const directCompanyCollected = toAmount(directCollectedById.get(driver.id)?.toString());
 
     return {
       driver: {
@@ -169,7 +182,10 @@ export async function getDriverReport(query: DriverReportQuery): Promise<DriverR
         attempts === 0
           ? null
           : new Prisma.Decimal(delivered).dividedBy(attempts).times(100).toDecimalPlaces(2).toString(),
-      moneyCollected: collectedById.get(driver.id) ?? "0",
+      driverCashCollected,
+      directCompanyCollected,
+      totalCollected: new Prisma.Decimal(driverCashCollected).plus(directCompanyCollected).toString(),
+      moneyCollected: driverCashCollected,
       settlementCount: settlement?._count ?? 0,
       settlementAmount: toAmount(settlement?._sum.amount_received?.toString()),
       currentCashHeld: toAmount(cashById.get(driver.id)?.toString()),

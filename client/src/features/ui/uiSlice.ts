@@ -7,12 +7,35 @@ import type { RootState } from '../../app/store';
  * registry here (Phase 10.6 owns modal components); never store React elements.
  */
 export interface UiState {
+  /** Desktop Management sidebar fully hidden (persisted per browser). */
   sidebarCollapsed: boolean;
   mobileNavigationOpen: boolean;
 }
 
+const SIDEBAR_PREFERENCE_KEY = 'spring-cargo.management.sidebarHidden';
+
+/**
+ * Per-viewer convenience only. Storage may be unavailable (private mode,
+ * blocked site data) — fall back to the default (sidebar shown).
+ */
+function readSidebarPreference(): boolean {
+  try {
+    return window.localStorage.getItem(SIDEBAR_PREFERENCE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function persistSidebarPreference(collapsed: boolean): void {
+  try {
+    window.localStorage.setItem(SIDEBAR_PREFERENCE_KEY, collapsed ? '1' : '0');
+  } catch {
+    // Preference simply won't survive a refresh.
+  }
+}
+
 const initialState: UiState = {
-  sidebarCollapsed: false,
+  sidebarCollapsed: readSidebarPreference(),
   mobileNavigationOpen: false,
 };
 

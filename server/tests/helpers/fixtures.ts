@@ -7,7 +7,7 @@ import { Prisma } from "../../src/generated/prisma/client";
 import type { OrderFinancialStatus, OrderStatus, OrderType, PaymentType } from "../../src/generated/prisma/client";
 
 export const TEST_PASSWORD = "Phase45-Test-Pw!";
-const TEST_EMAIL_DOMAIN = "phase4-5-test.swiftdrop.local";
+const TEST_EMAIL_DOMAIN = "phase4-5-test.springcargo.local";
 
 export function uniqueSuffix(): string {
   return randomBytes(6).toString("hex");
@@ -185,6 +185,7 @@ export async function cleanupTestDriverRecord(driverId: string): Promise<void> {
   // driver_cash_transactions must be cleared before driver_settlements;
   // both must be cleared before driver_cash_accounts/drivers themselves.
   await prisma.driver_cash_transactions.deleteMany({ where: { driver_id: driverId } });
+  await prisma.company_direct_collections.deleteMany({ where: { driver_id: driverId } });
   // Phase 8.6 is the first suite to create real driver_settlements rows.
   await prisma.driver_settlements.deleteMany({ where: { driver_id: driverId } });
   await prisma.driver_cash_accounts.deleteMany({ where: { driver_id: driverId } });
@@ -202,6 +203,7 @@ export async function cleanupTestUser(userId: string): Promise<void> {
   const driver = await prisma.drivers.findUnique({ where: { user_id: userId } });
   if (driver) {
     await prisma.driver_cash_transactions.deleteMany({ where: { driver_id: driver.id } });
+    await prisma.company_direct_collections.deleteMany({ where: { driver_id: driver.id } });
     await prisma.driver_settlements.deleteMany({ where: { driver_id: driver.id } });
     await prisma.driver_cash_accounts.deleteMany({ where: { driver_id: driver.id } });
     await prisma.audit_logs.deleteMany({ where: { entity_type: "DRIVER", entity_id: driver.id } });
@@ -313,6 +315,9 @@ export async function cleanupTestOrder(orderId: string): Promise<void> {
   // (Phase 8.3 is the first suite to create real company revenue rows
   // linked to an order).
   await prisma.company_financial_transactions.deleteMany({ where: { order_id: orderId } });
+  // company_direct_collections.order_id is ON DELETE RESTRICT too (Direct
+  // Payment Settlement — bypass_driver_cash deliveries).
+  await prisma.company_direct_collections.deleteMany({ where: { order_id: orderId } });
   // audit_logs has no FK to orders (entity_type/entity_id is a generic
   // polymorphic reference, not a real relation) so it never blocks this
   // delete — but it must still be cleared explicitly, or Phase 8.3's

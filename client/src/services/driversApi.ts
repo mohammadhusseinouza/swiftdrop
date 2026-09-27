@@ -33,7 +33,6 @@ export interface ListDriversParams extends PaginationParams {
 
 /** New-login mode — creates a fresh DRIVER-role login + driver atomically. */
 export interface CreateDriverNewLoginRequest {
-  driverNumber: string;
   user: {
     email: string;
     password: string;
@@ -44,7 +43,6 @@ export interface CreateDriverNewLoginRequest {
 }
 /** Legacy mode — links an existing DRIVER-role user. */
 export interface CreateDriverLinkRequest {
-  driverNumber: string;
   userId: string;
 }
 export type CreateDriverRequest =

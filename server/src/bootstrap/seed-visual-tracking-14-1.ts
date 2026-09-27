@@ -15,7 +15,7 @@ import { prisma } from "../db/prisma";
  * Driver pickup/start-delivery workflow endpoints, then stops (never calls
  * /deliver) — no other business rule/state is fabricated.
  *
- * SAFETY: refuses NODE_ENV=production; only *@swiftdrop.test + PH141-VIS
+ * SAFETY: refuses NODE_ENV=production; only *@springcargo.test + PH141-VIS
  * rows; idempotent (marker-detected); NO schema change / migration / manual
  * status/ledger fabrication (every transition goes through its real
  * service-layer endpoint).
@@ -49,13 +49,13 @@ async function main(): Promise<void> {
     return;
   }
 
-  const customerUser = await prisma.users.findUnique({ where: { email: "customer@swiftdrop.test" }, select: { id: true } });
-  if (!customerUser) throw new Error('[seed:visual:tracking-14-1] customer@swiftdrop.test not found — run "npm run seed:visual" first.');
+  const customerUser = await prisma.users.findUnique({ where: { email: "customer@springcargo.test" }, select: { id: true } });
+  if (!customerUser) throw new Error('[seed:visual:tracking-14-1] customer@springcargo.test not found — run "npm run seed:visual" first.');
   const customer = await prisma.customers.findUniqueOrThrow({ where: { portal_user_id: customerUser.id } });
-  const driverUser = await prisma.users.findUniqueOrThrow({ where: { email: "driver@swiftdrop.test" }, select: { id: true } });
+  const driverUser = await prisma.users.findUniqueOrThrow({ where: { email: "driver@springcargo.test" }, select: { id: true } });
   const driverRow = await prisma.drivers.findUniqueOrThrow({ where: { user_id: driverUser.id } });
 
-  const [adminToken, driverToken] = await Promise.all([login(app, "admin@swiftdrop.test"), login(app, "driver@swiftdrop.test")]);
+  const [adminToken, driverToken] = await Promise.all([login(app, "admin@springcargo.test"), login(app, "driver@springcargo.test")]);
   const area =
     (await prisma.areas.findFirst({ where: { name: "PH141 Visual Area" } })) ??
     (await prisma.areas.create({ data: { name: "PH141 Visual Area" } }));

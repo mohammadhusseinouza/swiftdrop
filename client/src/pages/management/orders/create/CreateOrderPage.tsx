@@ -83,19 +83,6 @@ function safeMutationMessage(error: UnknownApiError, serverFallback: string): st
   return getApiErrorMessage(error);
 }
 
-const ORDER_TYPE_OPTIONS = [
-  {
-    value: 'DELIVERY_ONLY',
-    title: 'Delivery Only',
-    hint: 'The product belongs to the customer / sender.',
-  },
-  {
-    value: 'COMPANY_ORDER',
-    title: 'Company Order',
-    hint: 'The product belongs to the company.',
-  },
-] as const;
-
 const PAYMENT_TYPE_OPTIONS = [
   {
     value: 'CASH_ON_DELIVERY',
@@ -106,11 +93,6 @@ const PAYMENT_TYPE_OPTIONS = [
     value: 'ALREADY_PAID',
     title: 'Already Paid',
     hint: 'Order amount fully prepaid; the delivery fee may still be due.',
-  },
-  {
-    value: 'PARTIALLY_PAID',
-    title: 'Partially Paid',
-    hint: 'Part of the order is prepaid; a balance remains.',
   },
 ] as const;
 
@@ -427,8 +409,8 @@ export default function CreateOrderPage() {
       <form noValidate onSubmit={(e) => e.preventDefault()} className="space-y-5">
         <fieldset disabled={!!created} className="space-y-5 disabled:opacity-70">
           <FormSection
-            title="Customer & order type"
-            description="Who is sending this order, and which accounting model applies."
+            title="Customer"
+            description="Who is sending this order."
           >
             <Controller
               control={control}
@@ -477,14 +459,6 @@ export default function CreateOrderPage() {
                 )}
               </div>
             )}
-
-            <RadioCards
-              legend="Order type"
-              name="orderType"
-              options={ORDER_TYPE_OPTIONS}
-              register={register}
-              error={errors.orderType?.message}
-            />
           </FormSection>
 
           <FormSection
@@ -561,18 +535,12 @@ export default function CreateOrderPage() {
               error={errors.description?.message}
               {...register('description')}
             />
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-2">
               <TextField
                 label="Number of packages"
                 inputMode="numeric"
                 error={errors.packageCount?.message}
                 {...register('packageCount')}
-              />
-              <TextField
-                label="Quantity"
-                inputMode="numeric"
-                error={errors.quantity?.message}
-                {...register('quantity')}
               />
               <TextField
                 label="Weight (kg)"
@@ -916,7 +884,7 @@ export default function CreateOrderPage() {
 
 interface RadioCardsProps {
   legend: string;
-  name: 'orderType' | 'paymentType' | 'parcelIntakeMethod';
+  name: 'paymentType' | 'parcelIntakeMethod';
   options: readonly { value: string; title: string; hint: string }[];
   register: ReturnType<typeof useForm<CreateOrderFormValues>>['register'];
   error?: string;

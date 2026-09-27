@@ -52,11 +52,13 @@ export interface CreatePaymentMethodRequest {
   code: string;
   name: string;
   sortOrder?: number;
+  bypassDriverCash?: boolean;
 }
 export interface UpdatePaymentMethodRequest {
   name?: string;
   sortOrder?: number;
   isActive?: boolean;
+  bypassDriverCash?: boolean;
 }
 export interface CreateFailedDeliveryReasonRequest {
   name: string;

@@ -208,7 +208,10 @@ describe("Reports — Parcel Intake / Collection (Phase 11.17.6)", () => {
           "collectionsCompleted",
           "currentCashHeld",
           "deliveryAttempts",
+          // Direct Payment Settlement — collection split by route.
+          "directCompanyCollected",
           "driver",
+          "driverCashCollected",
           "failedAttempts",
           "failedCollectionAttempts",
           "moneyCollected",
@@ -217,6 +220,7 @@ describe("Reports — Parcel Intake / Collection (Phase 11.17.6)", () => {
           "settlementAmount",
           "settlementCount",
           "successRate",
+          "totalCollected",
         ].sort()
       );
     });

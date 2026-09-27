@@ -1193,7 +1193,14 @@ describe("Driver Workflow integration (Phase 7.6)", () => {
   // ============================================================
 
   describe("Collection payment method", () => {
-    test("collection_payment_method_id set at order creation persists unchanged through the full workflow (no delivery-time confirmation exists)", async () => {
+    // The Driver may optionally correct collection_payment_method_id at
+    // /deliver (paymentMethodId in the request body) — see the dedicated
+    // "Payment method" suite in driver-orders-deliver.test.ts for that
+    // behavior. This test covers the DEFAULT path: when paymentMethodId is
+    // omitted (as every other test in this workflow-integration suite
+    // does), the value set at order creation is simply carried through
+    // unchanged — never silently reset or altered by the workflow.
+    test("collection_payment_method_id set at order creation persists unchanged when the deliver request omits paymentMethodId", async () => {
       const driver = await createDriverWithToken("driver-payment-method");
       const orderId = await createOutForDeliveryOrder(driver.token, driver.driverId);
       const before = await prisma.orders.findUniqueOrThrow({ where: { id: orderId } });
@@ -1201,7 +1208,7 @@ describe("Driver Workflow integration (Phase 7.6)", () => {
 
       await deliver(orderId, driver.token, { actualAmountCollected: "105.00" });
       const after = await prisma.orders.findUniqueOrThrow({ where: { id: orderId } });
-      assert.equal(after.collection_payment_method_id, cashMethodId, "no delivery-time payment-method confirmation mechanism exists yet — the original value is simply carried through unchanged");
+      assert.equal(after.collection_payment_method_id, cashMethodId, "omitting paymentMethodId must leave the existing collection payment method unchanged");
     });
   });
 

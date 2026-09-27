@@ -9,7 +9,7 @@ import { prisma } from "../db/prisma";
  *
  * Run AFTER `npm run seed:visual`:   npm run seed:visual:customer-13-7
  *
- * Ensures customer@swiftdrop.test's Customer record has every OPTIONAL
+ * Ensures customer@springcargo.test's Customer record has every OPTIONAL
  * profile field populated so /customer/profile visibly renders all of:
  *   Name, Customer Number, Primary Phone, Secondary Phone, Email,
  *   Default Area, Default Address.
@@ -21,7 +21,7 @@ import { prisma } from "../db/prisma";
  *
  * SAFETY:
  *   - refuses to run when NODE_ENV=production
- *   - only touches customer@swiftdrop.test + the "PH137 Visual Area" row
+ *   - only touches customer@springcargo.test + the "PH137 Visual Area" row
  *   - idempotent: skips any field that is already set; re-running is a no-op
  *   - NO schema change, NO migration, NO financial-history change
  */
@@ -56,11 +56,11 @@ async function main(): Promise<void> {
   const app = createApp();
 
   const customerUser = await prisma.users.findUnique({
-    where: { email: "customer@swiftdrop.test" },
+    where: { email: "customer@springcargo.test" },
     select: { id: true },
   });
   if (!customerUser) {
-    throw new Error('[seed:visual:customer-13-7] customer@swiftdrop.test not found — run "npm run seed:visual" first.');
+    throw new Error('[seed:visual:customer-13-7] customer@springcargo.test not found — run "npm run seed:visual" first.');
   }
   const customer = await prisma.customers.findUniqueOrThrow({
     where: { portal_user_id: customerUser.id },
@@ -84,7 +84,7 @@ async function main(): Promise<void> {
   if (Object.keys(patch).length === 0) {
     console.log("[seed:visual:customer-13-7] All optional profile fields already set — nothing to do.");
   } else {
-    const adminToken = await login(app, "admin@swiftdrop.test");
+    const adminToken = await login(app, "admin@springcargo.test");
     const res = await request(app)
       .patch(`/api/v1/customers/${customer.id}`)
       .set(bearer(adminToken))
@@ -95,7 +95,7 @@ async function main(): Promise<void> {
     console.log("[seed:visual:customer-13-7] Applied:", JSON.stringify(Object.keys(patch)));
   }
 
-  const customerToken = await login(app, "customer@swiftdrop.test");
+  const customerToken = await login(app, "customer@springcargo.test");
   const profile = await request(app).get("/api/v1/customer/me/profile").set(bearer(customerToken));
   console.log("[seed:visual:customer-13-7] Done. Profile now:", JSON.stringify(profile.body?.data));
 }

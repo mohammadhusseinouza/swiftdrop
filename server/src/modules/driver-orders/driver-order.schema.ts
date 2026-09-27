@@ -59,9 +59,20 @@ export type FailDeliveryOrderInput = z.infer<typeof FailDeliveryOrderSchema>;
 // financialStatus, outcome, attemptNumber, deliveredAt, driverId,
 // currentDriverId, ...) are silently stripped by Zod's default object
 // behavior — never read, never effective.
+//
+// paymentMethodId is OPTIONAL: it reuses the exact orders.collection_
+// payment_method_id column the employee already set at Create Order — no
+// second/actual/expected payment-method concept. Omitted -> the Order's
+// current collection payment method is preserved unchanged. Supplied -> the
+// driver is correcting it to the method actually used at delivery; the
+// existence/active-state check (loadActivePaymentMethod, same source of
+// truth as order.service.ts's Create/Edit Order validation) happens in
+// driver-order.service.ts, same DB-dependent-validation convention as
+// collectionDifferenceReason above.
 export const DeliverOrderSchema = z.object({
   actualAmountCollected: moneySchema,
   collectionDifferenceReason: z.string().trim().min(1).optional(),
+  paymentMethodId: z.string().uuid().optional(),
 });
 
 export type DeliverOrderInput = z.infer<typeof DeliverOrderSchema>;

@@ -27,7 +27,6 @@ export interface ListCustomersParams extends PaginationParams {
 }
 
 export interface CreateCustomerRequest {
-  customerNumber: string;
   name: string;
   primaryPhone: string;
   secondaryPhone?: string;

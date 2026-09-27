@@ -22,6 +22,8 @@ import { EmptyState } from '../../../components/feedback/EmptyState';
 import { ErrorState } from '../../../components/feedback/ErrorState';
 import { MD_QUERY, useMediaQuery } from '../../../lib/useMediaQuery';
 import { useDebouncedValue } from '../../../lib/useDebouncedValue';
+import { printPayoutReceipt } from '../../../lib/payoutReceiptPrint';
+import type { PayoutSummary } from '../../../services/domain.types';
 
 import { buildPayoutColumns } from './payoutColumns';
 import { MobilePayoutCard } from './MobilePayoutCard';
@@ -111,9 +113,24 @@ export default function PayoutsListPage() {
   const rows = query.data?.items ?? [];
   const meta = query.data?.meta;
 
+  /* ------------------------- receipt reprint --------------------------- */
+  // Read-only: prints the ORIGINAL persisted payout row. No request is made,
+  // so a reprint can never create, repeat or alter a financial transaction.
+  const [printError, setPrintError] = useState<string | null>(null);
+  const printReceipt = useCallback((payout: PayoutSummary) => {
+    setPrintError(null);
+    try {
+      printPayoutReceipt(payout, { reprint: true });
+    } catch {
+      setPrintError(
+        `The invoice for payout ${payout.payoutNumber} could not be printed. Please try again.`,
+      );
+    }
+  }, []);
+
   const columns = useMemo(
-    () => buildPayoutColumns({ canViewCustomer }),
-    [canViewCustomer],
+    () => buildPayoutColumns({ canViewCustomer, onPrintReceipt: printReceipt }),
+    [canViewCustomer, printReceipt],
   );
 
   /* ----------------------------- dialog --------------------------------- */
@@ -131,6 +148,22 @@ export default function PayoutsListPage() {
           ) : undefined
         }
       />
+
+      {printError && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-card border border-danger-200 bg-danger-50 px-4 py-2.5 text-sm text-danger-700"
+        >
+          <span>{printError}</span>
+          <button
+            type="button"
+            onClick={() => setPrintError(null)}
+            className="font-medium underline"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {state.customerId && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-card border border-brand-100 bg-brand-50 px-4 py-2.5 text-sm text-brand-700">
@@ -280,7 +313,11 @@ export default function PayoutsListPage() {
         <ul className="space-y-2">
           {rows.map((p) => (
             <li key={p.id}>
-              <MobilePayoutCard payout={p} canViewCustomer={canViewCustomer} />
+              <MobilePayoutCard
+                payout={p}
+                canViewCustomer={canViewCustomer}
+                onPrintReceipt={printReceipt}
+              />
             </li>
           ))}
         </ul>

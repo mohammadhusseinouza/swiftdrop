@@ -1,9 +1,9 @@
 @import 'tailwindcss';
 
 /*
- * SwiftDrop design tokens (Phase 10.6).
+ * Spring Cargo design tokens (Phase 10.6).
  *
- * Consolidated from the approved SwiftDrop / Claude Design visual reference.
+ * Consolidated from the approved Spring Cargo / Claude Design visual reference.
  * Tailwind v4 CSS-first theme — every token below is exposed as a utility
  * (e.g. --color-brand-600 -> bg-brand-600 / text-brand-600, --radius-card ->
  * rounded-card, --shadow-card -> shadow-card).

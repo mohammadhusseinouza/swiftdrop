@@ -9,7 +9,7 @@ import type {
   ListPaymentMethodsQuery,
   UpdatePaymentMethodInput,
 } from "./payment-method.schema";
-import type { PaymentMethodSummary } from "./payment-method.types";
+import type { DriverPaymentMethodSummary, PaymentMethodSummary } from "./payment-method.types";
 
 function toPaymentMethodSummary(paymentMethod: payment_methods): PaymentMethodSummary {
   return {
@@ -18,6 +18,7 @@ function toPaymentMethodSummary(paymentMethod: payment_methods): PaymentMethodSu
     name: paymentMethod.name,
     isActive: paymentMethod.is_active,
     sortOrder: paymentMethod.sort_order,
+    bypassDriverCash: paymentMethod.bypass_driver_cash,
     createdAt: paymentMethod.created_at.toISOString(),
     updatedAt: paymentMethod.updated_at.toISOString(),
   };
@@ -66,6 +67,20 @@ export async function listPaymentMethods(query: ListPaymentMethodsQuery): Promis
   return rows.map(toPaymentMethodSummary);
 }
 
+// GET /api/v1/driver/payment-methods — the DRIVER role must NOT be granted
+// settings.read. Mirrors listActiveFailedDeliveryReasonsForDriver
+// (failed-delivery-reason.service.ts) exactly. Used by the Driver Portal's
+// delivery-confirmation Payment Method selector (task: driver may correct
+// the order's existing collection_payment_method_id at delivery time).
+export async function listActivePaymentMethodsForDriver(): Promise<DriverPaymentMethodSummary[]> {
+  const rows = await prisma.payment_methods.findMany({
+    where: { is_active: true },
+    orderBy: [{ sort_order: "asc" }, { name: "asc" }],
+    select: { id: true, code: true, name: true },
+  });
+  return rows.map((r) => ({ id: r.id, code: r.code, name: r.name }));
+}
+
 export async function createPaymentMethod(
   input: CreatePaymentMethodInput,
   actorUserId: string
@@ -77,6 +92,7 @@ export async function createPaymentMethod(
           code: input.code,
           name: input.name,
           ...(input.sortOrder !== undefined ? { sort_order: input.sortOrder } : {}),
+          ...(input.bypassDriverCash !== undefined ? { bypass_driver_cash: input.bypassDriverCash } : {}),
         },
       });
 
@@ -90,6 +106,7 @@ export async function createPaymentMethod(
           name: created.name,
           sortOrder: created.sort_order,
           isActive: created.is_active,
+          bypassDriverCash: created.bypass_driver_cash,
         },
       });
 
@@ -130,13 +147,19 @@ export async function updatePaymentMethod(
           ...(input.name !== undefined ? { name: input.name } : {}),
           ...(input.sortOrder !== undefined ? { sort_order: input.sortOrder } : {}),
           ...(input.isActive !== undefined ? { is_active: input.isActive } : {}),
+          ...(input.bypassDriverCash !== undefined ? { bypass_driver_cash: input.bypassDriverCash } : {}),
           updated_at: new Date(),
         },
       });
 
       const { previousValues, newValues, otherFieldsTouched } = diffReferenceFields(
-        { name: existing.name, sortOrder: existing.sort_order, isActive: existing.is_active },
-        { name: input.name, sortOrder: input.sortOrder, isActive: input.isActive },
+        {
+          name: existing.name,
+          sortOrder: existing.sort_order,
+          isActive: existing.is_active,
+          bypassDriverCash: existing.bypass_driver_cash,
+        },
+        { name: input.name, sortOrder: input.sortOrder, isActive: input.isActive, bypassDriverCash: input.bypassDriverCash },
       );
 
       if (Object.keys(newValues).length > 0) {

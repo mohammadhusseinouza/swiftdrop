@@ -1,8 +1,10 @@
 import { Prisma } from "../../generated/prisma/client";
+import type { payment_methods } from "../../generated/prisma/client";
 import { prisma } from "../../db/prisma";
 import { AppError } from "../../shared/errors/app-error";
 import { assertConsistentCurrentAssignment } from "../orders/order.service";
 import { calculateCollectionDifference } from "../orders/order-financial.service";
+import { recordDirectCompanyCollection } from "../company-finance/company-direct-collection.service";
 import { creditDriverCollection } from "../driver-cash/driver-cash-ledger.service";
 import { creditWalletForOrder } from "../wallets/wallet-ledger.service";
 import { recordDeliveryFeeRevenue, recordCompanyOrderProductRevenue } from "../company-finance/company-finance-ledger.service";
@@ -525,6 +527,22 @@ export async function failDriverOrder(
   });
 }
 
+// Same source-of-truth check as order.service.ts's Create/Edit Order
+// validation (existence + is_active) — deliberately a small local copy
+// rather than a cross-module import, matching this codebase's established
+// per-module convention (order.service.ts / payout.service.ts / settlement.
+// service.ts each already keep their own near-identical copy).
+async function loadActivePaymentMethod(paymentMethodId: string): Promise<payment_methods> {
+  const method = await prisma.payment_methods.findUnique({ where: { id: paymentMethodId } });
+  if (!method) {
+    throw new AppError({ statusCode: 400, code: "VALIDATION_ERROR", message: "The specified payment method does not exist" });
+  }
+  if (!method.is_active) {
+    throw new AppError({ statusCode: 400, code: "VALIDATION_ERROR", message: "The specified payment method is not active" });
+  }
+  return method;
+}
+
 // ============================================================
 // POST /api/v1/driver/orders/:id/deliver (Phase 7.5 operational, Phase 8.3
 // financial integration for exact DELIVERY_ONLY)
@@ -598,6 +616,7 @@ export async function deliverDriverOrder(
   orderId: string,
   actualAmountCollected: Prisma.Decimal,
   collectionDifferenceReasonInput: string | null,
+  paymentMethodIdInput: string | undefined,
   actorUserId: string
 ): Promise<DriverOrderDetail> {
   // Ownership enforced in the query itself, identical contract to
@@ -652,6 +671,23 @@ export async function deliverDriverOrder(
     });
   }
 
+  // The Driver may correct the Order's EXISTING collection payment method to
+  // whatever was actually used at delivery — reusing orders.collection_
+  // payment_method_id verbatim (the same field the employee set at Create
+  // Order / Edit Order). There is no second "actual payment method" concept
+  // and no new enum. Omitted -> unchanged. Supplied and different -> revalidated
+  // against the same active-payment-method source of truth as Create/Edit
+  // Order (fail fast, before the transaction, same convention as the
+  // difference-reason check above). Supplied but identical to the current
+  // value -> treated as unchanged (no redundant audit metadata).
+  let effectiveCollectionPaymentMethodId: string | null = existing.collection_payment_method_id;
+  let collectionPaymentMethodChanged = false;
+  if (paymentMethodIdInput !== undefined && paymentMethodIdInput !== existing.collection_payment_method_id) {
+    await loadActivePaymentMethod(paymentMethodIdInput);
+    effectiveCollectionPaymentMethodId = paymentMethodIdInput;
+    collectionPaymentMethodChanged = true;
+  }
+
   // Assignment-history integrity — reused verbatim from Phase 6, never a
   // subtly different duplicate check. Fails closed with a sanitized 500 on
   // corruption; never silently repaired.
@@ -679,6 +715,10 @@ export async function deliverDriverOrder(
         delivered_at: now,
         actual_amount_collected: actualAmountCollected,
         collection_difference_reason: collectionDifferenceReason,
+        // The Driver's corrected (or unchanged) collection payment method,
+        // persisted atomically with the rest of the delivery transition —
+        // same UPDATE, same transaction, never a separate request.
+        collection_payment_method_id: effectiveCollectionPaymentMethodId,
         needs_financial_review: difference.needsFinancialReview,
         financial_status: financialStatus,
         updated_at: now,
@@ -740,7 +780,9 @@ export async function deliverDriverOrder(
     // ------------------------------------------------------------
     // Driver Cash always reflects the REAL physical cash collected — exact
     // (Phase 8.3/8.4) or a difference (Phase 8.7) — inside this SAME
-    // transaction. Zero-value collection is skipped entirely (Phase 8.1's
+    // transaction, unless the final payment method routes the collection
+    // directly to the company (Direct Payment Settlement, see the routing
+    // block below). Zero-value collection is skipped entirely (Phase 8.1's
     // ledger primitive correctly rejects a zero-amount row): an all-prepaid
     // exact delivery, or a difference delivery where the Driver collected
     // nothing, legitimately posts no Driver Cash row and still finalizes/
@@ -751,10 +793,50 @@ export async function deliverDriverOrder(
     // never accidentally credit a customer wallet, and a difference can
     // never have its ownership split guessed automatically.
     // ------------------------------------------------------------
+    // Traceability for a Driver-corrected payment method (task: "the
+    // employee originally chose one value and the driver may change it
+    // during delivery confirmation") — folded into whichever of the three
+    // audit rows below actually fires for this delivery (exactly one always
+    // does), never a separate audit action/row and never when unchanged.
+    const paymentMethodChangeMetadata = collectionPaymentMethodChanged
+      ? {
+          collectionPaymentMethodChanged: true,
+          previousCollectionPaymentMethodId: existing.collection_payment_method_id,
+          newCollectionPaymentMethodId: effectiveCollectionPaymentMethodId,
+        }
+      : { collectionPaymentMethodChanged: false };
+
+    // ------------------------------------------------------------
+    // Direct Payment Settlement — collection ROUTING. The FINAL collection
+    // payment method (the Driver's correction above, or the unchanged
+    // employee-selected one) decides where the physical money went:
+    //   bypass_driver_cash = false (or no method) -> Driver Cash COLLECTION
+    //   bypass_driver_cash = true                 -> company_direct_collections
+    // The flag is read HERE, inside the delivery transaction, and the
+    // decision is persisted by which ledger row gets written — it is never
+    // re-derived later from the method's current Settings value, so toggling
+    // the setting only ever affects future deliveries. Routing changes ONLY
+    // custody (who holds the money); wallet/revenue ownership below is
+    // identical for both routes.
+    // ------------------------------------------------------------
+    const collectionMethod = effectiveCollectionPaymentMethodId
+      ? await tx.payment_methods.findUnique({
+          where: { id: effectiveCollectionPaymentMethodId },
+          select: { id: true, bypass_driver_cash: true },
+        })
+      : null;
+    const bypassesDriverCash = collectionMethod?.bypass_driver_cash === true;
+    const collectionRoute = !actualAmountCollected.greaterThan(0)
+      ? "NONE"
+      : bypassesDriverCash
+        ? "DIRECT_COMPANY"
+        : "DRIVER_CASH";
+
     {
       let driverCashTransactionId: string | null = null;
+      let directCompanyCollectionId: string | null = null;
 
-      if (actualAmountCollected.greaterThan(0)) {
+      if (collectionRoute === "DRIVER_CASH") {
         const driverCash = await creditDriverCollection(tx, {
           driverId,
           amount: actualAmountCollected,
@@ -766,7 +848,21 @@ export async function deliverDriverOrder(
           idempotencyKey: `delivery:${orderId}:driver-collection`,
         });
         driverCashTransactionId = driverCash.transaction.id;
+      } else if (collectionRoute === "DIRECT_COMPANY" && collectionMethod) {
+        // Received directly by the company — the Driver never held it, so no
+        // Driver Cash row, no balance, no settlement obligation (never a
+        // credit-then-fake-settlement pair).
+        const direct = await recordDirectCompanyCollection(tx, {
+          orderId,
+          driverId,
+          paymentMethodId: collectionMethod.id,
+          amount: actualAmountCollected,
+          createdById: actorUserId,
+          idempotencyKey: `delivery:${orderId}:direct-company-collection`,
+        });
+        directCompanyCollectionId = direct.id;
       }
+      const collectionRoutingMetadata = { collectionRoute, directCompanyCollectionId };
 
       if (isExactDeliveryOnlyFinance) {
         let walletTransactionId: string | null = null;
@@ -787,7 +883,7 @@ export async function deliverDriverOrder(
           const companyTransaction = await recordDeliveryFeeRevenue(tx, {
             orderId,
             amount: existing.remaining_delivery_fee,
-            paymentMethodId: existing.collection_payment_method_id ?? undefined,
+            paymentMethodId: effectiveCollectionPaymentMethodId ?? undefined,
             createdById: actorUserId,
             idempotencyKey: `delivery:${orderId}:delivery-fee-revenue`,
           });
@@ -810,8 +906,10 @@ export async function deliverDriverOrder(
             walletCredit: existing.remaining_order_amount.toString(),
             deliveryFeeRevenue: existing.remaining_delivery_fee.toString(),
             driverCashTransactionId,
+            ...collectionRoutingMetadata,
             walletTransactionId,
             companyTransactionId,
+            ...paymentMethodChangeMetadata,
           },
         });
       } else if (isExactCompanyOrderFinance) {
@@ -825,7 +923,7 @@ export async function deliverDriverOrder(
           const productRevenue = await recordCompanyOrderProductRevenue(tx, {
             orderId,
             amount: existing.remaining_order_amount,
-            paymentMethodId: existing.collection_payment_method_id ?? undefined,
+            paymentMethodId: effectiveCollectionPaymentMethodId ?? undefined,
             createdById: actorUserId,
             idempotencyKey: `delivery:${orderId}:company-product-revenue`,
           });
@@ -836,7 +934,7 @@ export async function deliverDriverOrder(
           const feeRevenue = await recordDeliveryFeeRevenue(tx, {
             orderId,
             amount: existing.remaining_delivery_fee,
-            paymentMethodId: existing.collection_payment_method_id ?? undefined,
+            paymentMethodId: effectiveCollectionPaymentMethodId ?? undefined,
             createdById: actorUserId,
             idempotencyKey: `delivery:${orderId}:delivery-fee-revenue`,
           });
@@ -855,8 +953,10 @@ export async function deliverDriverOrder(
             companyProductRevenue: existing.remaining_order_amount.toString(),
             companyDeliveryFeeRevenue: existing.remaining_delivery_fee.toString(),
             driverCashTransactionId,
+            ...collectionRoutingMetadata,
             companyProductTransactionId,
             companyFeeTransactionId,
+            ...paymentMethodChangeMetadata,
           },
         });
       } else if (difference.needsFinancialReview) {
@@ -883,6 +983,8 @@ export async function deliverDriverOrder(
             difference: difference.collectionDifference.toString(),
             collectionDifferenceReason,
             driverCashTransactionId,
+            ...collectionRoutingMetadata,
+            ...paymentMethodChangeMetadata,
           },
         });
       }

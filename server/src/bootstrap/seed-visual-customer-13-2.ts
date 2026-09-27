@@ -10,7 +10,7 @@ import { prisma } from "../db/prisma";
  * Run AFTER `npm run seed:visual` (and ideally after seed:visual:customer-13-1):
  *   npm run seed:visual:customer-13-2
  *
- * Drives the REAL approved HTTP workflows so customer@swiftdrop.test's
+ * Drives the REAL approved HTTP workflows so customer@springcargo.test's
  * /customer/orders shows every shape the page must render:
  *   - active COMPANY_ORDER (ALREADY_AT_COMPANY)
  *   - active DELIVERY_ONLY that is DRIVER_COLLECTION: awaiting / assigned /
@@ -19,7 +19,7 @@ import { prisma } from "../db/prisma";
  * (Phase 13.1's PH131-VIS batch already covers active + delivered
  * DELIVERY_ONLY and ALREADY_AT_COMPANY.)
  *
- * SAFETY: refuses NODE_ENV=production; only touches *@swiftdrop.test fixtures
+ * SAFETY: refuses NODE_ENV=production; only touches *@springcargo.test fixtures
  * + PH132-VIS scoped rows; idempotent (marker-detected); NO schema change,
  * NO migration, NO manual ledger-row fabrication.
  */
@@ -50,15 +50,15 @@ async function main(): Promise<void> {
   const app = createApp();
 
   const customerUser = await prisma.users.findUnique({
-    where: { email: "customer@swiftdrop.test" },
+    where: { email: "customer@springcargo.test" },
     select: { id: true },
   });
   if (!customerUser) {
-    throw new Error('[seed:visual:customer-13-2] customer@swiftdrop.test not found — run "npm run seed:visual" first.');
+    throw new Error('[seed:visual:customer-13-2] customer@springcargo.test not found — run "npm run seed:visual" first.');
   }
   const customer = await prisma.customers.findUniqueOrThrow({ where: { portal_user_id: customerUser.id } });
   const driverUser = await prisma.users.findUniqueOrThrow({
-    where: { email: "driver@swiftdrop.test" },
+    where: { email: "driver@springcargo.test" },
     select: { id: true },
   });
   const driverRow = await prisma.drivers.findUniqueOrThrow({ where: { user_id: driverUser.id } });
@@ -71,8 +71,8 @@ async function main(): Promise<void> {
     console.log("[seed:visual:customer-13-2] PH132-VIS batch already present — skipping.");
   } else {
     const [adminToken, driverToken] = await Promise.all([
-      login(app, "admin@swiftdrop.test"),
-      login(app, "driver@swiftdrop.test"),
+      login(app, "admin@springcargo.test"),
+      login(app, "driver@springcargo.test"),
     ]);
 
     const area =
@@ -166,7 +166,7 @@ async function main(): Promise<void> {
     console.log("[seed:visual:customer-13-2] PH132-VIS batch created.");
   }
 
-  const customerToken = await login(app, "customer@swiftdrop.test");
+  const customerToken = await login(app, "customer@springcargo.test");
   const [all, active, delivered] = await Promise.all([
     request(app).get("/api/v1/customer/me/orders?limit=100").set(bearer(customerToken)),
     request(app).get("/api/v1/customer/me/orders?view=active&limit=100").set(bearer(customerToken)),

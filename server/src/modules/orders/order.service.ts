@@ -263,8 +263,9 @@ function toFinancialEventActor(
 
 const FINANCIAL_EVENT_LEDGER_ORDER: Record<OrderFinancialEventLedger, number> = {
   DRIVER_CASH: 0,
-  WALLET: 1,
-  COMPANY_FINANCE: 2,
+  DIRECT_COMPANY_COLLECTION: 1,
+  WALLET: 2,
+  COMPANY_FINANCE: 3,
 };
 
 async function loadOrderFinancialEvents(
@@ -283,6 +284,11 @@ async function loadOrderFinancialEvents(
       created_at: true,
       users: FINANCIAL_EVENT_ACTOR_SELECT,
     },
+    orderBy: { created_at: "asc" },
+  });
+  const directCollectionRows = await client.company_direct_collections.findMany({
+    where: { order_id: orderId },
+    select: { id: true, amount: true, notes: true, created_at: true, users: FINANCIAL_EVENT_ACTOR_SELECT },
     orderBy: { created_at: "asc" },
   });
   const walletRows = await client.wallet_transactions.findMany({
@@ -331,6 +337,25 @@ async function loadOrderFinancialEvents(
       },
       at: row.created_at.getTime(),
       ledgerRank: FINANCIAL_EVENT_LEDGER_ORDER.DRIVER_CASH,
+    });
+  }
+  for (const row of directCollectionRows) {
+    // Received directly by the company (bypass payment method) — a positive,
+    // append-only collection record; never Driver Cash, never revenue.
+    wrapped.push({
+      event: {
+        id: row.id,
+        ledger: "DIRECT_COMPANY_COLLECTION",
+        type: "COLLECTION",
+        direction: "CREDIT",
+        amount: row.amount.toString(),
+        signedAmount: row.amount.toString(),
+        actor: toFinancialEventActor(row.users),
+        notes: row.notes,
+        occurredAt: row.created_at.toISOString(),
+      },
+      at: row.created_at.getTime(),
+      ledgerRank: FINANCIAL_EVENT_LEDGER_ORDER.DIRECT_COMPANY_COLLECTION,
     });
   }
   for (const row of walletRows) {
@@ -2092,8 +2117,9 @@ export async function cancelOrder(
 // recorded the REAL physical cash in Driver Cash and left the Order
 // REVIEW_REQUIRED without guessing how it splits between the Customer
 // Wallet and Company Revenue. This is the authorized Finance/Admin action
-// that supplies that split explicitly — it never re-touches Driver Cash
-// (physical custody was already settled at delivery time, and may even
+// that supplies that split explicitly — it never re-touches Driver Cash or a
+// direct company collection (physical custody was already recorded at
+// delivery time on exactly one of those routes, and Driver Cash may even
 // have been handed to the company via a Phase 8.6 settlement already;
 // accounting ownership is a separate concern from physical custody) and
 // never guesses an allocation on its own.

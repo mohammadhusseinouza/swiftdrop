@@ -16,6 +16,8 @@ export interface TopNavbarProps {
   /** Reflected on the toggle button for assistive tech. */
   toggleAriaExpanded?: boolean;
   toggleAriaControls?: string;
+  /** Icon inside the toggle button; defaults to the Menu (hamburger) icon. */
+  toggleIcon?: ReactNode;
   /** Right-aligned action slot (user menu, etc. — supplied by the shell). */
   actions?: ReactNode;
   className?: string;
@@ -28,6 +30,7 @@ export function TopNavbar({
   toggleId,
   toggleAriaExpanded,
   toggleAriaControls,
+  toggleIcon,
   actions,
   className,
 }: TopNavbarProps) {
@@ -48,7 +51,7 @@ export function TopNavbar({
           aria-controls={toggleAriaControls}
           className="rounded-control p-2 text-ink-muted hover:bg-neutral-50"
         >
-          <Menu className="size-5" aria-hidden="true" />
+          {toggleIcon ?? <Menu className="size-5" aria-hidden="true" />}
         </button>
       )}
       <div className="min-w-0 flex-1 truncate text-sm font-semibold text-ink">

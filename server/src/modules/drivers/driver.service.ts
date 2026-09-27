@@ -191,15 +191,6 @@ export async function createDriver(input: CreateDriverInput, actorUserId: string
         throw new AppError({ statusCode: 500, code: "INTERNAL_ERROR", message: "DRIVER role is not configured" });
       }
 
-      const existingDriverNumber = await tx.drivers.findUnique({ where: { driver_number: input.driverNumber } });
-      if (existingDriverNumber) {
-        throw new AppError({
-          statusCode: 409,
-          code: "CONFLICT",
-          message: `A driver with number "${input.driverNumber}" already exists`,
-        });
-      }
-
       let userId: string;
 
       if (isNewLoginCreateInput(input)) {
@@ -253,8 +244,11 @@ export async function createDriver(input: CreateDriverInput, actorUserId: string
         userId = input.userId;
       }
 
+      // driver_number is never supplied here — the column DEFAULT (backed by
+      // driver_number_seq, an atomic Postgres sequence) generates the next
+      // DRV-###### value on INSERT. See driver.schema.ts.
       const created = await tx.drivers.create({
-        data: { user_id: userId, driver_number: input.driverNumber },
+        data: { user_id: userId },
         include: { users: true },
       });
 

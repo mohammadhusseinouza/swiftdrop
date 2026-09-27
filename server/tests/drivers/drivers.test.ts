@@ -73,13 +73,18 @@ describe("Drivers backend (Phase 5.2)", () => {
     return user;
   }
 
+  // driverNumber is intentionally NOT part of the default payload — it is
+  // backend-generated (sequential DRV-###### convention) and never
+  // client-supplied. `overrides.driverNumber` still exists purely so a test
+  // can prove a client-supplied value is ignored (see "cannot override" below).
   function newDriverPayload(userId: string, overrides: Record<string, unknown> = {}) {
     return {
-      driverNumber: `PH52-API-${uniqueSuffix()}`,
       userId,
       ...overrides,
     };
   }
+
+  const DRIVER_NUMBER_RE = /^DRV-\d{6,}$/;
 
   async function createDriverViaApi(token: string, payload: Record<string, unknown>) {
     const res = await request(app).post("/api/v1/drivers").set(auth(token)).send(payload);
@@ -216,7 +221,7 @@ describe("Drivers backend (Phase 5.2)", () => {
       const res = await createDriverViaApi(tokens.admin, payload);
 
       assert.equal(res.status, 201);
-      assert.equal(res.body.data.driverNumber, payload.driverNumber);
+      assert.match(res.body.data.driverNumber, DRIVER_NUMBER_RE, "driverNumber must be backend-generated in the DRV-###### convention");
       assert.equal(res.body.data.isActive, true);
       assert.equal(res.body.data.user.id, linkable.id);
       assert.equal(res.body.data.user.email, linkable.email);
@@ -267,43 +272,81 @@ describe("Drivers backend (Phase 5.2)", () => {
       assert.equal(second.body.error.code, "CONFLICT");
     });
 
-    test("duplicate driverNumber -> controlled 409 CONFLICT", async () => {
+    test("client-supplied driverNumber is ignored (existing-link mode is non-strict) — the backend always generates its own", async () => {
+      const linkable = await newLinkableDriverUser();
+      const res = await createDriverViaApi(
+        tokens.admin,
+        newDriverPayload(linkable.id, { driverNumber: "SHOULD-NOT-APPLY" })
+      );
+
+      assert.equal(res.status, 201);
+      assert.notEqual(res.body.data.driverNumber, "SHOULD-NOT-APPLY");
+      assert.match(res.body.data.driverNumber, DRIVER_NUMBER_RE);
+
+      const row = await prisma.drivers.findUniqueOrThrow({ where: { id: res.body.data.id } });
+      assert.equal(row.driver_number, res.body.data.driverNumber);
+    });
+
+    test("sequential, unique generation — two creates in a row get two different, increasing DRV-###### numbers", async () => {
       const linkableA = await newLinkableDriverUser();
       const linkableB = await newLinkableDriverUser();
-      const payload = newDriverPayload(linkableA.id);
-      const first = await createDriverViaApi(tokens.admin, payload);
-      assert.equal(first.status, 201);
 
-      const second = await request(app)
-        .post("/api/v1/drivers")
-        .set(auth(tokens.admin))
-        .send(newDriverPayload(linkableB.id, { driverNumber: payload.driverNumber }));
-      assert.equal(second.status, 409);
-      assert.equal(second.body.error.code, "CONFLICT");
-      assert.doesNotMatch(JSON.stringify(second.body), /prisma/i);
+      const first = await createDriverViaApi(tokens.admin, newDriverPayload(linkableA.id));
+      assert.equal(first.status, 201);
+      assert.match(first.body.data.driverNumber, DRIVER_NUMBER_RE);
+
+      const second = await createDriverViaApi(tokens.admin, newDriverPayload(linkableB.id));
+      assert.equal(second.status, 201);
+      assert.match(second.body.data.driverNumber, DRIVER_NUMBER_RE);
+
+      assert.notEqual(first.body.data.driverNumber, second.body.data.driverNumber);
+      const firstN = Number(first.body.data.driverNumber.replace("DRV-", ""));
+      const secondN = Number(second.body.data.driverNumber.replace("DRV-", ""));
+      assert.ok(secondN > firstN, "the second creation must receive a strictly greater sequence number");
+    });
+
+    test("concurrent creates never produce a duplicate driverNumber", async () => {
+      const CONCURRENCY = 8;
+      const linkables = await Promise.all(Array.from({ length: CONCURRENCY }, () => newLinkableDriverUser()));
+      const responses = await Promise.all(
+        linkables.map((u) => request(app).post("/api/v1/drivers").set(auth(tokens.admin)).send(newDriverPayload(u.id)))
+      );
+      for (const res of responses) {
+        assert.equal(res.status, 201);
+        createdDriverIds.push(res.body.data.id);
+      }
+      const numbers = responses.map((r) => r.body.data.driverNumber);
+      for (const n of numbers) assert.match(n, DRIVER_NUMBER_RE);
+      assert.equal(new Set(numbers).size, CONCURRENCY, "every concurrently created driver must get a distinct number");
     });
 
     test("validation failures -> 400", async () => {
-      const linkable = await newLinkableDriverUser();
-
-      const missingNumber = await request(app)
-        .post("/api/v1/drivers")
-        .set(auth(tokens.admin))
-        .send({ userId: linkable.id });
-      assert.equal(missingNumber.status, 400);
-      assert.equal(missingNumber.body.error.code, "VALIDATION_ERROR");
-
       const badUserId = await request(app)
         .post("/api/v1/drivers")
         .set(auth(tokens.admin))
         .send(newDriverPayload("not-a-uuid"));
       assert.equal(badUserId.status, 400);
 
-      const tooLongNumber = await request(app)
+      const missingUserId = await request(app).post("/api/v1/drivers").set(auth(tokens.admin)).send({});
+      assert.equal(missingUserId.status, 400);
+      assert.equal(missingUserId.body.error.code, "VALIDATION_ERROR");
+
+      // New-login mode is `.strict()` — a caller-supplied driverNumber there
+      // is a 400 (unrecognized key), unlike existing-link mode above.
+      const strictModeRejection = await request(app)
         .post("/api/v1/drivers")
         .set(auth(tokens.admin))
-        .send(newDriverPayload(linkable.id, { driverNumber: "x".repeat(51) }));
-      assert.equal(tooLongNumber.status, 400);
+        .send({
+          driverNumber: "SHOULD-BE-REJECTED",
+          user: {
+            email: `strict-${uniqueSuffix()}@phase4-5-test.springcargo.local`,
+            password: "hunter2xyz",
+            firstName: "Strict",
+            lastName: "Mode",
+          },
+        });
+      assert.equal(strictModeRejection.status, 400);
+      assert.equal(strictModeRejection.body.error.code, "VALIDATION_ERROR");
     });
 
     test("no password/auth secret fields accepted or returned", async () => {

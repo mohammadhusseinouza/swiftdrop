@@ -13,6 +13,7 @@ import type {
   DriverCashOverview,
   DriverFailedCollectionReasonSummary,
   DriverFailedDeliveryReasonSummary,
+  DriverPaymentMethodSummary,
   DriverHistoryJobType,
   DriverHistoryResult,
   DriverJobDetail,
@@ -189,6 +190,8 @@ export interface ListDriverOrdersParams extends PaginationParams {
 export interface DeliverDriverOrderRequest {
   actualAmountCollected: string;
   collectionDifferenceReason?: string;
+  /** Optional correction to the order's EXISTING collection payment method — omit to leave it unchanged. */
+  paymentMethodId?: string;
 }
 
 export interface FailDriverOrderRequest {
@@ -569,6 +572,22 @@ export const ordersApi = api.injectEndpoints({
       providesTags: [{ type: 'Settings', id: 'FAILED_DELIVERY_REASONS' }],
     }),
 
+    // GET /api/v1/driver/payment-methods — driver.orders.read_own, NOT
+    // /settings/payment-methods (settings.read). Reuses the Management
+    // Settings page's own 'PAYMENT_METHODS' tag id so an edit made there
+    // also invalidates this cached list. Backs the delivery-confirmation
+    // Payment Method selector (the driver may correct the order's existing
+    // collection payment method at delivery time).
+    getDriverPaymentMethods: builder.query<
+      DriverPaymentMethodSummary[],
+      void
+    >({
+      query: () => ({ url: '/driver/payment-methods' }),
+      transformResponse: (r: ApiSuccessResponse<DriverPaymentMethodSummary[]>) =>
+        unwrapData(r),
+      providesTags: [{ type: 'Settings', id: 'PAYMENT_METHODS' }],
+    }),
+
     /* ================= Driver self-service (Phase 7) ================= */
 
     getDriverOrders: builder.query<
@@ -706,6 +725,7 @@ export const ordersApi = api.injectEndpoints({
 
 export const {
   useGetOrdersQuery,
+  useLazyGetOrdersQuery,
   useGetOrderQuery,
   useLazyGetOrderQuery,
   useGetOrderHistoryQuery,
@@ -724,6 +744,7 @@ export const {
   useGetDriverWorkHistoryQuery,
   useGetDriverFailedCollectionReasonsQuery,
   useGetDriverFailedDeliveryReasonsQuery,
+  useGetDriverPaymentMethodsQuery,
   useMarkParcelCollectedMutation,
   useReportParcelCollectionFailedMutation,
   useGetDriverOrdersQuery,

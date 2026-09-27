@@ -3,8 +3,8 @@ import { prisma } from "../../db/prisma";
 import { parseUtcCalendarDate } from "../../shared/date/day-boundary";
 import {
   getCompanyRevenueFlow,
+  getCollectedFlowBreakdown,
   getDriverCashOutstandingSnapshot,
-  getNetCollectedFlow,
   getNetCompanyCategoryFlow,
   getNetPayoutFlow,
   getWalletLiabilitySnapshot,
@@ -47,12 +47,12 @@ async function getSettlementAggregate(range: ResolvedRange): Promise<{ count: nu
 }
 
 async function getSummary(range: ResolvedRange): Promise<FinanceReportSummary> {
-  const [companyRevenue, deliveryFeeRevenue, companyOrderRevenue, totalCollected, customerPayouts, walletLiability, driverCashOutstanding, settlement] =
+  const [companyRevenue, deliveryFeeRevenue, companyOrderRevenue, collected, customerPayouts, walletLiability, driverCashOutstanding, settlement] =
     await Promise.all([
       getCompanyRevenueFlow(range),
       getNetCompanyCategoryFlow("DELIVERY_FEE_REVENUE", range),
       getNetCompanyCategoryFlow("COMPANY_ORDER_PRODUCT_REVENUE", range),
-      getNetCollectedFlow(range),
+      getCollectedFlowBreakdown(range),
       getNetPayoutFlow(range),
       // "current*" fields are ALWAYS the live snapshot, ignoring `to`
       // entirely — the Finance Report names them current* precisely to
@@ -66,7 +66,9 @@ async function getSummary(range: ResolvedRange): Promise<FinanceReportSummary> {
     companyRevenue,
     deliveryFeeRevenue,
     companyOrderRevenue,
-    totalCollected,
+    totalCollected: collected.totalCollected,
+    driverCollected: collected.driverCollected,
+    directCompanyCollected: collected.directCompanyCollected,
     customerPayouts,
     currentCustomerWalletLiability: walletLiability,
     currentDriverCashOutstanding: driverCashOutstanding,
@@ -102,6 +104,8 @@ async function findDistinctPeriods(bucket: Bucket, range: ResolvedRange): Promis
       UNION ALL
       SELECT created_at FROM driver_cash_transactions WHERE ${dateClause}
       UNION ALL
+      SELECT created_at FROM company_direct_collections WHERE ${dateClause}
+      UNION ALL
       SELECT created_at FROM wallet_transactions WHERE ${dateClause}
       UNION ALL
       SELECT created_at FROM driver_settlements WHERE ${dateClause}
@@ -132,11 +136,11 @@ async function getPeriodRows(bucket: Bucket, range: ResolvedRange): Promise<Fina
   return Promise.all(
     periods.map(async (period): Promise<FinanceReportPeriodRow> => {
       const periodRange: ResolvedRange = { start: period.start, endExclusive: period.endExclusive };
-      const [companyRevenue, deliveryFeeRevenue, companyOrderRevenue, totalCollected, customerPayouts, settlement] = await Promise.all([
+      const [companyRevenue, deliveryFeeRevenue, companyOrderRevenue, collected, customerPayouts, settlement] = await Promise.all([
         getCompanyRevenueFlow(periodRange),
         getNetCompanyCategoryFlow("DELIVERY_FEE_REVENUE", periodRange),
         getNetCompanyCategoryFlow("COMPANY_ORDER_PRODUCT_REVENUE", periodRange),
-        getNetCollectedFlow(periodRange),
+        getCollectedFlowBreakdown(periodRange),
         getNetPayoutFlow(periodRange),
         getSettlementAggregate(periodRange),
       ]);
@@ -145,7 +149,9 @@ async function getPeriodRows(bucket: Bucket, range: ResolvedRange): Promise<Fina
         companyRevenue,
         deliveryFeeRevenue,
         companyOrderRevenue,
-        totalCollected,
+        totalCollected: collected.totalCollected,
+        driverCollected: collected.driverCollected,
+        directCompanyCollected: collected.directCompanyCollected,
         customerPayouts,
         settlementAmount: settlement.amount,
       };
@@ -157,10 +163,10 @@ async function getPeriodRows(bucket: Bucket, range: ResolvedRange): Promise<Fina
 // Category grouping — aggregate-only rows, never raw transactions.
 // ------------------------------------------------------------
 async function getCategoryRows(range: ResolvedRange): Promise<FinanceReportCategoryRow[]> {
-  const [deliveryFee, productRevenue, totalCollected, payouts, settlement] = await Promise.all([
+  const [deliveryFee, productRevenue, collected, payouts, settlement] = await Promise.all([
     getNetCompanyCategoryFlow("DELIVERY_FEE_REVENUE", range),
     getNetCompanyCategoryFlow("COMPANY_ORDER_PRODUCT_REVENUE", range),
-    getNetCollectedFlow(range),
+    getCollectedFlowBreakdown(range),
     getNetPayoutFlow(range),
     getSettlementAggregate(range),
   ]);
@@ -168,7 +174,9 @@ async function getCategoryRows(range: ResolvedRange): Promise<FinanceReportCateg
   return [
     { category: "DELIVERY_FEE_REVENUE", amount: deliveryFee, count: null },
     { category: "COMPANY_ORDER_REVENUE", amount: productRevenue, count: null },
-    { category: "TOTAL_COLLECTED", amount: totalCollected, count: null },
+    { category: "TOTAL_COLLECTED", amount: collected.totalCollected, count: null },
+    { category: "DRIVER_COLLECTED", amount: collected.driverCollected, count: null },
+    { category: "DIRECT_COMPANY_COLLECTED", amount: collected.directCompanyCollected, count: null },
     { category: "CUSTOMER_PAYOUTS", amount: payouts, count: null },
     { category: "DRIVER_SETTLEMENTS", amount: settlement.amount, count: settlement.count },
   ];

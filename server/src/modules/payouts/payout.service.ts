@@ -67,12 +67,18 @@ type PayoutWithRelations = customer_payouts & {
   customers: customers;
   payment_methods: payment_methods;
   users: users;
+  wallet_transactions: { balance_before: Prisma.Decimal; balance_after: Prisma.Decimal } | null;
 };
 
+// The linked PAYOUT wallet_transactions row (payout_id is UNIQUE) is the
+// authoritative, persisted record of the wallet balance immediately before and
+// after this payout. Only those two values are selected — no other ledger
+// internals (idempotency key, etc.) leave the service.
 const payoutInclude = {
   customers: true,
   payment_methods: true,
   users: true,
+  wallet_transactions: { select: { balance_before: true, balance_after: true } },
 } satisfies Prisma.customer_payoutsInclude;
 
 function toPayoutSummary(row: PayoutWithRelations): PayoutSummary {
@@ -86,6 +92,8 @@ function toPayoutSummary(row: PayoutWithRelations): PayoutSummary {
       primaryPhone: row.customers.primary_phone,
     },
     amount: row.amount.toString(),
+    balanceBefore: row.wallet_transactions?.balance_before.toString() ?? null,
+    balanceAfter: row.wallet_transactions?.balance_after.toString() ?? null,
     paymentMethod: { id: row.payment_methods.id, code: row.payment_methods.code, name: row.payment_methods.name },
     processedBy: { id: row.users.id, firstName: row.users.first_name, lastName: row.users.last_name },
     status: row.status,

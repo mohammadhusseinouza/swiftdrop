@@ -11,8 +11,9 @@ import type { CustomerDetail } from '../../../services/domain.types';
  * `UpdateCustomerSchema`). UX validation only; the backend re-validates.
  *
  * Field notes from the live schema:
- *   - customerNumber is REQUIRED client input on create (no server generation)
- *     and IMMUTABLE — it is not part of the edit form or `UpdateCustomerSchema`.
+ *   - customerNumber is BACKEND-GENERATED (sequential CUST-###### convention)
+ *     and IMMUTABLE — it is not part of this form at all, on create or edit.
+ *     It is displayed read-only on Customer Detail once the record exists.
  *   - isActive is NOT edited through this form — deactivate / reactivate is a
  *     separate confirmed action (`{ isActive }` PATCH).
  *   - email is lowercased + validated as an email by the backend.
@@ -20,7 +21,6 @@ import type { CustomerDetail } from '../../../services/domain.types';
  *     optional; on PATCH, `null` clears them.
  */
 
-const CUSTOMER_NUMBER_MAX = 50;
 const NAME_MAX = 200;
 const PHONE_MAX = 30;
 const EMAIL_MAX = 255;
@@ -56,24 +56,16 @@ const baseShape = {
 };
 
 /**
- * One schema / one form type for both create and edit. `customerNumber` is
- * always in the form (pre-filled + shown read-only in edit mode) so a single
- * RHF type covers both; `toUpdateCustomerRequest` simply never sends it, since
- * it is immutable server-side.
+ * One schema / one form type for both create and edit — customerNumber is
+ * never part of it; the backend generates it.
  */
 export const customerFormSchema = z.object({
-  customerNumber: z
-    .string()
-    .trim()
-    .min(1, 'Customer number is required')
-    .max(CUSTOMER_NUMBER_MAX, `At most ${CUSTOMER_NUMBER_MAX} characters`),
   ...baseShape,
 });
 
 export type CustomerFormValues = z.infer<typeof customerFormSchema>;
 
 export const CUSTOMER_FORM_DEFAULTS: CustomerFormValues = {
-  customerNumber: '',
   name: '',
   primaryPhone: '',
   secondaryPhone: '',
@@ -87,7 +79,6 @@ export function customerToFormValues(
   customer: CustomerDetail,
 ): CustomerFormValues {
   return {
-    customerNumber: customer.customerNumber,
     name: customer.name,
     primaryPhone: customer.primaryPhone,
     secondaryPhone: customer.secondaryPhone ?? '',
@@ -111,7 +102,6 @@ export function toCreateCustomerRequest(
   values: CustomerFormValues,
 ): CreateCustomerRequest {
   return {
-    customerNumber: values.customerNumber.trim(),
     name: values.name.trim(),
     primaryPhone: values.primaryPhone.trim(),
     secondaryPhone: trimmedOrUndefined(values.secondaryPhone),
@@ -142,7 +132,6 @@ export function toUpdateCustomerRequest(
 }
 
 export const CUSTOMER_FORM_FIELDS = new Set<string>([
-  'customerNumber',
   'name',
   'primaryPhone',
   'secondaryPhone',

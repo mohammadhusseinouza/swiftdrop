@@ -153,18 +153,11 @@ export async function listCustomers(query: ListCustomersQuery): Promise<ListCust
 export async function createCustomer(input: CreateCustomerInput, createdByUserId: string): Promise<CustomerDetail> {
   try {
     return await prisma.$transaction(async (tx) => {
-      const existing = await tx.customers.findUnique({ where: { customer_number: input.customerNumber } });
-      if (existing) {
-        throw new AppError({
-          statusCode: 409,
-          code: "CONFLICT",
-          message: `A customer with number "${input.customerNumber}" already exists`,
-        });
-      }
-
+      // customer_number is never supplied here — the column DEFAULT (backed
+      // by customer_number_seq, an atomic Postgres sequence) generates the
+      // next CUST-###### value on INSERT. See customer.schema.ts.
       const customer = await tx.customers.create({
         data: {
-          customer_number: input.customerNumber,
           name: input.name,
           primary_phone: input.primaryPhone,
           secondary_phone: input.secondaryPhone,

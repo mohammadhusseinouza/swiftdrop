@@ -157,6 +157,16 @@ export interface DriverReportRow {
   failedAttempts: number;
   deliveryAttempts: number;
   successRate: string | null;
+  // Collections attributed to this driver's deliveries, by route (flow,
+  // created_at in range):
+  //   driverCashCollected    — Driver Cash COLLECTION net of reversals (held by the driver)
+  //   directCompanyCollected — company_direct_collections for deliveries this driver completed
+  //   totalCollected         — driverCashCollected + directCompanyCollected
+  // Only driverCashCollected ever affects currentCashHeld / settlements.
+  driverCashCollected: string;
+  directCompanyCollected: string;
+  totalCollected: string;
+  /** @deprecated identical to driverCashCollected — kept for existing clients. */
   moneyCollected: string;
   settlementCount: number;
   settlementAmount: string;
@@ -208,7 +218,10 @@ export interface FinanceReportSummary {
   companyRevenue: string;
   deliveryFeeRevenue: string;
   companyOrderRevenue: string;
+  // totalCollected = driverCollected + directCompanyCollected.
   totalCollected: string;
+  driverCollected: string;
+  directCompanyCollected: string;
   customerPayouts: string;
   currentCustomerWalletLiability: string;
   currentDriverCashOutstanding: string;
@@ -222,6 +235,8 @@ export interface FinanceReportPeriodRow {
   deliveryFeeRevenue: string;
   companyOrderRevenue: string;
   totalCollected: string;
+  driverCollected: string;
+  directCompanyCollected: string;
   customerPayouts: string;
   settlementAmount: string;
 }
@@ -230,6 +245,8 @@ export type FinanceReportCategoryName =
   | "DELIVERY_FEE_REVENUE"
   | "COMPANY_ORDER_REVENUE"
   | "TOTAL_COLLECTED"
+  | "DRIVER_COLLECTED"
+  | "DIRECT_COMPANY_COLLECTED"
   | "CUSTOMER_PAYOUTS"
   | "DRIVER_SETTLEMENTS";
 

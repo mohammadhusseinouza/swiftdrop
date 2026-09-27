@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { MIN_PASSWORD_LENGTH } from "../auth/auth.schema";
 
-export const DRIVER_NUMBER_MAX_LENGTH = 50;
 const USER_NAME_MAX_LENGTH = 100;
 const USER_EMAIL_MAX_LENGTH = 255;
 const USER_PHONE_MAX_LENGTH = 30;
@@ -12,40 +11,35 @@ export const DriverIdParamSchema = z.object({
   id: uuid,
 });
 
-// No documented driver_number generation convention exists anywhere in the
-// approved requirements/implementation plan (only "unique driver number" as
-// a DB constraint, no format). Consistent with the Phase 5.1 customer_number
-// precedent, it is required explicit input rather than an invented format.
-const driverNumber = z
-  .string()
-  .trim()
-  .min(1, "Driver number is required")
-  .max(DRIVER_NUMBER_MAX_LENGTH, `Driver number must be at most ${DRIVER_NUMBER_MAX_LENGTH} characters`);
-
 // ============================================================
 // Create Driver — two modes (Phase 11.7 correction).
 //
-//   Existing-link mode  { driverNumber, userId }
+//   Existing-link mode  { userId }
 //     Links a driver profile to an EXISTING user whose DB role is already
 //     DRIVER (resolved server-side, never trusted from the client). Kept for
 //     backward compatibility.
 //
-//   New-login mode  { driverNumber, user: { email, password, firstName,
-//                     lastName, phone? } }
+//   New-login mode  { user: { email, password, firstName, lastName, phone? } }
 //     Atomically creates a brand-new DRIVER-role login + driver profile +
 //     zero-balance cash account. The role is FORCED to DRIVER server-side;
 //     the schema is strict so a caller-supplied roleId / roleCode /
 //     permissions / isAdmin is a 400, never silently honoured.
+//
+// driver_number is backend-generated in both modes (sequential DRV-######
+// convention, see migrations/2026-09-22__5152__customer_driver_sequential_
+// numbers.sql) — it is never accepted from the client. New-login mode is
+// `.strict()`, so a caller-supplied driverNumber there is a 400
+// VALIDATION_ERROR (unrecognized key); existing-link mode is intentionally
+// non-strict (matching the rest of this module's backward-compatible style),
+// so a caller-supplied driverNumber there is simply ignored.
 // ============================================================
 
 export const CreateDriverExistingUserSchema = z.object({
-  driverNumber,
   userId: uuid,
 });
 
 export const CreateDriverNewLoginSchema = z
   .object({
-    driverNumber,
     user: z
       .object({
         email: z.string().trim().toLowerCase().email().max(USER_EMAIL_MAX_LENGTH),
@@ -58,9 +52,9 @@ export const CreateDriverNewLoginSchema = z
   })
   .strict();
 
-// New-login is tried first so a `{ driverNumber, user: {...} }` body reports
-// the new-login field errors; a `{ driverNumber, userId }` body falls through
-// to the (non-strict, backward-compatible) existing-link schema.
+// New-login is tried first so a `{ user: {...} }` body reports the new-login
+// field errors; a `{ userId }` body falls through to the (non-strict,
+// backward-compatible) existing-link schema.
 export const CreateDriverSchema = z.union([CreateDriverNewLoginSchema, CreateDriverExistingUserSchema]);
 
 export type CreateDriverInput = z.infer<typeof CreateDriverSchema>;

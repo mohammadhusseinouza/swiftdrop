@@ -3,6 +3,7 @@ import { AppError } from "../../shared/errors/app-error";
 import {
   createPaymentMethod,
   getPaymentMethodById,
+  listActivePaymentMethodsForDriver,
   listPaymentMethods,
   updatePaymentMethod,
 } from "./payment-method.service";
@@ -11,7 +12,7 @@ import type {
   ListPaymentMethodsQuery,
   UpdatePaymentMethodInput,
 } from "./payment-method.schema";
-import type { PaymentMethodSummary } from "./payment-method.types";
+import type { DriverPaymentMethodSummary, PaymentMethodSummary } from "./payment-method.types";
 import type { ApiSuccessResponse } from "../../shared/types/api-response";
 
 function requireActorId(req: { actor?: { userId: string } }): string {
@@ -29,6 +30,20 @@ export const listPaymentMethodsController: RequestHandler<
     const query = req.query as unknown as ListPaymentMethodsQuery;
     const items = await listPaymentMethods(query);
     res.json({ success: true, data: items });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// GET /api/v1/driver/payment-methods — narrow Driver-safe list, authorized
+// by driver.orders.read_own (NEVER settings.read). Mirrors
+// listDriverFailedDeliveryReasonsController exactly.
+export const listDriverPaymentMethodsController: RequestHandler<
+  Record<string, never>,
+  ApiSuccessResponse<DriverPaymentMethodSummary[]>
+> = async (_req, res, next) => {
+  try {
+    res.json({ success: true, data: await listActivePaymentMethodsForDriver() });
   } catch (error) {
     next(error);
   }

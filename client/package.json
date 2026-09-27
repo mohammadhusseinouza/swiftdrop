@@ -1,8 +1,8 @@
 {
-  "name": "swiftdrop-client",
+  "name": "spring-cargo-client",
   "version": "0.1.0",
   "private": true,
-  "description": "SwiftDrop delivery management system frontend",
+  "description": "Spring Cargo delivery management system frontend",
   "type": "module",
   "engines": {
     "node": "^20.19.0 || ^22.12.0 || ^24.0.0"

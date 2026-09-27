@@ -17,7 +17,7 @@ use `prisma migrate` — see `server/migrations/README.md`):
   Order is now parcel-aware and writes both explicitly; columns stay NOT NULL).
 **Feature source of truth:**
 `/docs/delivery_management_system_parcel_intake_collection_feature_change_spec_v1.md`.
-**`/docs/swiftdrop_database`** is a stale point-in-time `pg_dump` (predates `auth_sessions`)
+**`/docs/spring_cargo_database`** is a stale point-in-time `pg_dump` (predates `auth_sessions`)
 and was **not** refreshed by Phase 11.17.2 — refreshing it is a separate team decision.
 
 Conventions follow the existing project: PostgreSQL `snake_case` table/column names,
@@ -615,7 +615,7 @@ company before delivery assignment.
 - Add `model parcel_collection_assignments`, `model parcel_collection_attempts`,
   `model failed_collection_reasons` mirroring the SQL above.
 - Add back-relations on `drivers`, `users`, `areas`, `orders`, `failed_collection_reasons`.
-- Regenerate the client. Keep `schema.prisma` and `/docs/swiftdrop_database` in sync when
+- Regenerate the client. Keep `schema.prisma` and `/docs/spring_cargo_database` in sync when
   the schema is re-dumped.
 
 ---

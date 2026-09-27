@@ -1,4 +1,4 @@
-import type { LedgerName } from '../../services/domain.types';
+import type { FinanceFeedLedger, LedgerName } from '../../services/domain.types';
 import { humanizeToken } from '../../lib/format';
 
 /**
@@ -12,6 +12,15 @@ export const LEDGER_LABEL: Record<LedgerName, string> = {
   WALLET: 'Customer wallet',
   DRIVER_CASH: 'Driver cash',
   COMPANY_FINANCE: 'Company finance',
+};
+
+/**
+ * Labels for the unified Finance feed, which also lists READ-ONLY direct
+ * company collections (never adjustable or reversible).
+ */
+export const FEED_LEDGER_LABEL: Record<FinanceFeedLedger, string> = {
+  ...LEDGER_LABEL,
+  DIRECT_COMPANY_COLLECTION: 'Direct company collection',
 };
 
 /** What a manual ADJUSTMENT to this ledger means, in plain terms. */
@@ -31,6 +40,8 @@ export function ledgerTypeLabel(type: string): string {
       return 'Payout';
     case 'COLLECTION':
       return 'Collection';
+    case 'DIRECT_COMPANY_COLLECTION':
+      return 'Direct collection';
     case 'SETTLEMENT':
       return 'Settlement';
     case 'DELIVERY_FEE_REVENUE':

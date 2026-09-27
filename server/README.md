@@ -1,6 +1,6 @@
-# SwiftDrop Server
+# Spring Cargo Server
 
-Backend for the SwiftDrop delivery management system (Node.js + Express +
+Backend for the Spring Cargo delivery management system (Node.js + Express +
 PostgreSQL + Prisma).
 
 ## Getting started
@@ -30,17 +30,17 @@ first Admin interactively with `npm run admin:create`.
 
 `npm run seed:visual` creates deterministic, idempotent accounts for reviewing
 the UI under every role. It **refuses to run when `NODE_ENV=production`** and
-only ever touches the fixed `*@swiftdrop.test` fixtures below. Re-running resets
+only ever touches the fixed `*@springcargo.test` fixtures below. Re-running resets
 these fixtures' password / names / active flag to the documented values.
 
 | Role       | Email                       | Status   |
 | ---------- | --------------------------- | -------- |
-| ADMIN      | `admin@swiftdrop.test`      | active   |
-| DISPATCHER | `dispatcher@swiftdrop.test` | active   |
-| FINANCE    | `finance@swiftdrop.test`    | active   |
-| DRIVER     | `driver@swiftdrop.test`     | active (linked Driver `DRV-VISUAL-001` + zero-balance cash account) |
-| CUSTOMER   | `customer@swiftdrop.test`   | active (linked Customer `CUS-VISUAL-001` + zero-balance wallet) |
-| —          | `inactive@swiftdrop.test`   | **inactive** (DISPATCHER role — for login-rejection testing) |
+| ADMIN      | `admin@springcargo.test`      | active   |
+| DISPATCHER | `dispatcher@springcargo.test` | active   |
+| FINANCE    | `finance@springcargo.test`    | active   |
+| DRIVER     | `driver@springcargo.test`     | active (linked Driver `DRV-VISUAL-001` + zero-balance cash account) |
+| CUSTOMER   | `customer@springcargo.test`   | active (linked Customer `CUS-VISUAL-001` + zero-balance wallet) |
+| —          | `inactive@springcargo.test`   | **inactive** (DISPATCHER role — for login-rejection testing) |
 
 **Password for all:** `VisualTest123!`
 

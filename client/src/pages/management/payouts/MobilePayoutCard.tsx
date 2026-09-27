@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 
 import { Badge } from '../../../components/ui/Badge';
+import { Button } from '../../../components/ui/Button';
 import { paths } from '../../../routes/paths';
 import { formatDateTime, formatMoney } from '../../../lib/format';
 import type { PayoutSummary } from '../../../services/domain.types';
@@ -9,14 +10,17 @@ import { payoutStatusLabel, payoutStatusTone } from './payoutPresentation';
 
 /**
  * Compact Customer Payout card for narrow screens — the finance table is
- * unusable at 375px. Informational only (there is no Payout Detail route).
+ * unusable at 375px. Informational (there is no Payout Detail route) plus the
+ * read-only receipt reprint.
  */
 export function MobilePayoutCard({
   payout,
   canViewCustomer,
+  onPrintReceipt,
 }: {
   payout: PayoutSummary;
   canViewCustomer: boolean;
+  onPrintReceipt: (payout: PayoutSummary) => void;
 }) {
   return (
     <div className="rounded-card border border-line bg-card p-3 shadow-card">
@@ -54,6 +58,17 @@ export function MobilePayoutCard({
           <p>{payout.paymentMethod.name}</p>
           <p>{formatDateTime(payout.createdAt)}</p>
         </div>
+      </div>
+
+      <div className="mt-3 flex justify-end">
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={() => onPrintReceipt(payout)}
+          aria-label={`Print invoice for payout ${payout.payoutNumber}`}
+        >
+          Print invoice
+        </Button>
       </div>
     </div>
   );

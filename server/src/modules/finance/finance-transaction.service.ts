@@ -14,7 +14,9 @@ import type {
 // GET /api/v1/finance/transactions (Phase 9.2)
 //
 // A unified, GLOBALLY paginated feed over the three authoritative append-
-// only ledgers (Customer Wallet, Driver Cash, Company Finance) — never a
+// only ledgers (Customer Wallet, Driver Cash, Company Finance) plus the
+// read-only Direct Company Collection records (bypass_driver_cash
+// deliveries — a collection, never revenue, never Driver Cash) — never a
 // per-ledger concatenation of separately-paginated pages, and never
 // CustomerPayout/DriverSettlement rows duplicated alongside their already-
 // linked ledger row (Wallet PAYOUT / Driver Cash SETTLEMENT carry a payout/
@@ -50,7 +52,7 @@ function createdAtRangeSql(start?: Date, endExclusive?: Date): Prisma.Sql {
 // Builds the normalized `(id, ledger, created_at)` derived table as a single
 // reusable Prisma.Sql fragment, embedded (never string-concatenated) into
 // both the count query and the paginated page query below. `ledger` prunes
-// whole branches (a fixed, whitelisted set of three, never a dynamic table
+// whole branches (a fixed, whitelisted set of four, never a dynamic table
 // name); `type` is applied identically inside every remaining branch via a
 // bound parameter compared against the enum column cast to text — safe
 // because Postgres enum columns compare correctly once both sides are text,
@@ -83,6 +85,19 @@ function buildUnifiedSource(input: { from?: string; to?: string; ledger?: Ledger
       SELECT id, 'COMPANY_FINANCE'::text AS ledger, created_at
       FROM company_financial_transactions
       WHERE ${dateClause} ${typeClause}
+    `);
+  }
+  // Direct company collections (bypass_driver_cash deliveries). The table
+  // has no type column — every row is DIRECT_COMPANY_COLLECTION — so a type
+  // filter either keeps the whole branch or prunes it.
+  if (
+    (!input.ledger || input.ledger === "DIRECT_COMPANY_COLLECTION") &&
+    (!input.type || input.type === "DIRECT_COMPANY_COLLECTION")
+  ) {
+    branches.push(Prisma.sql`
+      SELECT id, 'DIRECT_COMPANY_COLLECTION'::text AS ledger, created_at
+      FROM company_direct_collections
+      WHERE ${dateClause}
     `);
   }
   return Prisma.join(branches, " UNION ALL ");
@@ -123,6 +138,15 @@ const companyInclude = {
 
 type CompanyRow = Prisma.company_financial_transactionsGetPayload<{ include: typeof companyInclude }>;
 
+const directCollectionInclude = {
+  drivers: { select: { id: true, driver_number: true, users: { select: { first_name: true, last_name: true } } } },
+  orders: { select: { id: true, order_number: true } },
+  payment_methods: { select: { id: true, code: true, name: true } },
+  users: { select: { id: true, first_name: true, last_name: true } },
+} satisfies Prisma.company_direct_collectionsInclude;
+
+type DirectCollectionRow = Prisma.company_direct_collectionsGetPayload<{ include: typeof directCollectionInclude }>;
+
 function toActorRef(user: { id: string; first_name: string; last_name: string } | null | undefined): FinanceActorRef | null {
   return user ? { id: user.id, firstName: user.first_name, lastName: user.last_name } : null;
 }
@@ -161,6 +185,7 @@ function toWalletEntry(row: WalletRow): FinanceTransactionEntry {
     paymentMethod: row.payment_methods ? { id: row.payment_methods.id, code: row.payment_methods.code, name: row.payment_methods.name } : null,
     actor: toActorRef(row.users),
     reversalOf: row.wallet_transactions ? { id: row.wallet_transactions.id, type: row.wallet_transactions.type } : null,
+    collectionRoute: null,
     notes: row.notes,
     createdAt: row.created_at.toISOString(),
   };
@@ -199,6 +224,7 @@ function toDriverCashEntry(row: DriverCashRow): FinanceTransactionEntry {
       : null,
     actor: toActorRef(row.users),
     reversalOf: row.driver_cash_transactions ? { id: row.driver_cash_transactions.id, type: row.driver_cash_transactions.type } : null,
+    collectionRoute: row.type === "COLLECTION" ? "DRIVER_CASH" : null,
     notes: row.notes,
     createdAt: row.created_at.toISOString(),
   };
@@ -230,6 +256,40 @@ function toCompanyEntry(row: CompanyRow): FinanceTransactionEntry {
     paymentMethod: row.payment_methods ? { id: row.payment_methods.id, code: row.payment_methods.code, name: row.payment_methods.name } : null,
     actor: toActorRef(row.users),
     reversalOf: row.company_financial_transactions ? { id: row.company_financial_transactions.id, type: row.company_financial_transactions.type } : null,
+    collectionRoute: null,
+    notes: row.notes,
+    createdAt: row.created_at.toISOString(),
+  };
+}
+
+// Direct company collection: always a positive, append-only CREDIT of money
+// received directly by the company. It is a COLLECTION record, not revenue
+// (the delivery's revenue rows are separate COMPANY_FINANCE entries) and not
+// Driver Cash (no running balance -> balanceBefore/After null).
+function toDirectCollectionEntry(row: DirectCollectionRow): FinanceTransactionEntry {
+  if (!row.amount.greaterThan(0)) {
+    throw integrityError("DIRECT_COMPANY_COLLECTION", row.id, "non-positive amount");
+  }
+  return {
+    id: row.id,
+    ledger: "DIRECT_COMPANY_COLLECTION",
+    type: "DIRECT_COMPANY_COLLECTION",
+    direction: "CREDIT",
+    amount: row.amount.toString(),
+    signedAmount: row.amount.toString(),
+    balanceBefore: null,
+    balanceAfter: null,
+    order: { id: row.orders.id, orderNumber: row.orders.order_number },
+    customer: null,
+    driver: row.drivers
+      ? { id: row.drivers.id, driverNumber: row.drivers.driver_number, name: `${row.drivers.users.first_name} ${row.drivers.users.last_name}` }
+      : null,
+    payout: null,
+    settlement: null,
+    paymentMethod: { id: row.payment_methods.id, code: row.payment_methods.code, name: row.payment_methods.name },
+    actor: toActorRef(row.users),
+    reversalOf: null,
+    collectionRoute: "DIRECT_COMPANY",
     notes: row.notes,
     createdAt: row.created_at.toISOString(),
   };
@@ -239,8 +299,9 @@ async function hydrateTransactionRows(db: Prisma.TransactionClient, rows: Unifie
   const walletIds = rows.filter((r) => r.ledger === "WALLET").map((r) => r.id);
   const driverCashIds = rows.filter((r) => r.ledger === "DRIVER_CASH").map((r) => r.id);
   const companyIds = rows.filter((r) => r.ledger === "COMPANY_FINANCE").map((r) => r.id);
+  const directIds = rows.filter((r) => r.ledger === "DIRECT_COMPANY_COLLECTION").map((r) => r.id);
 
-  const [walletRows, driverCashRows, companyRows] = await Promise.all([
+  const [walletRows, driverCashRows, companyRows, directRows] = await Promise.all([
     walletIds.length ? db.wallet_transactions.findMany({ where: { id: { in: walletIds } }, include: walletInclude }) : Promise.resolve([]),
     driverCashIds.length
       ? db.driver_cash_transactions.findMany({ where: { id: { in: driverCashIds } }, include: driverCashInclude })
@@ -248,11 +309,15 @@ async function hydrateTransactionRows(db: Prisma.TransactionClient, rows: Unifie
     companyIds.length
       ? db.company_financial_transactions.findMany({ where: { id: { in: companyIds } }, include: companyInclude })
       : Promise.resolve([]),
+    directIds.length
+      ? db.company_direct_collections.findMany({ where: { id: { in: directIds } }, include: directCollectionInclude })
+      : Promise.resolve([]),
   ]);
 
   const walletById = new Map(walletRows.map((r) => [r.id, r]));
   const driverCashById = new Map(driverCashRows.map((r) => [r.id, r]));
   const companyById = new Map(companyRows.map((r) => [r.id, r]));
+  const directById = new Map(directRows.map((r) => [r.id, r]));
 
   // Re-zip into the Phase-1 global order — the ONLY correct order (never
   // re-sorted by anything else here).
@@ -266,6 +331,11 @@ async function hydrateTransactionRows(db: Prisma.TransactionClient, rows: Unifie
       const full = driverCashById.get(row.id);
       if (!full) throw integrityError(row.ledger, row.id, "missing on hydration");
       return toDriverCashEntry(full);
+    }
+    if (row.ledger === "DIRECT_COMPANY_COLLECTION") {
+      const full = directById.get(row.id);
+      if (!full) throw integrityError(row.ledger, row.id, "missing on hydration");
+      return toDirectCollectionEntry(full);
     }
     const full = companyById.get(row.id);
     if (!full) throw integrityError(row.ledger, row.id, "missing on hydration");

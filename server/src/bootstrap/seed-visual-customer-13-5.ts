@@ -9,14 +9,14 @@ import { prisma } from "../db/prisma";
  * (Phase 13.5). Run AFTER seed:visual (+ 13-1..13-3):
  *   npm run seed:visual:customer-13-5
  *
- * customer@swiftdrop.test already has an ORDER_CREDIT row (a real Phase 8.3
+ * customer@springcargo.test already has an ORDER_CREDIT row (a real Phase 8.3
  * delivery credit). This adds the other three ledger shapes via approved
  * Finance workflows:
  *   - ADJUSTMENT (credit +50)
  *   - REVERSAL   (of that adjustment, -50)
  *   - PAYOUT     (-40, POST /api/v1/payouts)
  *
- * SAFETY: refuses NODE_ENV=production; only touches *@swiftdrop.test fixtures
+ * SAFETY: refuses NODE_ENV=production; only touches *@springcargo.test fixtures
  * + rows tagged "PH135-VIS"; idempotent (tag-detected); NO schema change /
  * migration / manual ledger-row fabrication.
  */
@@ -42,8 +42,8 @@ async function main(): Promise<void> {
   }
   const app = createApp();
 
-  const customerUser = await prisma.users.findUnique({ where: { email: "customer@swiftdrop.test" }, select: { id: true } });
-  if (!customerUser) throw new Error('[seed:visual:customer-13-5] customer@swiftdrop.test not found — run "npm run seed:visual" first.');
+  const customerUser = await prisma.users.findUnique({ where: { email: "customer@springcargo.test" }, select: { id: true } });
+  if (!customerUser) throw new Error('[seed:visual:customer-13-5] customer@springcargo.test not found — run "npm run seed:visual" first.');
   const customer = await prisma.customers.findUniqueOrThrow({ where: { portal_user_id: customerUser.id } });
 
   const tagged = await prisma.wallet_transactions.findFirst({
@@ -53,7 +53,7 @@ async function main(): Promise<void> {
   if (tagged) {
     console.log("[seed:visual:customer-13-5] PH135-VIS ledger rows already present — skipping.");
   } else {
-    const adminToken = await login(app, "admin@swiftdrop.test");
+    const adminToken = await login(app, "admin@springcargo.test");
     const cashMethod = await prisma.payment_methods.findFirstOrThrow({ where: { code: "CASH" } });
 
     const post = (url: string, body: Record<string, unknown>, extraHeaders: Record<string, string> = {}) =>
@@ -93,7 +93,7 @@ async function main(): Promise<void> {
     console.log("[seed:visual:customer-13-5] PH135-VIS ledger rows created.");
   }
 
-  const customerToken = await login(app, "customer@swiftdrop.test");
+  const customerToken = await login(app, "customer@springcargo.test");
   const txs = await request(app)
     .get("/api/v1/customer/me/wallet/transactions?limit=50")
     .set(bearer(customerToken));

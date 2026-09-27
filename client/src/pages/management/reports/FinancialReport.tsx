@@ -27,6 +27,8 @@ const CATEGORY_LABEL: Record<string, string> = {
   DELIVERY_FEE_REVENUE: 'Delivery fee revenue',
   COMPANY_ORDER_REVENUE: 'Company order revenue',
   TOTAL_COLLECTED: 'Total collected',
+  DRIVER_COLLECTED: 'Collected by drivers',
+  DIRECT_COMPANY_COLLECTED: 'Received directly by company',
   CUSTOMER_PAYOUTS: 'Customer payouts',
   DRIVER_SETTLEMENTS: 'Driver settlements',
 };
@@ -118,6 +120,16 @@ export function FinancialReport() {
                 label="Total collected"
                 value={formatMoney(data.summary.totalCollected)}
                 hint="Collected on delivery, net of reversals"
+              />
+              <MetricTile
+                label="Collected by drivers"
+                value={formatMoney(data.summary.driverCollected)}
+                hint="Entered driver cash — settled via driver settlements"
+              />
+              <MetricTile
+                label="Received directly by company"
+                value={formatMoney(data.summary.directCompanyCollected)}
+                hint="Bypass-driver-cash payment methods — never driver cash"
               />
               <MetricTile
                 label="Customer payouts"
@@ -223,6 +235,7 @@ const PERIOD_COLS: DataTableColumn<FinanceReportPeriodRow>[] = [
   { id: 'company', header: 'Company order rev.', align: 'right', hideBelow: 'lg', cell: (r) => money(r.companyOrderRevenue) },
   { id: 'net', header: 'Company net', align: 'right', hideBelow: 'xl', cell: (r) => money(r.companyRevenue) },
   { id: 'collected', header: 'Collected', align: 'right', cell: (r) => money(r.totalCollected) },
+  { id: 'direct', header: 'Direct to company', align: 'right', hideBelow: 'xl', cell: (r) => money(r.directCompanyCollected) },
   { id: 'payouts', header: 'Payouts', align: 'right', hideBelow: 'lg', cell: (r) => money(r.customerPayouts) },
   { id: 'settlements', header: 'Settlements', align: 'right', hideBelow: 'md', cell: (r) => money(r.settlementAmount) },
 ];

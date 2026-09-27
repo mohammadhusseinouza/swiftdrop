@@ -7,6 +7,7 @@ import {
   useDeliverDriverOrderMutation,
   useFailDriverOrderMutation,
   useGetDriverJobDetailQuery,
+  useGetDriverPaymentMethodsQuery,
   useMarkParcelCollectedMutation,
   usePickupDriverOrderMutation,
   useReportParcelCollectionFailedMutation,
@@ -89,6 +90,13 @@ export default function DriverJobDetailPage() {
     { skip: !jobType || !orderId },
   );
   const job = query.data;
+
+  // Only a DELIVERY job's Complete Delivery dialog needs this — reuses the
+  // exact same active payment methods already used by Create Order (a
+  // narrow Driver-safe endpoint, since DRIVER lacks settings.read).
+  const paymentMethods = useGetDriverPaymentMethodsQuery(undefined, {
+    skip: job?.jobType !== 'DELIVERY',
+  });
 
   const [dialog, setDialog] = useState<DialogKind>(null);
   const [dialogError, setDialogError] = useState<string | null>(null);
@@ -199,10 +207,14 @@ export default function DriverJobDetailPage() {
     }
   };
 
-  const handleDeliver = async (actualAmountCollected: string, collectionDifferenceReason: string | undefined) => {
+  const handleDeliver = async (
+    actualAmountCollected: string,
+    collectionDifferenceReason: string | undefined,
+    paymentMethodId: string | undefined,
+  ) => {
     if (!orderId) return;
     try {
-      await deliver({ id: orderId, body: { actualAmountCollected, collectionDifferenceReason } }).unwrap();
+      await deliver({ id: orderId, body: { actualAmountCollected, collectionDifferenceReason, paymentMethodId } }).unwrap();
       navigate(paths.driver.jobs, { state: { notice: 'Delivery completed.' } });
     } catch (e) {
       const { message, stale } = describeDriverActionError(e as UnknownApiError);
@@ -359,10 +371,12 @@ export default function DriverJobDetailPage() {
           <DriverDeliverDialog
             open={dialog === 'deliver'}
             amountToCollect={job.collection.amountToCollect}
-            paymentMethodName={job.collection.paymentMethod?.name ?? null}
+            currentPaymentMethodId={job.collection.paymentMethod?.id ?? null}
+            currentPaymentMethodName={job.collection.paymentMethod?.name ?? null}
+            paymentMethodOptions={paymentMethods.data ?? []}
             loading={deliverState.isLoading}
             error={dialogError}
-            onConfirm={(actual, reason) => void handleDeliver(actual, reason)}
+            onConfirm={(actual, reason, paymentMethodId) => void handleDeliver(actual, reason, paymentMethodId)}
             onCancel={closeDialog}
           />
         </>

@@ -70,7 +70,6 @@ export function CreateOrderReview({ values, labels, preview }: CreateOrderReview
         <Group title="Package">
           <Row label="Description" value={values.description} />
           <Row label="Packages" value={values.packageCount} />
-          {values.quantity.trim() !== '' && <Row label="Quantity" value={values.quantity} />}
           {values.weightKg.trim() !== '' && <Row label="Weight (kg)" value={values.weightKg} />}
         </Group>
 

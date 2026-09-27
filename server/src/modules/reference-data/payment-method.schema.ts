@@ -20,6 +20,9 @@ export const CreatePaymentMethodSchema = z.object({
   code: z.string().trim().min(1, "Code is required").max(CODE_MAX_LENGTH),
   name: z.string().trim().min(1, "Name is required").max(NAME_MAX_LENGTH),
   sortOrder: z.coerce.number().int().min(0).optional(),
+  // Direct Payment Settlement — omitted -> false (DB default), i.e. money
+  // collected with this method enters Driver Cash exactly as before.
+  bypassDriverCash: z.boolean().optional(),
 });
 
 export type CreatePaymentMethodInput = z.infer<typeof CreatePaymentMethodSchema>;
@@ -30,6 +33,9 @@ export const UpdatePaymentMethodSchema = z
     name: z.string().trim().min(1).max(NAME_MAX_LENGTH).optional(),
     sortOrder: z.coerce.number().int().min(0).optional(),
     isActive: z.boolean().optional(),
+    // Affects only FUTURE deliveries — the routing decision is persisted with
+    // each completed delivery (company_direct_collections vs Driver Cash).
+    bypassDriverCash: z.boolean().optional(),
   })
   .refine((data) => Object.keys(data).length > 0, { message: "At least one field must be provided" });
 

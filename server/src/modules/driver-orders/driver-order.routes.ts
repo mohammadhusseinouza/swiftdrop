@@ -18,6 +18,7 @@ import {
   startDeliveryDriverOrderController,
 } from "./driver-order.controller";
 import { listDriverFailedDeliveryReasonsController } from "../reference-data/failed-delivery-reason.controller";
+import { listDriverPaymentMethodsController } from "../reference-data/payment-method.controller";
 
 // Mounted at /api/v1/driver/me (see src/routes/index.ts) — a deliberately
 // separate namespace from the Management /api/v1/orders routes, per
@@ -110,4 +111,18 @@ driverOrderActionRouter.get(
   requirePortal("driver"),
   authorize("driver.orders.read_own"),
   listDriverFailedDeliveryReasonsController
+);
+
+// GET /api/v1/driver/payment-methods — a narrow Driver-safe active Payment
+// Methods list, authorized by driver.orders.read_own (NEVER settings.read).
+// Mirrors the /failed-delivery-reasons route above exactly. Backs the
+// delivery-confirmation Payment Method selector — the driver may correct
+// the order's existing collectionPaymentMethodId at delivery time using
+// only the payment methods already supported by Create Order.
+driverOrderActionRouter.get(
+  "/payment-methods",
+  authenticate,
+  requirePortal("driver"),
+  authorize("driver.orders.read_own"),
+  listDriverPaymentMethodsController
 );

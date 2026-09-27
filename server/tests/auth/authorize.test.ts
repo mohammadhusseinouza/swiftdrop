@@ -154,7 +154,7 @@ describe("authorize(permission) — dynamic DB permission behavior (isolated fix
 
     const user = await prisma.users.create({
       data: {
-        email: `dyn-perm-${suffix}@phase4-5-test.swiftdrop.local`,
+        email: `dyn-perm-${suffix}@phase4-5-test.springcargo.local`,
         password_hash: await hashPassword("Phase45-Test-Pw!"),
         first_name: "Phase45",
         last_name: "DynamicPermission",

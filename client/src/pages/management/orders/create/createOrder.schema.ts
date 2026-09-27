@@ -18,8 +18,14 @@ import { parseMoneyToCents } from './createOrderFinancialPreview';
  * `Number()` / `parseFloat`).
  */
 
-const ORDER_TYPES = ['COMPANY_ORDER', 'DELIVERY_ONLY'] as const;
-const PAYMENT_TYPES = ['CASH_ON_DELIVERY', 'ALREADY_PAID', 'PARTIALLY_PAID'] as const;
+// Company Order is hidden from the Create Order UI (existing Company Orders
+// elsewhere in the system are unaffected) — this page can only ever submit
+// DELIVERY_ONLY, so the schema is scoped to match.
+const ORDER_TYPES = ['DELIVERY_ONLY'] as const;
+// Partially Paid is hidden from the Create Order UI (existing Partially Paid
+// orders elsewhere in the system are unaffected) — this page can only ever
+// submit Cash on Delivery or Already Paid, so the schema is scoped to match.
+const PAYMENT_TYPES = ['CASH_ON_DELIVERY', 'ALREADY_PAID'] as const;
 const PARCEL_INTAKE_METHODS = ['ALREADY_AT_COMPANY', 'DRIVER_COLLECTION'] as const;
 
 // Presentation guard — same shape the backend's Decimal parser accepts
@@ -67,10 +73,6 @@ export const createOrderSchema = z
       .string()
       .trim()
       .refine((v) => v === '' || (INT_RE.test(v) && v !== '0'), 'Enter a whole number of 1 or more'),
-    quantity: z
-      .string()
-      .trim()
-      .refine((v) => v === '' || INT_RE.test(v), 'Enter a whole number (0 or more)'),
     weightKg: z
       .string()
       .trim()
@@ -193,28 +195,13 @@ export const createOrderSchema = z
             'Cash on Delivery requires no prepaid amounts — clear the prepaid fields or choose another payment type',
         });
       }
-    } else if (v.paymentType === 'ALREADY_PAID') {
+    } else {
+      // ALREADY_PAID — Partially Paid is hidden from this form (see PAYMENT_TYPES above).
       if (remainingOrder !== 0n) {
         ctx.addIssue({
           code: 'custom',
           path: ['prepaidOrderAmount'],
           message: 'Already Paid requires the full order amount to be prepaid',
-        });
-      }
-    } else {
-      // PARTIALLY_PAID
-      if (prepaidTotal === 0n) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['paymentType'],
-          message:
-            'Partially Paid needs at least one prepaid amount above zero — use Cash on Delivery otherwise',
-        });
-      } else if (remainingOrder === 0n && remainingFee === 0n) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['paymentType'],
-          message: 'Partially Paid needs a remaining balance — use Already Paid if everything is prepaid',
         });
       }
     }
@@ -266,7 +253,6 @@ export const CREATE_ORDER_DEFAULTS: CreateOrderFormValues = {
   receiverInstructions: '',
   description: '',
   packageCount: '1',
-  quantity: '',
   weightKg: '',
   packageNotes: '',
   orderAmount: '',
@@ -322,7 +308,6 @@ export function toCreateOrderRequest(values: CreateOrderFormValues): CreateOrder
 
     description: values.description.trim(),
     packageCount: values.packageCount.trim() === '' ? undefined : toWholeNumber(values.packageCount),
-    quantity: values.quantity.trim() === '' ? undefined : toWholeNumber(values.quantity),
     weightKg: trimmedOrUndefined(values.weightKg),
     packageNotes: trimmedOrUndefined(values.packageNotes),
 

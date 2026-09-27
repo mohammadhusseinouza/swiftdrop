@@ -1,7 +1,10 @@
-import { type ReactNode, useId } from 'react';
+import { type ReactNode, useId, useState } from 'react';
+import { Printer } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
 
 import { Card } from '../../../components/ui/Card';
+import { Button } from '../../../components/ui/Button';
+import { DateRangeFilter } from '../../../components/filters/DateRangeFilter';
 import { Badge } from '../../../components/ui/Badge';
 import {
   DataTable,
@@ -21,7 +24,11 @@ import {
   humanizeToken,
 } from '../../../lib/format';
 import { getApiErrorMessage, type UnknownApiError } from '../../../services/apiError';
-import { useGetOrdersQuery } from '../../../services/ordersApi';
+import {
+  useGetOrdersQuery,
+  useLazyGetOrdersQuery,
+} from '../../../services/ordersApi';
+import { printCustomerOrdersInvoice } from '../../../lib/customerOrdersInvoicePrint';
 import {
   useGetWalletQuery,
   useGetWalletTransactionsQuery,
@@ -329,7 +336,147 @@ const customerOrderColumns: DataTableColumn<OrderSummary>[] = [
   },
 ];
 
-export function OrdersTab({ customerId }: { customerId: string }) {
+/* ------------------------- Customer Orders Invoice ------------------- */
+
+const INVOICE_PAGE_SIZE = 100; // GET /orders maximum page size
+
+function toYmd(d: Date): string {
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
+/**
+ * Local calendar day -> exact instant. The invoice lists each order's LOCAL
+ * created date, so the interval uses local-day boundaries (both inclusive:
+ * from 00:00:00.000 to 23:59:59.999) — sent as full ISO instants, which the
+ * backend applies as `gte` / `lte`.
+ */
+function localDayBoundary(ymd: string, end: boolean): string {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const date = end
+    ? new Date(y, m - 1, d, 23, 59, 59, 999)
+    : new Date(y, m - 1, d, 0, 0, 0, 0);
+  return date.toISOString();
+}
+
+/**
+ * Orders tab toolbar: From / To + "Print A5 Invoice". Read-only — it fetches
+ * EVERY page of `GET /orders` for this customer and interval (not just the
+ * table's visible page) and opens the A5 landscape print preview in place.
+ */
+function CustomerOrdersInvoiceControls({ customer }: { customer: CustomerDetail }) {
+  const today = new Date();
+  const [range, setRange] = useState(() => ({
+    from: toYmd(new Date(today.getFullYear(), today.getMonth(), 1)),
+    to: toYmd(today),
+  }));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [fetchOrders] = useLazyGetOrdersQuery();
+
+  const rangeError =
+    !range.from || !range.to
+      ? 'Select both a start and an end date.'
+      : range.from > range.to
+        ? 'The start date must be on or before the end date.'
+        : null;
+
+  const handlePrint = async () => {
+    if (rangeError || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const base = {
+        customerId: customer.id,
+        createdFrom: localDayBoundary(range.from, false),
+        createdTo: localDayBoundary(range.to, true),
+        sortBy: 'createdAt' as const,
+        sortOrder: 'asc' as const,
+        limit: INVOICE_PAGE_SIZE,
+      };
+      const orders: OrderSummary[] = [];
+      let page = 1;
+      let total = 0;
+      for (;;) {
+        const res = await fetchOrders({ ...base, page }).unwrap();
+        if (page === 1) total = res.meta.total;
+        else if (res.meta.total !== total) {
+          throw new Error(
+            'Orders changed while the invoice was being prepared. Please try again.',
+          );
+        }
+        orders.push(...res.items);
+        if (page >= res.meta.totalPages || res.items.length === 0) break;
+        page += 1;
+      }
+      if (orders.length !== total) {
+        throw new Error(
+          'Not every matching order could be loaded. Please try again.',
+        );
+      }
+      printCustomerOrdersInvoice({
+        customer: {
+          name: customer.name,
+          customerNumber: customer.customerNumber,
+          primaryPhone: customer.primaryPhone,
+        },
+        from: range.from,
+        to: range.to,
+        orders,
+      });
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : getApiErrorMessage(e as UnknownApiError),
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <DateRangeFilter
+          value={range}
+          onChange={(next) => {
+            setError(null);
+            setRange(next);
+          }}
+          disabled={busy}
+          fromLabel="From date"
+          toLabel="To date"
+        />
+        <Button
+          icon={<Printer />}
+          loading={busy}
+          disabled={busy || rangeError !== null}
+          onClick={() => void handlePrint()}
+        >
+          Print A5 Invoice
+        </Button>
+      </div>
+      {(error || (rangeError && range.from && range.to)) && (
+        <p role="alert" className="mt-2 text-sm text-danger-700">
+          {error ?? rangeError}
+        </p>
+      )}
+    </Card>
+  );
+}
+
+export function OrdersTab({ customer }: { customer: CustomerDetail }) {
+  return (
+    <div className="space-y-4">
+      <CustomerOrdersInvoiceControls customer={customer} />
+      <CustomerOrdersTable customerId={customer.id} />
+    </div>
+  );
+}
+
+function CustomerOrdersTable({ customerId }: { customerId: string }) {
   const [page, setPage] = usePageParam('ordersPage');
   const query = useGetOrdersQuery({ customerId, page, limit: PAGE_SIZE });
   const rows = query.data?.items ?? [];

@@ -1,6 +1,6 @@
-# SwiftDrop Client
+# Spring Cargo Client
 
-Frontend for the SwiftDrop delivery management system.
+Frontend for the Spring Cargo delivery management system.
 
 **Stack:** React + TypeScript + Vite + Tailwind CSS.
 

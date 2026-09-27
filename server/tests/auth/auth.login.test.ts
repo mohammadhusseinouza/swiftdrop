@@ -79,7 +79,7 @@ describe("POST /api/v1/auth/login", () => {
   test("unknown email returns generic 401 INVALID_CREDENTIALS", async () => {
     const res = await request(app)
       .post("/api/v1/auth/login")
-      .send({ email: "no-such-user@phase4-5-test.swiftdrop.local", password: "whatever12345" });
+      .send({ email: "no-such-user@phase4-5-test.springcargo.local", password: "whatever12345" });
 
     assert.equal(res.status, 401);
     assert.equal(res.body.error.code, "INVALID_CREDENTIALS");
@@ -91,7 +91,7 @@ describe("POST /api/v1/auth/login", () => {
       .send({ email: activeUser.email, password: "totally-wrong-password" });
     const unknownEmailRes = await request(app)
       .post("/api/v1/auth/login")
-      .send({ email: "no-such-user@phase4-5-test.swiftdrop.local", password: "whatever12345" });
+      .send({ email: "no-such-user@phase4-5-test.springcargo.local", password: "whatever12345" });
 
     assert.equal(wrongPasswordRes.status, 401);
     assert.deepEqual(wrongPasswordRes.body, unknownEmailRes.body);

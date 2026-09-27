@@ -27,6 +27,10 @@ export interface PayoutSummary {
   payoutNumber: string;
   customer: PayoutCustomerSummary;
   amount: string;
+  // Persisted on the linked PAYOUT wallet transaction. Null only if that
+  // ledger row is missing (a data-integrity anomaly) — never recalculated.
+  balanceBefore: string | null;
+  balanceAfter: string | null;
   paymentMethod: PayoutPaymentMethodSummary;
   processedBy: PayoutProcessedBySummary;
   status: string;

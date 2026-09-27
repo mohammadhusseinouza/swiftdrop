@@ -8,7 +8,11 @@
 // is finance.read-gated at the route level.
 // ============================================================
 
-export const LEDGER_VALUES = ["WALLET", "DRIVER_CASH", "COMPANY_FINANCE"] as const;
+// DIRECT_COMPANY_COLLECTION is a READ-ONLY feed source (company_direct_
+// collections — money collected at delivery with a bypass_driver_cash payment
+// method). It is not a correctable ledger: no adjust/reverse endpoint accepts
+// it, and it is neither Driver Cash nor company revenue.
+export const LEDGER_VALUES = ["WALLET", "DRIVER_CASH", "COMPANY_FINANCE", "DIRECT_COMPANY_COLLECTION"] as const;
 export type LedgerName = (typeof LEDGER_VALUES)[number];
 
 export type FinanceTransactionDirection = "CREDIT" | "DEBIT";
@@ -28,7 +32,13 @@ export interface FinanceSummaryDto {
   companyRevenue: string;
   deliveryFeeRevenue: string;
   companyOrderRevenue: string;
+  // All money collected at delivery = driverCollected + directCompanyCollected.
   totalCollected: string;
+  // Collected and held by Drivers (Driver Cash COLLECTION, net of reversals).
+  driverCollected: string;
+  // Collected with a bypass_driver_cash payment method — received directly by
+  // the company, never part of Driver Cash or settlement obligations.
+  directCompanyCollected: string;
   customerWalletLiability: string;
   customerPayouts: string;
   driverCashOutstanding: string;
@@ -79,6 +89,8 @@ export interface FinanceReversalRef {
   type: string;
 }
 
+export type FinanceCollectionRoute = "DRIVER_CASH" | "DIRECT_COMPANY";
+
 export interface FinanceTransactionEntry {
   id: string;
   ledger: LedgerName;
@@ -96,6 +108,10 @@ export interface FinanceTransactionEntry {
   paymentMethod: FinancePaymentMethodRef | null;
   actor: FinanceActorRef | null;
   reversalOf: FinanceReversalRef | null;
+  // Where money collected at delivery went: DRIVER_CASH (a Driver Cash
+  // COLLECTION row — held by the driver) or DIRECT_COMPANY (a direct company
+  // collection). null for every non-collection row.
+  collectionRoute: FinanceCollectionRoute | null;
   notes: string | null;
   createdAt: string;
 }

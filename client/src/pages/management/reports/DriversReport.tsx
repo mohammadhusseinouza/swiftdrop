@@ -98,7 +98,9 @@ export function DriversReport() {
           <span className="tabular-nums">{r.successRate}%</span>
         ),
     },
-    { id: 'collected', header: 'Collected', align: 'right', hideBelow: 'lg', cell: (r) => formatMoney(r.moneyCollected) },
+    { id: 'collected', header: 'Total collected', align: 'right', hideBelow: 'lg', cell: (r) => formatMoney(r.totalCollected) },
+    { id: 'cashCollected', header: 'Driver cash', align: 'right', hideBelow: 'xl', cell: (r) => formatMoney(r.driverCashCollected) },
+    { id: 'directCollected', header: 'Direct to company', align: 'right', hideBelow: 'xl', cell: (r) => formatMoney(r.directCompanyCollected) },
     {
       id: 'settlements',
       header: 'Settled',

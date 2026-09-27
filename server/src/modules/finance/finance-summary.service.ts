@@ -99,12 +99,13 @@ export async function getNetCompanyCategoryFlow(
   return toDecimalString(rows[0]?.total);
 }
 
-// Physical Driver Cash collection history. SETTLEMENT (custody change, not
-// new collection) and ADJUSTMENT are never included; only a REVERSAL that
-// specifically reverses a COLLECTION subtracts from the total.
+// Physical Driver Cash collection history — money collected at delivery
+// that the Driver HELD. SETTLEMENT (custody change, not new collection) and
+// ADJUSTMENT are never included; only a REVERSAL that specifically reverses a
+// COLLECTION subtracts from the total.
 // Exported (Phase 9.3) — reused verbatim for the Finance Report's
-// totalCollected and (scoped by driverId) the Driver Report's moneyCollected.
-export async function getNetCollectedFlow(range: ResolvedRange): Promise<string> {
+// driverCollected and (scoped by driverId) the Driver Report's moneyCollected.
+export async function getNetDriverCollectedFlow(range: ResolvedRange): Promise<string> {
   const rows = await prisma.$queryRaw<NetSumRow[]>`
     SELECT (
       COALESCE(SUM(CASE WHEN type = 'COLLECTION' THEN amount ELSE 0 END), 0)
@@ -123,6 +124,43 @@ export async function getNetCollectedFlow(range: ResolvedRange): Promise<string>
     WHERE ${createdAtRangeSql(range)}
   `;
   return toDecimalString(rows[0]?.total);
+}
+
+// Direct Payment Settlement — money collected at delivery with a
+// bypass_driver_cash payment method, received DIRECTLY by the company (never
+// Driver Cash). company_direct_collections is append-only with strictly
+// positive amounts and no reversal type, so a plain SUM is the net flow.
+// Deliberately separate from company revenue (which is posted to
+// company_financial_transactions for the same delivery) — adding the two
+// would double-count.
+export async function getDirectCompanyCollectedFlow(range: ResolvedRange): Promise<string> {
+  const rows = await prisma.$queryRaw<NetSumRow[]>`
+    SELECT COALESCE(SUM(amount), 0)::text AS total
+    FROM company_direct_collections
+    WHERE ${createdAtRangeSql(range)}
+  `;
+  return toDecimalString(rows[0]?.total);
+}
+
+// All money collected at delivery = driver-held + received directly by the
+// company. Each delivery is ledgered on exactly one route (never both), so
+// the sum never double-counts.
+export interface CollectedFlowBreakdown {
+  totalCollected: string;
+  driverCollected: string;
+  directCompanyCollected: string;
+}
+
+export async function getCollectedFlowBreakdown(range: ResolvedRange): Promise<CollectedFlowBreakdown> {
+  const [driverCollected, directCompanyCollected] = await Promise.all([
+    getNetDriverCollectedFlow(range),
+    getDirectCompanyCollectedFlow(range),
+  ]);
+  return {
+    totalCollected: new Prisma.Decimal(driverCollected).plus(directCompanyCollected).toString(),
+    driverCollected,
+    directCompanyCollected,
+  };
 }
 
 // Payout cash-flow derived from the Wallet ledger event history (never the
@@ -201,7 +239,7 @@ export async function getFinanceSummary(query: FinanceDateRangeQuery): Promise<F
     companyRevenue,
     deliveryFeeRevenue,
     companyOrderRevenue,
-    totalCollected,
+    collected,
     customerPayouts,
     customerWalletLiability,
     driverCashOutstanding,
@@ -209,7 +247,7 @@ export async function getFinanceSummary(query: FinanceDateRangeQuery): Promise<F
     getCompanyRevenueFlow(range),
     getNetCompanyCategoryFlow("DELIVERY_FEE_REVENUE", range),
     getNetCompanyCategoryFlow("COMPANY_ORDER_PRODUCT_REVENUE", range),
-    getNetCollectedFlow(range),
+    getCollectedFlowBreakdown(range),
     getNetPayoutFlow(range),
     getWalletLiabilitySnapshot(range.endExclusive),
     getDriverCashOutstandingSnapshot(range.endExclusive),
@@ -220,7 +258,9 @@ export async function getFinanceSummary(query: FinanceDateRangeQuery): Promise<F
     companyRevenue,
     deliveryFeeRevenue,
     companyOrderRevenue,
-    totalCollected,
+    totalCollected: collected.totalCollected,
+    driverCollected: collected.driverCollected,
+    directCompanyCollected: collected.directCompanyCollected,
     customerWalletLiability,
     customerPayouts,
     driverCashOutstanding,

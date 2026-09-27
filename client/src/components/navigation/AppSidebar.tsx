@@ -56,7 +56,7 @@ export interface AppSidebarProps {
 }
 
 export function AppSidebar({
-  brand = 'SwiftDrop',
+  brand = 'Spring Cargo',
   brandIcon,
   navLabel = 'Primary',
   sections,

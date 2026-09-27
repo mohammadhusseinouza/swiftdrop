@@ -231,7 +231,7 @@ export interface OrderFinancialAllocation {
 /** One normalized order-scoped ledger event (Phase 11.5 correction). */
 export interface OrderFinancialEvent {
   id: string;
-  ledger: 'DRIVER_CASH' | 'WALLET' | 'COMPANY_FINANCE';
+  ledger: 'DRIVER_CASH' | 'DIRECT_COMPANY_COLLECTION' | 'WALLET' | 'COMPANY_FINANCE';
   /** COLLECTION | ORDER_CREDIT | DELIVERY_FEE_REVENUE | COMPANY_ORDER_PRODUCT_REVENUE | ADJUSTMENT | REVERSAL */
   type: string;
   direction: 'CREDIT' | 'DEBIT';
@@ -497,6 +497,18 @@ export interface DriverFailedDeliveryReasonSummary {
   name: string;
   requiresNotes: boolean;
   sortOrder: number;
+}
+
+/**
+ * Mirrors server/src/modules/reference-data/payment-method.types.ts's
+ * DriverPaymentMethodSummary exactly — active payment methods only, no
+ * Management metadata. Backs the Driver Portal's delivery-confirmation
+ * Payment Method selector.
+ */
+export interface DriverPaymentMethodSummary {
+  id: string;
+  code: string;
+  name: string;
 }
 
 export interface DriverCashTransactionEntry {
@@ -812,6 +824,9 @@ export interface PayoutSummary {
     primaryPhone: string;
   };
   amount: string;
+  /** Wallet balance before/after, persisted on the payout's wallet ledger row. */
+  balanceBefore: string | null;
+  balanceAfter: string | null;
   paymentMethod: PaymentMethodRef;
   processedBy: { id: string; firstName: string; lastName: string };
   status: string;
@@ -852,6 +867,12 @@ export interface LedgerCorrectionResult {
 /* ======================= Finance (read) ======================= */
 
 export type LedgerName = 'WALLET' | 'DRIVER_CASH' | 'COMPANY_FINANCE';
+/**
+ * Sources shown in the unified Finance transaction feed: the three correctable
+ * ledgers plus READ-ONLY direct company collections (bypass-driver-cash
+ * deliveries). A direct collection is never adjustable/reversible here.
+ */
+export type FinanceFeedLedger = LedgerName | 'DIRECT_COMPANY_COLLECTION';
 
 export interface FinanceSummaryDto {
   range: { from: string | null; to: string | null };
@@ -859,13 +880,17 @@ export interface FinanceSummaryDto {
   deliveryFeeRevenue: string;
   companyOrderRevenue: string;
   totalCollected: string;
+  /** Collected and held by drivers (driver cash). */
+  driverCollected: string;
+  /** Collected with a bypass-driver-cash payment method — received directly by the company. */
+  directCompanyCollected: string;
   customerWalletLiability: string;
   customerPayouts: string;
   driverCashOutstanding: string;
 }
 export interface FinanceTransactionEntry {
   id: string;
-  ledger: LedgerName;
+  ledger: FinanceFeedLedger;
   type: string;
   direction: 'CREDIT' | 'DEBIT';
   amount: string;
@@ -880,6 +905,8 @@ export interface FinanceTransactionEntry {
   paymentMethod: PaymentMethodRef | null;
   actor: { id: string; firstName: string; lastName: string } | null;
   reversalOf: { id: string; type: string } | null;
+  /** DRIVER_CASH for a driver cash COLLECTION, DIRECT_COMPANY for a direct company collection, else null. */
+  collectionRoute: 'DRIVER_CASH' | 'DIRECT_COMPANY' | null;
   notes: string | null;
   createdAt: string;
 }
@@ -915,6 +942,8 @@ export interface DashboardSummary {
     deliveryFeeRevenue: string;
     companyOrderRevenue: string;
     totalCollected: string;
+    driverCollected: string;
+    directCompanyCollected: string;
     customerWalletLiability: string;
     customerPayouts: string;
     driverCashOutstanding: string;
@@ -1098,6 +1127,13 @@ export interface DriverReportRow {
   failedAttempts: number;
   deliveryAttempts: number;
   successRate: string | null;
+  /** Collected into this driver's cash (held by the driver). */
+  driverCashCollected: string;
+  /** Collected on this driver's deliveries but received directly by the company. */
+  directCompanyCollected: string;
+  /** driverCashCollected + directCompanyCollected. */
+  totalCollected: string;
+  /** @deprecated same as driverCashCollected. */
   moneyCollected: string;
   settlementCount: number;
   settlementAmount: string;
@@ -1134,6 +1170,10 @@ export interface FinanceReportSummary {
   deliveryFeeRevenue: string;
   companyOrderRevenue: string;
   totalCollected: string;
+  /** Collected and held by drivers (driver cash). */
+  driverCollected: string;
+  /** Collected with a bypass-driver-cash payment method — received directly by the company. */
+  directCompanyCollected: string;
   customerPayouts: string;
   currentCustomerWalletLiability: string;
   currentDriverCashOutstanding: string;
@@ -1146,6 +1186,8 @@ export interface FinanceReportPeriodRow {
   deliveryFeeRevenue: string;
   companyOrderRevenue: string;
   totalCollected: string;
+  driverCollected: string;
+  directCompanyCollected: string;
   customerPayouts: string;
   settlementAmount: string;
 }
@@ -1153,6 +1195,8 @@ export type FinanceReportCategoryName =
   | 'DELIVERY_FEE_REVENUE'
   | 'COMPANY_ORDER_REVENUE'
   | 'TOTAL_COLLECTED'
+  | 'DRIVER_COLLECTED'
+  | 'DIRECT_COMPANY_COLLECTED'
   | 'CUSTOMER_PAYOUTS'
   | 'DRIVER_SETTLEMENTS';
 export interface FinanceReportCategoryRow {
@@ -1222,6 +1266,8 @@ export interface PaymentMethodSummary {
   name: string;
   isActive: boolean;
   sortOrder: number;
+  /** When true, money collected at delivery with this method is received directly by the company and never enters driver cash. */
+  bypassDriverCash: boolean;
   createdAt: string;
   updatedAt: string;
 }

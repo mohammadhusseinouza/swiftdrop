@@ -10,7 +10,7 @@ import { prisma } from "../db/prisma";
  * Run AFTER `npm run seed:visual`:   npm run seed:visual:driver-12-5
  *
  * Drives the REAL approved HTTP workflows (via the in-process Express app) to
- * give driver@swiftdrop.test a stable dataset covering every Driver Portal
+ * give driver@springcargo.test a stable dataset covering every Driver Portal
  * surface:
  *   HISTORY batch  (marker PH125-VIS-*)
  *     Completed : 1 COLLECTION (through company receipt) + 1 DELIVERY
@@ -27,7 +27,7 @@ import { prisma } from "../db/prisma";
  *
  * SAFETY:
  *   - refuses to run when NODE_ENV=production
- *   - only touches the *@swiftdrop.test visual fixtures + PH125-* scoped rows
+ *   - only touches the *@springcargo.test visual fixtures + PH125-* scoped rows
  *   - each batch is INDEPENDENTLY idempotent (its marker order is detected)
  *   - NO schema change, NO migration, NO manual ledger-row fabrication
  */
@@ -58,17 +58,17 @@ async function main(): Promise<void> {
 
   const app = createApp();
 
-  const driver = await prisma.users.findUnique({ where: { email: "driver@swiftdrop.test" }, select: { id: true } });
+  const driver = await prisma.users.findUnique({ where: { email: "driver@springcargo.test" }, select: { id: true } });
   if (!driver) {
-    throw new Error('[seed:visual:driver-12-5] driver@swiftdrop.test not found — run "npm run seed:visual" first.');
+    throw new Error('[seed:visual:driver-12-5] driver@springcargo.test not found — run "npm run seed:visual" first.');
   }
   const driverRow = await prisma.drivers.findUniqueOrThrow({ where: { user_id: driver.id } });
-  const adminUser = await prisma.users.findUniqueOrThrow({ where: { email: "admin@swiftdrop.test" }, select: { id: true } });
+  const adminUser = await prisma.users.findUniqueOrThrow({ where: { email: "admin@springcargo.test" }, select: { id: true } });
 
   const [adminToken, driverToken, financeToken] = await Promise.all([
-    login(app, "admin@swiftdrop.test"),
-    login(app, "driver@swiftdrop.test"),
-    login(app, "finance@swiftdrop.test"),
+    login(app, "admin@springcargo.test"),
+    login(app, "driver@springcargo.test"),
+    login(app, "finance@springcargo.test"),
   ]);
 
   // Reference data — scoped, idempotent. Areas/customers are master data.

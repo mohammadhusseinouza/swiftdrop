@@ -565,6 +565,7 @@ export default function ManagementDashboardPage() {
             <MetricTile
               label="Total collected"
               value={formatMoney(finance.totalCollected)}
+              hint={`${formatMoney(finance.driverCollected)} by drivers · ${formatMoney(finance.directCompanyCollected)} direct to company`}
             />
             <MetricTile
               label="Customer wallet liability"

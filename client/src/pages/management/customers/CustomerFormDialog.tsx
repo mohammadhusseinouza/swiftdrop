@@ -18,7 +18,6 @@ import {
 } from '../../../services/customersApi';
 import type { CustomerDetail } from '../../../services/domain.types';
 import {
-  getApiErrorCode,
   getApiErrorMessage,
   getApiErrorStatus,
   getApiValidationDetails,
@@ -158,15 +157,6 @@ export function CustomerFormDialog({
         return;
       }
       const status = getApiErrorStatus(err);
-      const code = getApiErrorCode(err);
-      if (!isEdit && (status === 409 || code === 'CONFLICT')) {
-        setError('customerNumber', {
-          type: 'server',
-          message: 'A customer with this number already exists.',
-        });
-        setFormError('Please fix the highlighted fields and try again.');
-        return;
-      }
       if (applyServerFieldErrors(err, setError)) {
         setFormError('Please fix the highlighted fields and try again.');
         return;
@@ -228,19 +218,6 @@ export function CustomerFormDialog({
         )}
 
         <FormSection title="Customer">
-          <TextField
-            label="Customer number"
-            required
-            readOnly={isEdit}
-            autoComplete="off"
-            hint={
-              isEdit
-                ? 'The customer number cannot be changed.'
-                : 'A unique identifier for this customer (not generated automatically).'
-            }
-            error={errors.customerNumber?.message}
-            {...register('customerNumber')}
-          />
           <TextField
             label="Name"
             required

@@ -30,7 +30,7 @@ import { formatDate, formatMoney } from '../../../lib/format';
 import { LedgerAdjustDialog } from '../../../components/finance/LedgerAdjustDialog';
 import { LedgerReverseDialog } from '../../../components/finance/LedgerReverseDialog';
 import {
-  LEDGER_LABEL,
+  FEED_LEDGER_LABEL,
   isReversibleType,
   ledgerTypeLabel,
 } from '../../../components/finance/ledgerCorrection';
@@ -156,7 +156,7 @@ export default function FinancePage() {
         orderId: t.order?.id,
         settlementLinked: !!t.settlement,
       }).unwrap();
-    } else {
+    } else if (t.ledger === 'COMPANY_FINANCE') {
       await reverseCompany({
         transactionId: t.id,
         reason,
@@ -165,7 +165,9 @@ export default function FinancePage() {
     }
   };
 
+  // Direct company collections are read-only: never reversible here.
   const canReverseRow = (t: FinanceTransactionEntry) =>
+    t.ledger !== 'DIRECT_COMPANY_COLLECTION' &&
     isReversibleType(t.type) &&
     (t.ledger === 'WALLET' ? canAdjustWallet : canAdjustFinance);
 
@@ -294,7 +296,7 @@ export default function FinancePage() {
               <MetricTile
                 label="Total collected"
                 value={formatMoney(s.totalCollected)}
-                hint="Flow · cash collected on delivery"
+                hint={`Flow · ${formatMoney(s.driverCollected)} by drivers · ${formatMoney(s.directCompanyCollected)} direct to company`}
               />
               <MetricTile
                 label="Customer payouts"
@@ -347,7 +349,7 @@ export default function FinancePage() {
                 <option value="">All ledgers</option>
                 {LEDGERS.map((l) => (
                   <option key={l} value={l}>
-                    {LEDGER_LABEL[l]}
+                    {FEED_LEDGER_LABEL[l]}
                   </option>
                 ))}
               </select>
@@ -473,7 +475,7 @@ export default function FinancePage() {
           onClose={() => setReverseTarget(null)}
           onSubmit={runReverse}
           original={{
-            ledgerLabel: LEDGER_LABEL[reverseTarget.ledger],
+            ledgerLabel: FEED_LEDGER_LABEL[reverseTarget.ledger],
             typeLabel: ledgerTypeLabel(reverseTarget.type),
             amount: reverseTarget.amount,
             direction: reverseTarget.direction,

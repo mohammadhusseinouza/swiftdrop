@@ -109,7 +109,9 @@ export interface OrderFinancialAllocation {
   customerWalletAmount: string;
 }
 
-export type OrderFinancialEventLedger = "DRIVER_CASH" | "WALLET" | "COMPANY_FINANCE";
+// DIRECT_COMPANY_COLLECTION: money collected at delivery with a
+// bypass_driver_cash payment method, received directly by the company.
+export type OrderFinancialEventLedger = "DRIVER_CASH" | "DIRECT_COMPANY_COLLECTION" | "WALLET" | "COMPANY_FINANCE";
 
 export interface OrderFinancialEventActor {
   id: string;

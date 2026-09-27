@@ -3,15 +3,21 @@ import type { ReactNode } from 'react';
 import { Badge } from '../../../components/ui/Badge';
 import { formatDateTime, formatMoney } from '../../../lib/format';
 import {
-  LEDGER_LABEL,
+  FEED_LEDGER_LABEL,
   ledgerTypeLabel,
 } from '../../../components/finance/ledgerCorrection';
 import type { FinanceTransactionEntry } from '../../../services/domain.types';
+
+const ROUTE_LABEL: Record<'DRIVER_CASH' | 'DIRECT_COMPANY', string> = {
+  DRIVER_CASH: 'Held by driver',
+  DIRECT_COMPANY: 'Direct to company',
+};
 
 const LEDGER_TONE: Record<string, 'brand' | 'info' | 'neutral'> = {
   WALLET: 'brand',
   DRIVER_CASH: 'info',
   COMPANY_FINANCE: 'neutral',
+  DIRECT_COMPANY_COLLECTION: 'info',
 };
 
 export function MobileFinanceTransactionCard({
@@ -34,14 +40,21 @@ export function MobileFinanceTransactionCard({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-1.5">
             <Badge tone={LEDGER_TONE[tx.ledger] ?? 'neutral'}>
-              {LEDGER_LABEL[tx.ledger]}
+              {FEED_LEDGER_LABEL[tx.ledger]}
             </Badge>
             <span className="text-sm font-medium text-ink">
               {ledgerTypeLabel(tx.type)}
             </span>
+            {tx.collectionRoute && (
+              <span className="text-xs text-ink-muted">
+                · {ROUTE_LABEL[tx.collectionRoute]}
+              </span>
+            )}
           </div>
           <p className="mt-0.5 text-xs text-ink-muted">
-            {[party, reference].filter(Boolean).join(' · ') || '—'}
+            {[party, reference, tx.paymentMethod?.name]
+              .filter(Boolean)
+              .join(' · ') || '—'}
           </p>
         </div>
         <span

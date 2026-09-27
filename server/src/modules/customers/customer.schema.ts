@@ -1,6 +1,5 @@
 import { z } from "zod";
 
-export const CUSTOMER_NUMBER_MAX_LENGTH = 50;
 const NAME_MAX_LENGTH = 200;
 const PHONE_MAX_LENGTH = 30;
 const EMAIL_MAX_LENGTH = 255;
@@ -12,17 +11,12 @@ export const CustomerIdParamSchema = z.object({
   id: uuid,
 });
 
-// No documented customer_number generation convention exists anywhere in
-// the approved requirements/implementation plan (only "unique customer
-// number" as a constraint, no format). Consistent with the Phase 4.1
-// employee_number precedent, it is required explicit input rather than an
-// invented format.
+// customer_number is backend-generated (sequential CUST-###### convention,
+// see migrations/2026-09-22__5152__customer_driver_sequential_numbers.sql) —
+// it is never accepted from the client. A caller-supplied customerNumber is
+// simply not a recognized field (this schema is not `.strict()`, matching
+// the rest of this file's convention) and is silently ignored.
 export const CreateCustomerSchema = z.object({
-  customerNumber: z
-    .string()
-    .trim()
-    .min(1, "Customer number is required")
-    .max(CUSTOMER_NUMBER_MAX_LENGTH, `Customer number must be at most ${CUSTOMER_NUMBER_MAX_LENGTH} characters`),
   name: z.string().trim().min(1, "Name is required").max(NAME_MAX_LENGTH),
   primaryPhone: z.string().trim().min(1, "Primary phone is required").max(PHONE_MAX_LENGTH),
   secondaryPhone: z.string().trim().min(1).max(PHONE_MAX_LENGTH).optional(),

@@ -16,6 +16,7 @@ import type { PaymentMethodSummary } from '../../../services/domain.types';
 import { Card } from '../../../components/ui/Card';
 import { Button } from '../../../components/ui/Button';
 import { ActiveBadge } from '../../../components/ui/ActiveBadge';
+import { Badge } from '../../../components/ui/Badge';
 import { DataTable } from '../../../components/data-display/DataTable';
 import { LoadingState } from '../../../components/feedback/LoadingState';
 import { EmptyState } from '../../../components/feedback/EmptyState';
@@ -23,7 +24,18 @@ import { ErrorState } from '../../../components/feedback/ErrorState';
 import { ConfirmationModal } from '../../../components/feedback/ConfirmationModal';
 import { MD_QUERY, useMediaQuery } from '../../../lib/useMediaQuery';
 import { ReferenceDialog } from './ReferenceDialog';
-import { TextField } from '../../../components/forms/Field';
+import { SelectField, TextField } from '../../../components/forms/Field';
+
+const BYPASS_DRIVER_CASH_DESCRIPTION =
+  'Payments using this method are received directly by the company and do not enter the driver\'s cash balance.';
+
+function DriverCashRouting({ bypass }: { bypass: boolean }) {
+  return bypass ? (
+    <Badge tone="info">Bypasses driver cash</Badge>
+  ) : (
+    <Badge tone="neutral">Driver cash</Badge>
+  );
+}
 
 type Editing =
   | { mode: 'create' }
@@ -78,6 +90,13 @@ export function PaymentMethodsTab() {
       header: 'Code',
       cell: (r: PaymentMethodSummary) => (
         <code className="text-xs text-ink-muted">{r.code}</code>
+      ),
+    },
+    {
+      id: 'routing',
+      header: 'Collection routing',
+      cell: (r: PaymentMethodSummary) => (
+        <DriverCashRouting bypass={r.bypassDriverCash} />
       ),
     },
     {
@@ -156,6 +175,7 @@ export function PaymentMethodsTab() {
                 <div className="flex flex-wrap items-center gap-x-3 text-xs text-ink-muted">
                   <code>{r.code}</code>
                   <span>Sort {r.sortOrder}</span>
+                  <DriverCashRouting bypass={r.bypassDriverCash} />
                 </div>
                 {canManage && (
                   <RowActions
@@ -247,6 +267,7 @@ function PaymentMethodDialog({
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
   const [sortOrder, setSortOrder] = useState('');
+  const [bypassDriverCash, setBypassDriverCash] = useState('false');
   const [error, setError] = useState<string | null>(null);
 
   const key = editing?.mode === 'edit' ? editing.row.id : editing?.mode;
@@ -255,6 +276,7 @@ function PaymentMethodDialog({
     setCode(row?.code ?? '');
     setName(row?.name ?? '');
     setSortOrder(row ? String(row.sortOrder) : '');
+    setBypassDriverCash(row?.bypassDriverCash ? 'true' : 'false');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
@@ -272,13 +294,18 @@ function PaymentMethodDialog({
         if (isEdit && row) {
           await update({
             id: row.id,
-            body: { name: name.trim(), sortOrder: parsedSort },
+            body: {
+              name: name.trim(),
+              sortOrder: parsedSort,
+              bypassDriverCash: bypassDriverCash === 'true',
+            },
           }).unwrap();
         } else {
           await create({
             code: code.trim(),
             name: name.trim(),
             sortOrder: parsedSort,
+            bypassDriverCash: bypassDriverCash === 'true',
           }).unwrap();
         }
         onClose();
@@ -326,6 +353,20 @@ function PaymentMethodDialog({
         value={sortOrder}
         onChange={(e) => setSortOrder(e.target.value)}
         hint="Lower numbers appear first."
+      />
+      <SelectField
+        label="Bypass Driver Cash"
+        value={bypassDriverCash}
+        onChange={(e) => setBypassDriverCash(e.target.value)}
+        hint={
+          isEdit
+            ? `${BYPASS_DRIVER_CASH_DESCRIPTION} Changing this affects future deliveries only.`
+            : BYPASS_DRIVER_CASH_DESCRIPTION
+        }
+        options={[
+          { value: 'false', label: 'No — collected money enters driver cash' },
+          { value: 'true', label: 'Yes — received directly by the company' },
+        ]}
       />
     </ReferenceDialog>
   );

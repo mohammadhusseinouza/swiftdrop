@@ -61,7 +61,7 @@ export default function CustomerLayout() {
               className="size-4 shrink-0 text-brand-600"
               aria-hidden="true"
             />
-            SwiftDrop
+            Spring Cargo
           </span>
         }
         actions={

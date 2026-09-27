@@ -9,11 +9,11 @@ import { prisma } from "../db/prisma";
  *   npm run seed:visual:customer-13-3
  *
  * Adds the two order shapes the earlier batches don't cover, so every state
- * the Order Detail / tracking review needs exists for customer@swiftdrop.test:
+ * the Order Detail / tracking review needs exists for customer@springcargo.test:
  *   - DRIVER_COLLECTION taken all the way to RECEIVED_AT_COMPANY
  *   - a FAILED_DELIVERY order ("Delivery Attempt Unsuccessful")
  *
- * SAFETY: refuses NODE_ENV=production; only *@swiftdrop.test + PH133-VIS
+ * SAFETY: refuses NODE_ENV=production; only *@springcargo.test + PH133-VIS
  * rows; idempotent (marker-detected); NO schema change / migration / manual
  * ledger fabrication.
  */
@@ -39,17 +39,17 @@ async function main(): Promise<void> {
   }
   const app = createApp();
 
-  const customerUser = await prisma.users.findUnique({ where: { email: "customer@swiftdrop.test" }, select: { id: true } });
-  if (!customerUser) throw new Error('[seed:visual:customer-13-3] customer@swiftdrop.test not found — run "npm run seed:visual" first.');
+  const customerUser = await prisma.users.findUnique({ where: { email: "customer@springcargo.test" }, select: { id: true } });
+  if (!customerUser) throw new Error('[seed:visual:customer-13-3] customer@springcargo.test not found — run "npm run seed:visual" first.');
   const customer = await prisma.customers.findUniqueOrThrow({ where: { portal_user_id: customerUser.id } });
-  const driverUser = await prisma.users.findUniqueOrThrow({ where: { email: "driver@swiftdrop.test" }, select: { id: true } });
+  const driverUser = await prisma.users.findUniqueOrThrow({ where: { email: "driver@springcargo.test" }, select: { id: true } });
   const driverRow = await prisma.drivers.findUniqueOrThrow({ where: { user_id: driverUser.id } });
 
   const existing = await prisma.orders.findFirst({ where: { order_number: { startsWith: MARKER } }, select: { id: true } });
   if (existing) {
     console.log("[seed:visual:customer-13-3] PH133-VIS batch already present — skipping.");
   } else {
-    const [adminToken, driverToken] = await Promise.all([login(app, "admin@swiftdrop.test"), login(app, "driver@swiftdrop.test")]);
+    const [adminToken, driverToken] = await Promise.all([login(app, "admin@springcargo.test"), login(app, "driver@springcargo.test")]);
     const area =
       (await prisma.areas.findFirst({ where: { name: "PH133 Visual Area" } })) ??
       (await prisma.areas.create({ data: { name: "PH133 Visual Area" } }));
@@ -111,7 +111,7 @@ async function main(): Promise<void> {
     console.log("[seed:visual:customer-13-3] PH133-VIS batch created.");
   }
 
-  const customerToken = await login(app, "customer@swiftdrop.test");
+  const customerToken = await login(app, "customer@springcargo.test");
   const all = await request(app).get("/api/v1/customer/me/orders?limit=100").set(bearer(customerToken));
   console.log(`[seed:visual:customer-13-3] Done. My Orders total = ${all.body?.meta?.total}`);
 }

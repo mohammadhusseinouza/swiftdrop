@@ -353,7 +353,6 @@ describe("Driver Management correction (Phase 11.7)", () => {
         .post("/api/v1/drivers")
         .set(auth(tokens.admin))
         .send({
-          driverNumber: `PH117-NL-${uniqueSuffix()}`,
           user: { email, password: "DriverPw123!", firstName: "New", lastName: "Login", phone: "+9611234567" },
         });
       assert.equal(res.status, 201, JSON.stringify(res.body));
@@ -368,6 +367,7 @@ describe("Driver Management correction (Phase 11.7)", () => {
       assert.equal(createdUser.roles.code, "DRIVER");
       assert.equal(res.body.data.user.email, email);
       assert.doesNotMatch(JSON.stringify(res.body), /password/i);
+      assert.match(res.body.data.driverNumber, /^DRV-\d{6,}$/, "driverNumber must be backend-generated");
 
       const account = await prisma.driver_cash_accounts.findUniqueOrThrow({ where: { driver_id: driverId } });
       assert.equal(account.current_balance.toString(), "0");
@@ -385,7 +385,6 @@ describe("Driver Management correction (Phase 11.7)", () => {
         .post("/api/v1/drivers")
         .set(auth(tokens.admin))
         .send({
-          driverNumber: `PH117-ESC-${uniqueSuffix()}`,
           user: {
             email,
             password: "DriverPw123!",
@@ -406,37 +405,37 @@ describe("Driver Management correction (Phase 11.7)", () => {
         .post("/api/v1/drivers")
         .set(auth(tokens.admin))
         .send({
-          driverNumber: `PH117-D1-${uniqueSuffix()}`,
           user: { email, password: "DriverPw123!", firstName: "Dup", lastName: "One" },
         });
       assert.equal(first.status, 201);
       driverIds.push(first.body.data.id);
       userIds.push((await prisma.users.findUniqueOrThrow({ where: { email } })).id);
 
-      const driverNumber2 = `PH117-D2-${uniqueSuffix()}`;
       const second = await request(app)
         .post("/api/v1/drivers")
         .set(auth(tokens.admin))
         .send({
-          driverNumber: driverNumber2,
           user: { email, password: "DriverPw123!", firstName: "Dup", lastName: "Two" },
         });
       assert.equal(second.status, 409);
-      assert.equal(await prisma.drivers.count({ where: { driver_number: driverNumber2 } }), 0);
     });
 
-    test("duplicate driverNumber -> 409, no orphan user", async () => {
-      const existing = await newDriver();
-      const existingNumber = (await prisma.drivers.findUniqueOrThrow({ where: { id: existing.driverId } })).driver_number;
-      const email = uniqueEmail("ph117-dupnum");
+    // driverNumber is backend-generated (sequential, Postgres-sequence-backed
+    // — see migrations/2026-09-22__5152__customer_driver_sequential_numbers.
+    // sql) so a client can no longer trigger a "duplicate driverNumber"
+    // conflict at all: new-login mode is `.strict()` and rejects an
+    // unrecognized driverNumber key outright, before any row is touched.
+    test("caller-supplied driverNumber in new-login mode is rejected (strict), no partial rows", async () => {
+      const email = uniqueEmail("ph117-nonumber");
       const res = await request(app)
         .post("/api/v1/drivers")
         .set(auth(tokens.admin))
         .send({
-          driverNumber: existingNumber,
-          user: { email, password: "DriverPw123!", firstName: "Dup", lastName: "Num" },
+          driverNumber: "SHOULD-BE-REJECTED",
+          user: { email, password: "DriverPw123!", firstName: "No", lastName: "Number" },
         });
-      assert.equal(res.status, 409);
+      assert.equal(res.status, 400);
+      assert.equal(res.body.error.code, "VALIDATION_ERROR");
       assert.equal(await prisma.users.count({ where: { email } }), 0, "no orphan user from a rejected create");
     });
 
@@ -446,16 +445,17 @@ describe("Driver Management correction (Phase 11.7)", () => {
       const denied = await request(app)
         .post("/api/v1/drivers")
         .set(auth(tokens.dispatcher))
-        .send({ driverNumber: `PH117-LGCY-${uniqueSuffix()}`, userId: linkUser.id });
+        .send({ userId: linkUser.id });
       assert.equal(denied.status, 403);
 
       const ok = await request(app)
         .post("/api/v1/drivers")
         .set(auth(tokens.admin))
-        .send({ driverNumber: `PH117-LGCY-${uniqueSuffix()}`, userId: linkUser.id });
+        .send({ userId: linkUser.id });
       assert.equal(ok.status, 201);
       driverIds.push(ok.body.data.id);
       assert.equal(ok.body.data.user.id, linkUser.id);
+      assert.match(ok.body.data.driverNumber, /^DRV-\d{6,}$/, "driverNumber must be backend-generated");
     });
   });
 

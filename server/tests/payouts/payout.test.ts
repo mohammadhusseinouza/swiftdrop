@@ -224,6 +224,11 @@ describe("Customer Payouts (Phase 8.5)", () => {
       assert.equal(walletTx.debit.toString(), "300");
       assert.equal(walletTx.balance_before.toString(), "500");
       assert.equal(walletTx.balance_after.toString(), "200");
+
+      // Receipt DTO: balances come verbatim from the persisted ledger row.
+      assert.equal(res.body.data.balanceBefore, walletTx.balance_before.toString());
+      assert.equal(res.body.data.balanceAfter, walletTx.balance_after.toString());
+      assert.equal(res.body.data.idempotencyKey, undefined);
     });
   });
 
@@ -411,6 +416,10 @@ describe("Customer Payouts (Phase 8.5)", () => {
       assert.equal(list.status, 200);
       const found = list.body.data.find((p: { id: string }) => p.id === created.body.data.id);
       assert.ok(found);
+      // Reprint source: the list carries the same persisted balances as the create response.
+      assert.equal(found.balanceBefore, "50");
+      assert.equal(found.balanceAfter, "25");
+      assert.equal(found.amount, created.body.data.amount);
     });
 
     test("30-32. pagination defaults, explicit page/limit, max>100 rejected", async () => {

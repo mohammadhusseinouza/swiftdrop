@@ -6,13 +6,13 @@ import { AppError } from "../shared/errors/app-error";
 /**
  * DEVELOPMENT-ONLY visual acceptance seed users.
  *
- * Creates deterministic, idempotent accounts so the SwiftDrop UI can be
+ * Creates deterministic, idempotent accounts so the Spring Cargo UI can be
  * reviewed under every role. Run with:  npm run seed:visual
  *
  * SAFETY:
  *   - refuses to run when NODE_ENV=production (explicit check — NOT just the
  *     .test email domain)
- *   - only ever touches the fixed *@swiftdrop.test fixtures below
+ *   - only ever touches the fixed *@springcargo.test fixtures below
  *   - re-running resets ONLY these fixtures' password / names / active flag to
  *     the documented values; it never edits any other user
  *   - permissions come from the existing approved role catalog (never assigned
@@ -43,12 +43,12 @@ interface VisualUserSpec {
 }
 
 const VISUAL_USERS: readonly VisualUserSpec[] = [
-  { key: "admin", email: "admin@swiftdrop.test", firstName: "Visual", lastName: "Admin", roleCode: "ADMIN", isActive: true, employeeNumber: "EMP-VISUAL-ADMIN" },
-  { key: "dispatcher", email: "dispatcher@swiftdrop.test", firstName: "Visual", lastName: "Dispatcher", roleCode: "DISPATCHER", isActive: true, employeeNumber: "EMP-VISUAL-DISPATCHER" },
-  { key: "finance", email: "finance@swiftdrop.test", firstName: "Visual", lastName: "Finance", roleCode: "FINANCE", isActive: true, employeeNumber: "EMP-VISUAL-FINANCE" },
-  { key: "driver", email: "driver@swiftdrop.test", firstName: "Visual", lastName: "Driver", roleCode: "DRIVER", isActive: true, driverNumber: "DRV-VISUAL-001" },
-  { key: "customer", email: "customer@swiftdrop.test", firstName: "Visual", lastName: "Customer", roleCode: "CUSTOMER", isActive: true, customerNumber: "CUS-VISUAL-001" },
-  { key: "inactive", email: "inactive@swiftdrop.test", firstName: "Visual", lastName: "Inactive", roleCode: "DISPATCHER", isActive: false, employeeNumber: "EMP-VISUAL-INACTIVE" },
+  { key: "admin", email: "admin@springcargo.test", firstName: "Visual", lastName: "Admin", roleCode: "ADMIN", isActive: true, employeeNumber: "EMP-VISUAL-ADMIN" },
+  { key: "dispatcher", email: "dispatcher@springcargo.test", firstName: "Visual", lastName: "Dispatcher", roleCode: "DISPATCHER", isActive: true, employeeNumber: "EMP-VISUAL-DISPATCHER" },
+  { key: "finance", email: "finance@springcargo.test", firstName: "Visual", lastName: "Finance", roleCode: "FINANCE", isActive: true, employeeNumber: "EMP-VISUAL-FINANCE" },
+  { key: "driver", email: "driver@springcargo.test", firstName: "Visual", lastName: "Driver", roleCode: "DRIVER", isActive: true, driverNumber: "DRV-VISUAL-001" },
+  { key: "customer", email: "customer@springcargo.test", firstName: "Visual", lastName: "Customer", roleCode: "CUSTOMER", isActive: true, customerNumber: "CUS-VISUAL-001" },
+  { key: "inactive", email: "inactive@springcargo.test", firstName: "Visual", lastName: "Inactive", roleCode: "DISPATCHER", isActive: false, employeeNumber: "EMP-VISUAL-INACTIVE" },
 ];
 
 interface SeededRow {

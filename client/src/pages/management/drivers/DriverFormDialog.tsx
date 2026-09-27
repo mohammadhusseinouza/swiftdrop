@@ -161,11 +161,6 @@ export function DriverFormDialog({
             type: 'server',
             message: 'An account with this email already exists.',
           });
-        } else if (!isEdit && msg.includes('number')) {
-          setError('driverNumber', {
-            type: 'server',
-            message: 'A driver with this number already exists.',
-          });
         }
         setFormError('Please fix the highlighted fields and try again.');
         return;
@@ -230,19 +225,6 @@ export function DriverFormDialog({
           >
             {formError}
           </div>
-        )}
-
-        {!isEdit && (
-          <FormSection title="Driver">
-            <TextField
-              label="Driver number"
-              required
-              autoComplete="off"
-              hint="A unique identifier for this driver (not generated automatically)."
-              error={errors.driverNumber?.message}
-              {...register('driverNumber')}
-            />
-          </FormSection>
         )}
 
         <FormSection title={isEdit ? 'Profile' : 'Login profile'}>

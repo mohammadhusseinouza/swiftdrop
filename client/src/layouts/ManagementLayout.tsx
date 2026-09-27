@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
-import { Truck, X } from 'lucide-react';
+import { PanelLeftClose, PanelLeftOpen, Truck, X } from 'lucide-react';
 
 import { useAppDispatch, useAppSelector } from '../app/hooks';
 import { selectCurrentUser } from '../features/auth/authSlice';
 import {
   closeMobileNavigation,
   openMobileNavigation,
+  persistSidebarPreference,
   selectMobileNavigationOpen,
   selectSidebarCollapsed,
   toggleSidebarCollapsed,
@@ -24,8 +25,10 @@ import {
 } from '../components/navigation/AppSidebar';
 import { TopNavbar } from '../components/navigation/TopNavbar';
 import { UserMenu } from '../components/navigation/UserMenu';
+import { cn } from '../components/ui/cn';
 
 const DRAWER_ID = 'management-mobile-nav';
+const DESKTOP_SIDEBAR_ID = 'management-desktop-nav';
 const TOGGLE_ID = 'management-nav-toggle';
 
 /**
@@ -33,7 +36,9 @@ const TOGGLE_ID = 'management-nav-toggle';
  *
  * Composes the shared AppSidebar + TopNavbar with permission-aware navigation,
  * the hydrated auth user, and the Redux `ui` slice (sidebarCollapsed /
- * mobileNavigationOpen). Reached only for ADMIN / DISPATCHER / FINANCE
+ * mobileNavigationOpen). On desktop `sidebarCollapsed` hides the sidebar
+ * completely (content expands; preference persisted in localStorage); on
+ * mobile the sidebar is an overlay drawer dismissed by backdrop or Escape. Reached only for ADMIN / DISPATCHER / FINANCE
  * (RequirePortal handles portal-family isolation — this layout does NOT do a
  * second role check). Sidebar item visibility is UX only; RequirePermission
  * still guards each route and the backend authorizes every request.
@@ -74,6 +79,10 @@ export default function ManagementLayout() {
       })),
     [permissions, activeId],
   );
+
+  useEffect(() => {
+    persistSidebarPreference(collapsed);
+  }, [collapsed]);
 
   // Close the mobile drawer on any route change (covers non-sidebar navigation).
   useEffect(() => {
@@ -141,52 +150,71 @@ export default function ManagementLayout() {
 
   return (
     <div className="flex min-h-screen bg-canvas">
-      {/* Persistent desktop sidebar (out of flow on mobile). */}
-      <div className="sticky top-0 hidden h-screen shrink-0 md:flex">
+      {/* Desktop sidebar: in flow, animates between full width and hidden. */}
+      <div
+        id={DESKTOP_SIDEBAR_ID}
+        inert={collapsed}
+        className={cn(
+          'sticky top-0 hidden h-screen shrink-0 overflow-hidden md:block',
+          'transition-[width] duration-200 ease-out motion-reduce:transition-none',
+          collapsed ? 'w-0' : 'w-60',
+        )}
+      >
         <AppSidebar
           sections={sections}
-          collapsed={collapsed}
           navLabel="Management navigation"
-          brand="SwiftDrop"
+          brand="Spring Cargo"
           brandIcon={<Truck />}
           user={sidebarUser}
         />
       </div>
 
-      {/* Mobile drawer + backdrop. */}
-      {mobileOpen && (
-        <div className="fixed inset-0 z-40 md:hidden">
-          <div
-            className="absolute inset-0 bg-ink/40"
-            aria-hidden="true"
-            onClick={() => dispatch(closeMobileNavigation())}
+      {/* Mobile overlay drawer + backdrop (kept mounted so it can animate). */}
+      <div
+        className={cn(
+          'fixed inset-0 z-40 md:hidden',
+          !mobileOpen && 'pointer-events-none',
+        )}
+        inert={!mobileOpen}
+      >
+        <div
+          className={cn(
+            'absolute inset-0 bg-ink/40 transition-opacity duration-200 motion-reduce:transition-none',
+            mobileOpen ? 'opacity-100' : 'opacity-0',
+          )}
+          aria-hidden="true"
+          onClick={() => dispatch(closeMobileNavigation())}
+        />
+        <div
+          id={DRAWER_ID}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Navigation menu"
+          className={cn(
+            'absolute inset-y-0 left-0 z-50 w-[min(85vw,280px)]',
+            'transition-transform duration-200 ease-out motion-reduce:transition-none',
+            mobileOpen ? 'translate-x-0' : '-translate-x-full',
+          )}
+        >
+          <AppSidebar
+            sections={sections}
+            navLabel="Management navigation"
+            brand="Spring Cargo"
+            brandIcon={<Truck />}
+            onNavigate={() => dispatch(closeMobileNavigation())}
+            user={sidebarUser}
           />
-          <div
-            id={DRAWER_ID}
-            role="dialog"
-            aria-label="Navigation menu"
-            className="absolute inset-y-0 left-0 z-50 w-[min(85vw,280px)]"
+          <button
+            ref={closeRef}
+            type="button"
+            aria-label="Close navigation"
+            onClick={() => dispatch(closeMobileNavigation())}
+            className="absolute top-2 right-2 rounded-control p-1.5 text-chrome-ink hover:bg-chrome-deep hover:text-chrome-ink-strong"
           >
-            <AppSidebar
-              sections={sections}
-              navLabel="Management navigation"
-              brand="SwiftDrop"
-              brandIcon={<Truck />}
-              onNavigate={() => dispatch(closeMobileNavigation())}
-              user={sidebarUser}
-            />
-            <button
-              ref={closeRef}
-              type="button"
-              aria-label="Close navigation"
-              onClick={() => dispatch(closeMobileNavigation())}
-              className="absolute top-2 right-2 rounded-control p-1.5 text-chrome-ink hover:bg-chrome-deep hover:text-chrome-ink-strong"
-            >
-              <X className="size-5" aria-hidden="true" />
-            </button>
-          </div>
+            <X className="size-5" aria-hidden="true" />
+          </button>
         </div>
-      )}
+      </div>
 
       <div className="flex min-w-0 flex-1 flex-col">
         <TopNavbar
@@ -194,9 +222,24 @@ export default function ManagementLayout() {
           title={title}
           onToggleSidebar={handleToggle}
           toggleId={TOGGLE_ID}
-          toggleLabel={isDesktop ? 'Collapse navigation' : 'Open navigation'}
+          toggleLabel={
+            isDesktop
+              ? collapsed
+                ? 'Show navigation'
+                : 'Hide navigation'
+              : 'Open navigation'
+          }
           toggleAriaExpanded={isDesktop ? !collapsed : mobileOpen}
-          toggleAriaControls={isDesktop ? undefined : DRAWER_ID}
+          toggleAriaControls={isDesktop ? DESKTOP_SIDEBAR_ID : DRAWER_ID}
+          toggleIcon={
+            isDesktop ? (
+              collapsed ? (
+                <PanelLeftOpen className="size-5" aria-hidden="true" />
+              ) : (
+                <PanelLeftClose className="size-5" aria-hidden="true" />
+              )
+            ) : undefined
+          }
           actions={userMenu}
         />
         <main className="flex-1 p-4 sm:p-5 lg:p-6">

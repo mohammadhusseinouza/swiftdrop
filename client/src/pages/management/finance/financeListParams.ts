@@ -1,4 +1,4 @@
-import type { LedgerName } from '../../../services/domain.types';
+import type { FinanceFeedLedger } from '../../../services/domain.types';
 import type { FinanceTransactionsParams } from '../../../services/financeApi';
 
 /**
@@ -14,13 +14,14 @@ import type { FinanceTransactionsParams } from '../../../services/financeApi';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-export const LEDGERS: readonly LedgerName[] = [
+export const LEDGERS: readonly FinanceFeedLedger[] = [
   'WALLET',
   'DRIVER_CASH',
   'COMPANY_FINANCE',
+  'DIRECT_COMPANY_COLLECTION',
 ];
 
-export const LEDGER_TYPES: Record<LedgerName, readonly string[]> = {
+export const LEDGER_TYPES: Record<FinanceFeedLedger, readonly string[]> = {
   WALLET: ['ORDER_CREDIT', 'PAYOUT', 'ADJUSTMENT', 'REVERSAL'],
   DRIVER_CASH: ['COLLECTION', 'SETTLEMENT', 'ADJUSTMENT', 'REVERSAL'],
   COMPANY_FINANCE: [
@@ -29,6 +30,7 @@ export const LEDGER_TYPES: Record<LedgerName, readonly string[]> = {
     'ADJUSTMENT',
     'REVERSAL',
   ],
+  DIRECT_COMPANY_COLLECTION: ['DIRECT_COMPANY_COLLECTION'],
 };
 
 const ALL_TYPES = Array.from(
@@ -38,7 +40,7 @@ const ALL_TYPES = Array.from(
 export interface FinanceListState {
   from: string;
   to: string;
-  ledger: '' | LedgerName;
+  ledger: '' | FinanceFeedLedger;
   type: string;
   page: number;
 }
@@ -55,7 +57,7 @@ export function parseFinanceListParams(sp: URLSearchParams): FinanceListState {
   const pageRaw = Number(sp.get('page'));
   const ledgerRaw = sp.get('ledger');
   const ledger = (LEDGERS as string[]).includes(ledgerRaw ?? '')
-    ? (ledgerRaw as LedgerName)
+    ? (ledgerRaw as FinanceFeedLedger)
     : '';
   const typeRaw = sp.get('type') ?? '';
   // Only keep a type that is real AND (if a ledger is set) valid for it.

@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 
 import type { DataTableColumn } from '../../../components/data-display/DataTable';
 import { Badge } from '../../../components/ui/Badge';
+import { Button } from '../../../components/ui/Button';
 import { paths } from '../../../routes/paths';
 import { formatDateTime, formatMoney } from '../../../lib/format';
 import type { PayoutSummary } from '../../../services/domain.types';
@@ -19,6 +20,8 @@ const DASH = '—';
  */
 export function buildPayoutColumns(opts: {
   canViewCustomer: boolean;
+  /** Reprints the A5 receipt from this persisted row (no request, no new transaction). */
+  onPrintReceipt: (payout: PayoutSummary) => void;
 }): DataTableColumn<PayoutSummary>[] {
   return [
     {
@@ -103,6 +106,21 @@ export function buildPayoutColumns(opts: {
         ) : (
           <span className="text-ink-subtle">{DASH}</span>
         ),
+    },
+    {
+      id: 'actions',
+      header: <span className="sr-only">Actions</span>,
+      align: 'right',
+      cell: (p) => (
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={() => opts.onPrintReceipt(p)}
+          aria-label={`Print invoice for payout ${p.payoutNumber}`}
+        >
+          Print invoice
+        </Button>
+      ),
     },
   ];
 }

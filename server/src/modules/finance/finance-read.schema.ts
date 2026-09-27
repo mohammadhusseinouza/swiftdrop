@@ -21,14 +21,17 @@ export type FinanceDateRangeQuery = z.infer<typeof FinanceDateRangeQuerySchema>;
 const WALLET_TYPES = ["ORDER_CREDIT", "PAYOUT", "ADJUSTMENT", "REVERSAL"] as const;
 const DRIVER_CASH_TYPES = ["COLLECTION", "SETTLEMENT", "ADJUSTMENT", "REVERSAL"] as const;
 const COMPANY_TYPES = ["DELIVERY_FEE_REVENUE", "COMPANY_ORDER_PRODUCT_REVENUE", "ADJUSTMENT", "REVERSAL"] as const;
+// company_direct_collections has no type column — every row is one kind.
+const DIRECT_COLLECTION_TYPES = ["DIRECT_COMPANY_COLLECTION"] as const;
 
 const TYPES_BY_LEDGER: Record<LedgerName, readonly string[]> = {
   WALLET: WALLET_TYPES,
   DRIVER_CASH: DRIVER_CASH_TYPES,
   COMPANY_FINANCE: COMPANY_TYPES,
+  DIRECT_COMPANY_COLLECTION: DIRECT_COLLECTION_TYPES,
 };
 
-const ALL_TRANSACTION_TYPES = Array.from(new Set<string>([...WALLET_TYPES, ...DRIVER_CASH_TYPES, ...COMPANY_TYPES]));
+const ALL_TRANSACTION_TYPES = Array.from(new Set<string>([...WALLET_TYPES, ...DRIVER_CASH_TYPES, ...COMPANY_TYPES, ...DIRECT_COLLECTION_TYPES]));
 
 // GET /api/v1/finance/transactions
 export const FinanceTransactionsQuerySchema = z

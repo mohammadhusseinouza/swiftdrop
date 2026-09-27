@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Controller, useForm, type UseFormSetError } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { ArrowLeft, X } from 'lucide-react';
+import { ArrowLeft, Printer, X } from 'lucide-react';
 
 import { cn } from '../../../components/ui/cn';
 import { Button } from '../../../components/ui/Button';
@@ -11,6 +11,7 @@ import { MoneyInput } from '../../../components/forms/MoneyInput';
 import { ServerSearchSelect } from '../../../components/forms/ServerSearchSelect';
 
 import { useDebouncedValue } from '../../../lib/useDebouncedValue';
+import { printPayoutReceipt } from '../../../lib/payoutReceiptPrint';
 import { formatMoney, isZeroMoney } from '../../../lib/format';
 import {
   compareMoney,
@@ -62,6 +63,12 @@ import {
  * new key is generated only for a genuinely new intent (dialog opened, or the
  * body meaningfully changed after a definitive business failure). Keys live in
  * refs — never Redux, never localStorage.
+ *
+ * RECEIPT: once (and only once) the backend confirms success, the A5 payout
+ * receipt print preview opens automatically, built from the returned
+ * `PayoutSummary` — never from form values. Printing is read-only: cancelling
+ * it, or a print failure, never touches the completed payout, and "Print
+ * receipt" can be retried from the success step without any request.
  */
 
 interface ProcessPayoutDialogProps {
@@ -128,6 +135,10 @@ export function ProcessPayoutDialog({
   const [formError, setFormError] = useState<string | null>(null);
   const [ambiguous, setAmbiguous] = useState(false);
   const [donePayout, setDonePayout] = useState<PayoutSummary | null>(null);
+  const [printError, setPrintError] = useState<string | null>(null);
+  // Payout id the receipt was auto-printed for — guarantees a single automatic
+  // print per successful payout (re-renders / StrictMode never re-trigger it).
+  const autoPrintedIdRef = useRef<string | null>(null);
 
   // Idempotency intent — see the module comment.
   const keyRef = useRef<string | null>(null);
@@ -203,6 +214,7 @@ export function ProcessPayoutDialog({
       setFormError(null);
       setAmbiguous(false);
       setDonePayout(null);
+      setPrintError(null);
       setCustomerTerm('');
       keyRef.current = null;
       failedBodyRef.current = null;
@@ -216,6 +228,26 @@ export function ProcessPayoutDialog({
     if (open && !dialog.open) dialog.showModal();
     else if (!open && dialog.open) dialog.close();
   }, [open]);
+
+  const printReceipt = (payout: PayoutSummary) => {
+    setPrintError(null);
+    try {
+      printPayoutReceipt(payout);
+    } catch {
+      setPrintError(
+        'The receipt could not be printed. The payout was processed successfully — try printing again.',
+      );
+    }
+  };
+
+  // Auto-print after the success step has rendered (so the success state is
+  // visible behind the browser's print preview).
+  useEffect(() => {
+    if (step !== 'done' || !donePayout) return;
+    if (autoPrintedIdRef.current === donePayout.id) return;
+    autoPrintedIdRef.current = donePayout.id;
+    printReceipt(donePayout);
+  }, [step, donePayout]);
 
   /* ------------------------------- submit ------------------------------ */
   const canReview =
@@ -659,6 +691,14 @@ export function ProcessPayoutDialog({
             <div className="rounded-control border border-success-200 bg-success-50 px-4 py-3 text-sm text-success-700">
               Payout processed successfully.
             </div>
+            {printError && (
+              <div
+                role="alert"
+                className="rounded-control border border-warning-200 bg-warning-50 px-3 py-2 text-sm text-warning-700"
+              >
+                {printError}
+              </div>
+            )}
             <dl className="divide-y divide-line-subtle rounded-control border border-line-subtle">
               <ConfirmRow label="Payout number" value={donePayout.payoutNumber} />
               <ConfirmRow
@@ -671,7 +711,15 @@ export function ProcessPayoutDialog({
                 value={`${donePayout.customer.customerNumber} · ${donePayout.customer.name}`}
               />
             </dl>
-            <div className="flex justify-end pt-1">
+            <div className="flex flex-wrap justify-end gap-2 pt-1">
+              <Button
+                type="button"
+                variant="secondary"
+                icon={<Printer />}
+                onClick={() => printReceipt(donePayout)}
+              >
+                Print receipt
+              </Button>
               <Button type="button" onClick={onClose}>
                 Done
               </Button>

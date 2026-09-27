@@ -355,7 +355,7 @@ export default function CustomerDetailPage() {
           />
         )}
         {activeTab === 'orders' && canViewOrders && (
-          <OrdersTab customerId={customer.id} />
+          <OrdersTab customer={customer} />
         )}
         {activeTab === 'wallet' && canViewWallet && (
           <WalletTab customerId={customer.id} />

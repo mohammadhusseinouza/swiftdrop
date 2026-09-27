@@ -62,16 +62,21 @@ describe("Customers backend (Phase 5.1)", () => {
     return { Authorization: `Bearer ${token}` };
   }
 
+  // customerNumber is intentionally NOT part of the default payload — it is
+  // backend-generated (sequential CUST-###### convention) and never
+  // client-supplied. `overrides.customerNumber` still exists purely so a test
+  // can prove a client-supplied value is ignored (see "cannot override" below).
   function newCustomerPayload(overrides: Record<string, unknown> = {}) {
     const suffix = uniqueSuffix();
     return {
-      customerNumber: `PH51-API-${suffix}`,
       name: `Phase51 API Customer ${suffix}`,
       primaryPhone: "+10000000001",
-      email: `api-customer-${suffix}@phase4-5-test.swiftdrop.local`,
+      email: `api-customer-${suffix}@phase4-5-test.springcargo.local`,
       ...overrides,
     };
   }
+
+  const CUSTOMER_NUMBER_RE = /^CUST-\d{6,}$/;
 
   // ===== AUTHORIZATION =====
 
@@ -168,7 +173,7 @@ describe("Customers backend (Phase 5.1)", () => {
       createdCustomerIds.push(res.body.data.id);
 
       assert.equal(res.status, 201);
-      assert.equal(res.body.data.customerNumber, payload.customerNumber);
+      assert.match(res.body.data.customerNumber, CUSTOMER_NUMBER_RE, "customerNumber must be backend-generated in the CUST-###### convention");
       assert.equal(res.body.data.name, payload.name);
       assert.equal(res.body.data.primaryPhone, payload.primaryPhone);
       assert.equal(res.body.data.email, payload.email);
@@ -197,7 +202,7 @@ describe("Customers backend (Phase 5.1)", () => {
       const missingName = await request(app)
         .post("/api/v1/customers")
         .set(auth(tokens.dispatcher))
-        .send({ customerNumber: `PH51-BAD-${uniqueSuffix()}`, primaryPhone: "+1000" });
+        .send({ primaryPhone: "+1000" });
       assert.equal(missingName.status, 400);
       assert.equal(missingName.body.error.code, "VALIDATION_ERROR");
 
@@ -206,27 +211,54 @@ describe("Customers backend (Phase 5.1)", () => {
         .set(auth(tokens.dispatcher))
         .send(newCustomerPayload({ email: "not-an-email" }));
       assert.equal(badEmail.status, 400);
-
-      const tooLongNumber = await request(app)
-        .post("/api/v1/customers")
-        .set(auth(tokens.dispatcher))
-        .send(newCustomerPayload({ customerNumber: "x".repeat(51) }));
-      assert.equal(tooLongNumber.status, 400);
     });
 
-    test("duplicate customerNumber -> controlled 409 CONFLICT", async () => {
-      const payload = newCustomerPayload();
-      const first = await request(app).post("/api/v1/customers").set(auth(tokens.dispatcher)).send(payload);
-      createdCustomerIds.push(first.body.data.id);
-      assert.equal(first.status, 201);
-
-      const second = await request(app)
+    test("client-supplied customerNumber is ignored — the backend always generates its own", async () => {
+      const res = await request(app)
         .post("/api/v1/customers")
         .set(auth(tokens.dispatcher))
-        .send(newCustomerPayload({ customerNumber: payload.customerNumber }));
-      assert.equal(second.status, 409);
-      assert.equal(second.body.error.code, "CONFLICT");
-      assert.doesNotMatch(JSON.stringify(second.body), /prisma/i);
+        .send(newCustomerPayload({ customerNumber: "SHOULD-NOT-APPLY" }));
+      createdCustomerIds.push(res.body.data.id);
+
+      assert.equal(res.status, 201);
+      assert.notEqual(res.body.data.customerNumber, "SHOULD-NOT-APPLY");
+      assert.match(res.body.data.customerNumber, CUSTOMER_NUMBER_RE);
+
+      const row = await prisma.customers.findUniqueOrThrow({ where: { id: res.body.data.id } });
+      assert.equal(row.customer_number, res.body.data.customerNumber);
+    });
+
+    test("sequential, unique generation — two creates in a row get two different, increasing CUST-###### numbers", async () => {
+      const first = await request(app).post("/api/v1/customers").set(auth(tokens.dispatcher)).send(newCustomerPayload());
+      createdCustomerIds.push(first.body.data.id);
+      assert.equal(first.status, 201);
+      assert.match(first.body.data.customerNumber, CUSTOMER_NUMBER_RE);
+
+      const second = await request(app).post("/api/v1/customers").set(auth(tokens.dispatcher)).send(newCustomerPayload());
+      createdCustomerIds.push(second.body.data.id);
+      assert.equal(second.status, 201);
+      assert.match(second.body.data.customerNumber, CUSTOMER_NUMBER_RE);
+
+      assert.notEqual(first.body.data.customerNumber, second.body.data.customerNumber);
+      const firstN = Number(first.body.data.customerNumber.replace("CUST-", ""));
+      const secondN = Number(second.body.data.customerNumber.replace("CUST-", ""));
+      assert.ok(secondN > firstN, "the second creation must receive a strictly greater sequence number");
+    });
+
+    test("concurrent creates never produce a duplicate customerNumber", async () => {
+      const CONCURRENCY = 8;
+      const responses = await Promise.all(
+        Array.from({ length: CONCURRENCY }, () =>
+          request(app).post("/api/v1/customers").set(auth(tokens.dispatcher)).send(newCustomerPayload())
+        )
+      );
+      for (const res of responses) {
+        assert.equal(res.status, 201);
+        createdCustomerIds.push(res.body.data.id);
+      }
+      const numbers = responses.map((r) => r.body.data.customerNumber);
+      for (const n of numbers) assert.match(n, CUSTOMER_NUMBER_RE);
+      assert.equal(new Set(numbers).size, CONCURRENCY, "every concurrently created customer must get a distinct number");
     });
 
     test("no portal account is silently created", async () => {

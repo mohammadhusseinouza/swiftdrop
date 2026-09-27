@@ -6,7 +6,7 @@ export interface CardProps extends HTMLAttributes<HTMLDivElement> {
   flush?: boolean;
 }
 
-/** White surface with the standard SwiftDrop border + radius + shadow. */
+/** White surface with the standard Spring Cargo border + radius + shadow. */
 export function Card({ flush = false, className, children, ...rest }: CardProps) {
   return (
     <div

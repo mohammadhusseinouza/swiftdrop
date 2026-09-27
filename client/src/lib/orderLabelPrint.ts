@@ -5,6 +5,7 @@ import {
   getOrderStatusPresentation,
   getPaymentTypePresentation,
 } from '../components/orders/orderStatus';
+import { escapeHtml, printHtmlDocument } from './printHtmlDocument';
 
 /**
  * A5 Order Summary / Package Label — print-preview architecture.
@@ -30,16 +31,7 @@ import {
 /** Base name used for the print document's `<title>` (the browser's default "Save as PDF" filename). */
 export function getOrderLabelDocumentName(orderNumber: string): string {
   const safe = orderNumber.trim().replace(/[^A-Za-z0-9._-]+/g, '-');
-  return `SwiftDrop-${safe || 'order'}`;
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+  return `SpringCargo-${safe || 'order'}`;
 }
 
 /** Renders Code128 as an inline, viewBox-scaled SVG string — crisp at any print DPI, no image-load wait. */
@@ -187,7 +179,7 @@ function buildDocument(order: OrderDetail, barcodeSvg: string): string {
 <body>
 <div class="label">
   <div class="header">
-    <div class="brand">SwiftDrop</div>
+    <div class="brand">Spring Cargo</div>
     <div class="status">${escapeHtml(statusLabel)}</div>
   </div>
   <div class="header-sub">
@@ -251,39 +243,5 @@ export async function printOrderLabel(order: OrderDetail): Promise<void> {
   const barcodeSvg = await buildBarcodeSvg(order.trackingCode);
   const html = buildDocument(order, barcodeSvg);
 
-  const iframe = document.createElement('iframe');
-  iframe.setAttribute('aria-hidden', 'true');
-  iframe.style.position = 'fixed';
-  iframe.style.right = '0';
-  iframe.style.bottom = '0';
-  iframe.style.width = '0';
-  iframe.style.height = '0';
-  iframe.style.border = '0';
-  iframe.style.visibility = 'hidden';
-  document.body.appendChild(iframe);
-
-  const cleanup = () => {
-    iframe.parentNode?.removeChild(iframe);
-  };
-
-  const doc = iframe.contentDocument;
-  const win = iframe.contentWindow;
-  if (!doc || !win) {
-    cleanup();
-    throw new Error('Could not prepare the print preview.');
-  }
-
-  doc.open();
-  doc.write(html);
-  doc.close();
-
-  // `afterprint` fires once the browser's print dialog closes (print or
-  // cancel) — that is when it is safe to discard the iframe. Some older
-  // WebKit builds do not reliably fire it for iframe-hosted documents, so a
-  // bounded fallback timer guarantees cleanup regardless.
-  win.addEventListener('afterprint', cleanup, { once: true });
-  setTimeout(cleanup, 60_000);
-
-  win.focus();
-  win.print();
+  printHtmlDocument(html);
 }

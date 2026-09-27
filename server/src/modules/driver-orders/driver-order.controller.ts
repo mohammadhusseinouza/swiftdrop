@@ -131,13 +131,17 @@ export const failDriverOrderController: RequestHandler<
 };
 
 // POST /api/v1/driver/orders/:id/deliver (Phase 7.5) — the only client
-// input ever read is body.actualAmountCollected/body.collectionDifferenceReason,
-// both already shape-validated by DeliverOrderSchema (actualAmountCollected
-// is already a Prisma.Decimal by the time it reaches here — moneySchema
-// transforms it); every other field (expectedAmount, amountToCollect,
-// difference, needsFinancialReview, financialStatus, outcome,
-// attemptNumber, deliveredAt, driverId, currentDriverId, ...) is stripped
-// by Zod and never reaches this controller or the service below.
+// input ever read is body.actualAmountCollected/body.collectionDifferenceReason/
+// body.paymentMethodId, all already shape-validated by DeliverOrderSchema
+// (actualAmountCollected is already a Prisma.Decimal by the time it reaches
+// here — moneySchema transforms it); every other field (expectedAmount,
+// amountToCollect, difference, needsFinancialReview, financialStatus,
+// outcome, attemptNumber, deliveredAt, driverId, currentDriverId, ...) is
+// stripped by Zod and never reaches this controller or the service below.
+// paymentMethodId is OPTIONAL — omitted means the Order's existing
+// collection payment method is left unchanged; the Driver may correct it to
+// the method actually used at delivery (reuses orders.collection_payment_
+// method_id, no second payment-method concept).
 export const deliverDriverOrderController: RequestHandler<
   { id: string },
   ApiSuccessResponse<DriverOrderDetail>,
@@ -154,6 +158,7 @@ export const deliverDriverOrderController: RequestHandler<
       req.params.id,
       req.body.actualAmountCollected,
       req.body.collectionDifferenceReason ?? null,
+      req.body.paymentMethodId,
       req.actor.userId
     );
     res.json({ success: true, data: order });
