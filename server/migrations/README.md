@@ -1,5 +1,29 @@
 # server/migrations
 
+> **Superseded — Prisma Migrate is now the standard migration system.**
+>
+> New schema changes go in `server/prisma/migrations/` (create them with
+> `npx prisma migrate dev --create-only` against a development database, review the SQL,
+> commit). Production receives them only through `npx prisma migrate deploy`, run by
+> `server/scripts/build.mjs` during Vercel **Production** builds (never Preview, never local),
+> before `prisma generate` and `tsc` (`server/vercel.json` pins the Build Command to
+> `npm run build`). See the header of that script for the required
+> `PRISMA_MIGRATE_MODE` / `MIGRATION_DATABASE_URL` settings. Build logs show only counts
+> and fingerprints; to keep a private copy of the customer/driver number mapping, use
+> `scripts/export-number-mapping.mjs --out <file outside the repo>`.
+>
+> The two most recent files here were converted, byte-for-byte, into Prisma migrations:
+>
+> | Manual file | Prisma migration |
+> |---|---|
+> | `2026-09-22__5152__customer_driver_sequential_numbers.sql` | `prisma/migrations/20260922000000_customer_driver_sequential_numbers` |
+> | `2026-09-23__0923__payment_method_bypass_driver_cash.sql` | `prisma/migrations/20260923000000_payment_method_bypass_driver_cash` |
+>
+> The earlier files (`1117`, `1173`, `1174`) are already contained in the `0_init` baseline.
+> Do **not** run `apply.mjs` against a database managed by Prisma Migrate: it would change
+> the schema without recording it in `_prisma_migrations`. This directory is kept only as
+> history.
+
 ## Why this directory exists
 
 This project's PostgreSQL database was **bootstrapped from a hand-authored SQL script**

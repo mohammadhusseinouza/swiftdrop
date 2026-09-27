@@ -123,7 +123,7 @@ model customer_wallets {
 model customers {
   id                                    String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   portal_user_id                        String?               @unique @db.Uuid
-  customer_number                       String                @unique @default(dbgenerated("('CUST-' || lpad((nextval('customer_number_seq'::regclass))::text, 6, '0'))")) @db.VarChar(50)
+  customer_number                       String                @unique @default(dbgenerated("('CUST-'::text || lpad((nextval('customer_number_seq'::regclass))::text, 6, '0'::text))")) @db.VarChar(50)
   name                                  String                @db.VarChar(200)
   primary_phone                         String                @db.VarChar(30)
   secondary_phone                       String?               @db.VarChar(30)
@@ -235,7 +235,7 @@ model driver_settlements {
 model drivers {
   id                       String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   user_id                  String                     @unique @db.Uuid
-  driver_number            String                     @unique @default(dbgenerated("('DRV-' || lpad((nextval('driver_number_seq'::regclass))::text, 6, '0'))")) @db.VarChar(50)
+  driver_number            String                     @unique @default(dbgenerated("('DRV-'::text || lpad((nextval('driver_number_seq'::regclass))::text, 6, '0'::text))")) @db.VarChar(50)
   is_active                Boolean                    @default(true)
   created_at               DateTime                   @default(now()) @db.Timestamptz(3)
   updated_at               DateTime                   @default(now()) @db.Timestamptz(3)
