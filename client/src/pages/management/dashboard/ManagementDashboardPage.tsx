@@ -1,6 +1,6 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { RefreshCw } from 'lucide-react';
+import { CalendarCheck, RefreshCw } from 'lucide-react';
 
 import { paths } from '../../../routes/paths';
 import { useHasPermission } from '../../../features/auth/usePermissions';
@@ -29,6 +29,8 @@ import {
 } from '../drivers/driversListParams';
 
 import { MetricTile } from './MetricTile';
+import { FinalizeDayDialog } from './FinalizeDayDialog';
+import { getUtcDay } from '../../../lib/dailyDeliverySummary';
 import {
   activityLabel,
   activityReference,
@@ -67,6 +69,9 @@ export default function ManagementDashboardPage() {
   const canCreateSettlement = useHasPermission(PERMISSIONS.SETTLEMENTS_CREATE);
 
   const query = useGetDashboardQuery();
+  // Finalize Day (display-only summary). The UTC day is captured when the
+  // dialog opens so a long-lived tab never summarises a stale "today".
+  const [finalizeDay, setFinalizeDay] = useState<string | null>(null);
   const data = query.data;
 
   const quickActions = useMemo<{ label: string; to: string }[]>(() => {
@@ -135,6 +140,16 @@ export default function ManagementDashboardPage() {
       >
         Refresh
       </Button>
+      {/* The summary reads the Orders list, so it follows orders.read. */}
+      {canViewOrders && (
+        <Button
+          variant="secondary"
+          icon={<CalendarCheck />}
+          onClick={() => setFinalizeDay(getUtcDay().date)}
+        >
+          Finalize Day
+        </Button>
+      )}
       {canCreateOrder && (
         <Link
           to={paths.management.orderNew}
@@ -154,6 +169,14 @@ export default function ManagementDashboardPage() {
         description={`Operational overview · ${formatDateTime(data.generatedAt)}`}
         actions={headerActions}
       />
+
+      {canViewOrders && (
+        <FinalizeDayDialog
+          open={finalizeDay !== null}
+          date={finalizeDay ?? getUtcDay().date}
+          onClose={() => setFinalizeDay(null)}
+        />
+      )}
 
       {query.isError && data && (
         <div
