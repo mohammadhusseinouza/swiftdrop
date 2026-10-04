@@ -13,6 +13,8 @@ export interface MetricTileProps {
   to?: string;
   /** Visually lift the primary operational tiles. */
   emphasis?: boolean;
+  /** `cash` = subtle green treatment for the Finance Cash tile. */
+  tone?: 'default' | 'cash';
   className?: string;
 }
 
@@ -27,12 +29,18 @@ export function MetricTile({
   hint,
   to,
   emphasis = false,
+  tone = 'default',
   className,
 }: MetricTileProps) {
   const body = (
     <>
       <div className="flex items-start justify-between gap-2">
-        <p className="text-xs font-medium uppercase tracking-wide text-ink-muted">
+        <p
+          className={cn(
+            'text-xs font-medium uppercase tracking-wide',
+            tone === 'cash' ? 'text-success-700' : 'text-ink-muted',
+          )}
+        >
           {label}
         </p>
         {to && (
@@ -44,7 +52,8 @@ export function MetricTile({
       </div>
       <p
         className={cn(
-          'mt-1.5 font-semibold tracking-tight tabular-nums text-ink',
+          'mt-1.5 font-semibold tracking-tight tabular-nums',
+          tone === 'cash' ? 'text-success-700' : 'text-ink',
           emphasis ? 'text-3xl' : 'text-2xl',
         )}
       >
@@ -55,8 +64,10 @@ export function MetricTile({
   );
 
   const base = cn(
-    'rounded-card border bg-card p-4 shadow-card',
-    emphasis ? 'border-line-strong' : 'border-line',
+    'rounded-card border p-4 shadow-card',
+    tone === 'cash'
+      ? 'border-success-200 bg-success-50'
+      : cn('bg-card', emphasis ? 'border-line-strong' : 'border-line'),
     className,
   );
 

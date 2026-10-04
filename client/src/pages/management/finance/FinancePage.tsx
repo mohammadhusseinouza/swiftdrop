@@ -26,6 +26,7 @@ import { EmptyState } from '../../../components/feedback/EmptyState';
 import { ErrorState } from '../../../components/feedback/ErrorState';
 import { MD_QUERY, useMediaQuery } from '../../../lib/useMediaQuery';
 import { formatDate, formatMoney } from '../../../lib/format';
+import { formatCents, parseMoneyToCents } from '../../../lib/money';
 
 import { LedgerAdjustDialog } from '../../../components/finance/LedgerAdjustDialog';
 import { LedgerReverseDialog } from '../../../components/finance/LedgerReverseDialog';
@@ -50,11 +51,33 @@ import {
   type FinanceListState,
 } from './financeListParams';
 
+/** Signed backend decimal string -> integer cents (`null` when invalid). */
+function signedCents(value: string): bigint | null {
+  const raw = value.trim();
+  const negative = raw.startsWith('-');
+  const cents = parseMoneyToCents(negative ? raw.slice(1) : raw);
+  return cents === null ? null : negative ? -cents : cents;
+}
+
+/**
+ * Cash tile = Total collected − Customer payouts, exactly. Display-only:
+ * both inputs come straight from `GET /finance/summary`; exact bigint cents,
+ * no floating point. `null` (renders "—") if either value is malformed.
+ */
+function cashBalance(totalCollected: string, customerPayouts: string): string | null {
+  const collected = signedCents(totalCollected);
+  const payouts = signedCents(customerPayouts);
+  return collected === null || payouts === null
+    ? null
+    : formatCents(collected - payouts);
+}
+
 /**
  * Phase 11.12 — Management Finance.
  *
  * ONE data source per section: `GET /finance/summary` for the six+one
- * authoritative totals (never recomputed in React), `GET /finance/transactions`
+ * authoritative totals (never recomputed in React; the Cash tile is a
+ * display-only difference of two of them), `GET /finance/transactions`
  * for the unified append-only feed over all three ledgers. Date range + ledger
  * + type filters + page live in the URL; nothing is filtered/sorted/sliced
  * client-side. Corrections route to the ledger-specific backend endpoints.
@@ -313,13 +336,18 @@ export default function FinancePage() {
                 value={formatMoney(s.driverCashOutstanding)}
                 hint={`Balance ${rangeLabel} · held by drivers`}
               />
+              <MetricTile
+                label="Company revenue (net)"
+                value={formatMoney(s.companyRevenue)}
+                hint="Flow · signed net of every company-finance row incl. adjustments"
+              />
+              <MetricTile
+                tone="cash"
+                label="Cash"
+                value={formatMoney(cashBalance(s.totalCollected, s.customerPayouts))}
+                hint="Balance · collected minus customer payouts"
+              />
             </div>
-            <MetricTile
-              className="sm:max-w-sm"
-              label="Company revenue (net)"
-              value={formatMoney(s.companyRevenue)}
-              hint="Flow · signed net of every company-finance row incl. adjustments"
-            />
             {summary.isError && (
               <p role="alert" className="text-xs text-warning-700">
                 Showing the last loaded summary — the latest refresh failed.
