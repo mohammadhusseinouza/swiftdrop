@@ -27,7 +27,7 @@ import {
 import {
   CUSTOMER_FORM_DEFAULTS,
   CUSTOMER_FORM_FIELDS,
-  customerFormSchema,
+  buildCustomerFormSchema,
   customerToFormValues,
   toCreateCustomerRequest,
   toUpdateCustomerRequest,
@@ -84,6 +84,15 @@ export function CustomerFormDialog({
   const saving = creating || updating;
   const [formError, setFormError] = useState<string | null>(null);
 
+  const hasPortalAccount = isEdit && Boolean(customer?.hasPortalAccount);
+  // A login is never created for an inactive customer (backend 409).
+  const portalGrantBlocked =
+    isEdit && !hasPortalAccount && customer?.isActive === false;
+  const schema = useMemo(
+    () => buildCustomerFormSchema(hasPortalAccount),
+    [hasPortalAccount],
+  );
+
   const {
     register,
     handleSubmit,
@@ -91,7 +100,7 @@ export function CustomerFormDialog({
     setError,
     formState: { errors, isDirty },
   } = useForm<CustomerFormValues>({
-    resolver: zodResolver(customerFormSchema),
+    resolver: zodResolver(schema),
     mode: 'onTouched',
     defaultValues: CUSTOMER_FORM_DEFAULTS,
   });
@@ -245,10 +254,38 @@ export function CustomerFormDialog({
           <TextField
             label="Email"
             type="email"
+            required={hasPortalAccount}
             autoComplete="off"
+            hint={
+              hasPortalAccount
+                ? 'This is the address the customer signs in to the Customer Portal with.'
+                : undefined
+            }
             error={errors.email?.message}
             {...register('email')}
           />
+        </FormSection>
+
+        <FormSection title="Portal access">
+          {portalGrantBlocked ? (
+            <p className="text-sm text-ink-muted">
+              No portal account. Reactivate this customer before giving them
+              portal access.
+            </p>
+          ) : (
+            <TextField
+              label={hasPortalAccount ? 'New password' : 'Password'}
+              type="password"
+              autoComplete="new-password"
+              hint={
+                hasPortalAccount
+                  ? 'Leave blank to keep the current password. Setting a new one signs the customer out of the portal.'
+                  : 'Optional. At least 8 characters. Setting a password lets the customer sign in to the Customer Portal with their email. Share it with them securely.'
+              }
+              error={errors.portalPassword?.message}
+              {...register('portalPassword')}
+            />
+          )}
         </FormSection>
 
         <FormSection title="Default delivery">

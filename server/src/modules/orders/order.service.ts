@@ -25,7 +25,7 @@ import {
   assignParcelCollectionDriverTx,
 } from "../parcel-collection/parcel-collection.service";
 import {
-  ORDER_INITIAL_ASSIGNMENT_STATUSES,
+  ORDER_DELIVERY_ASSIGNABLE_STATUSES,
   PARCEL_NOT_READY_FOR_DELIVERY_MESSAGE,
   isParcelReadyForDelivery,
 } from "./order-lifecycle";
@@ -1049,22 +1049,22 @@ export async function getOrderById(id: string): Promise<OrderDetail> {
 // ============================================================
 // Update (Phase 6.4)
 //
-// LIFECYCLE DECISION (see the Phase 6.4 final report for the full
-// rationale): requirements.md defines what each OrderStatus MEANS but
-// never states whether generic business-data editing is allowed in it.
-// Conservative V1 policy adopted here:
-//   Editable:     RECEIVED, READY_FOR_PICKUP, ASSIGNED
-//   Not editable: PICKED_UP, OUT_FOR_DELIVERY, DELIVERED, FAILED_DELIVERY,
-//                 RESCHEDULED, RETURNED_TO_COMPANY, RETURNED_TO_CUSTOMER,
-//                 CANCELLED
-// ASSIGNED is included because it is still strictly before physical
-// pickup. RESCHEDULED is excluded even though it precedes another delivery
-// attempt, because it is itself the product of a controlled workflow
-// decision (Phase 6.6) whose next action should come from workflow logic,
-// not a generic field-level PATCH.
+// LIFECYCLE RULE (requirements.md "Edit orders before completion"): an
+// Order is editable in every status EXCEPT DELIVERED. DELIVERED is the hard
+// lock — it is the only status from which finalized financial effects
+// (driver cash, wallet credit, company revenue, direct collection) exist,
+// and "Delivered financial information should not be silently editable".
+// The authoritative check is orders.status, never delivered_at or ledger
+// rows. Editing never changes status, assignment, or parcel-collection
+// state — those stay with their dedicated workflow actions.
+//
+// Because OUT_FOR_DELIVERY is editable, deliverDriverOrder()/
+// failDriverOrder() guard their own claims on the financial fields they
+// read pre-transaction, so an edit that commits mid-delivery makes the
+// driver action 409 rather than post stale amounts.
 // ============================================================
 
-const EDITABLE_ORDER_STATUSES = new Set(["RECEIVED", "READY_FOR_PICKUP", "ASSIGNED"]);
+const DELIVERED_ORDER_NOT_EDITABLE_MESSAGE = "Delivered orders cannot be edited.";
 
 export async function updateOrder(id: string, input: OrderUpdateInput): Promise<OrderDetail> {
   const existing = await prisma.orders.findUnique({ where: { id } });
@@ -1072,12 +1072,8 @@ export async function updateOrder(id: string, input: OrderUpdateInput): Promise<
     throw new AppError({ statusCode: 404, code: "NOT_FOUND", message: "Order not found" });
   }
 
-  if (!EDITABLE_ORDER_STATUSES.has(existing.status)) {
-    throw new AppError({
-      statusCode: 400,
-      code: "VALIDATION_ERROR",
-      message: `Order cannot be edited while its status is ${existing.status}`,
-    });
+  if (existing.status === "DELIVERED") {
+    throw new AppError({ statusCode: 409, code: "CONFLICT", message: DELIVERED_ORDER_NOT_EDITABLE_MESSAGE });
   }
 
   // Unchecked variant: exposes raw scalar FK columns (customer_id,
@@ -1217,8 +1213,8 @@ export async function updateOrder(id: string, input: OrderUpdateInput): Promise<
   // updateMany-count-check pattern proven in Phase 6.5, instead of a blind
   // update-by-id. If a workflow transition won the race first, this affects
   // 0 rows and the PATCH safely fails with 409 rather than silently writing
-  // business data onto an Order that has already left the editable window
-  // (e.g. just got cancelled). This does not need to guard against every
+  // business data onto an Order whose status moved underneath it — most
+  // importantly one that was just DELIVERED. This does not need to guard against every
   // concurrent change — reassignment, for instance, only touches
   // assignment/current-driver fields that PATCH never writes, so the two
   // may safely proceed together while status stays ASSIGNED.
@@ -1235,10 +1231,14 @@ export async function updateOrder(id: string, input: OrderUpdateInput): Promise<
       data,
     });
     if (claim.count !== 1) {
+      const current = await tx.orders.findUnique({ where: { id }, select: { status: true } });
       throw new AppError({
         statusCode: 409,
         code: "CONFLICT",
-        message: "Order was changed by another request — please retry",
+        message:
+          current?.status === "DELIVERED"
+            ? DELIVERED_ORDER_NOT_EDITABLE_MESSAGE
+            : "Order was changed by another request — please retry",
       });
     }
   });
@@ -1434,10 +1434,12 @@ export async function listOrders(query: ListOrdersQuery): Promise<ListOrdersResu
 // /assign must be rejected in favor of /reassign.
 // ============================================================
 
-// ORDER_INITIAL_ASSIGNMENT_STATUSES (order-lifecycle.ts) is the shared
-// source — order-workflow-queue.ts's READY_FOR_DELIVERY_ASSIGNMENT queue
-// reuses the identical Set contents (Phase 11.17.6).
-const INITIAL_ASSIGNMENT_SOURCE_STATUSES = new Set<string>(ORDER_INITIAL_ASSIGNMENT_STATUSES);
+// ORDER_DELIVERY_ASSIGNABLE_STATUSES (order-lifecycle.ts) is the shared
+// source — order-workflow-queue.ts's READY_FOR_DELIVERY_ASSIGNMENT queue and
+// the dashboard "unassigned" count reuse the identical contents. Includes
+// RESCHEDULED (driverless only after an Unassign — see unassignOrder); the
+// current_driver_id = null checks keep RESCHEDULED-with-driver a Reassign case.
+const ASSIGN_SOURCE_STATUSES = new Set<string>(ORDER_DELIVERY_ASSIGNABLE_STATUSES);
 
 // CONCURRENCY DESIGN (assign, reassign, and bulk-assign all follow this
 // shape): the initial read happens OUTSIDE the transaction purely to
@@ -1467,7 +1469,7 @@ export async function assignOrder(orderId: string, driverId: string, actorUserId
       message: "Order already has an assigned driver — use reassign instead",
     });
   }
-  if (!INITIAL_ASSIGNMENT_SOURCE_STATUSES.has(existing.status)) {
+  if (!ASSIGN_SOURCE_STATUSES.has(existing.status)) {
     throw new AppError({
       statusCode: 400,
       code: "VALIDATION_ERROR",
@@ -1668,6 +1670,121 @@ export async function reassignOrder(
   return getOrderById(orderId);
 }
 
+// POST /:id/unassign — removes the current delivery driver BEFORE pickup and
+// returns the Order to the unassigned queue.
+//
+// "The current assignment has not been picked up" is exactly status ASSIGNED:
+// pickup is the only transition out of ASSIGNED (ASSIGNED -> PICKED_UP), and
+// every path INTO ASSIGNED opens a fresh assignment row. Any other status that
+// still carries a driver (PICKED_UP, OUT_FOR_DELIVERY, FAILED_DELIVERY,
+// RESCHEDULED, ...) means the driver has already taken possession.
+//
+// orders.picked_up_at is deliberately NOT consulted: it is an order-level
+// historical timestamp that stays set after an EARLIER driver's pickup (e.g.
+// pickup -> fail -> RESCHEDULED -> reassign to a new driver), whereas the rule
+// is about the CURRENT driver only.
+//
+// The restored status is the one the Order was in before it entered ASSIGNED,
+// read from order_status_history (ASSIGNED -> reassign -> ASSIGNED writes no
+// row, so the latest "-> ASSIGNED" row always carries the original source):
+// RECEIVED, READY_FOR_PICKUP, or RESCHEDULED. A RESCHEDULED order left with no
+// driver can be assigned again (assignOrder) or cancelled (cancelOrder).
+//
+// Purely operational: no driver cash, wallet, company-finance or collection
+// field is touched.
+const UNASSIGN_END_REASON = "Driver unassigned";
+
+export async function unassignOrder(
+  orderId: string,
+  expectedDriverId: string,
+  actorUserId: string
+): Promise<OrderDetail> {
+  const existing = await prisma.orders.findUnique({ where: { id: orderId } });
+  if (!existing) {
+    throw new AppError({ statusCode: 404, code: "NOT_FOUND", message: "Order not found" });
+  }
+  if (existing.current_driver_id === null) {
+    throw new AppError({ statusCode: 409, code: "CONFLICT", message: "Order has no assigned driver to unassign" });
+  }
+  if (existing.current_driver_id !== expectedDriverId) {
+    throw new AppError({
+      statusCode: 409,
+      code: "CONFLICT",
+      message: "The order's assigned driver has changed — please reload and try again",
+    });
+  }
+  if (existing.status !== "ASSIGNED") {
+    throw new AppError({ statusCode: 409, code: "CONFLICT", message: "The driver cannot be unassigned after pickup." });
+  }
+  const currentAssignment = await assertConsistentCurrentAssignment(orderId, existing.current_driver_id);
+  const driverId = existing.current_driver_id;
+
+  const enteredAssigned = await prisma.order_status_history.findFirst({
+    where: { order_id: orderId, to_status: "ASSIGNED" },
+    orderBy: [{ created_at: "desc" }, { id: "desc" }],
+  });
+  const restoreStatus = enteredAssigned?.from_status ?? null;
+  if (!restoreStatus || !ASSIGN_SOURCE_STATUSES.has(restoreStatus)) {
+    console.error(
+      `[order.service] unassign integrity failure for order ${orderId}: ASSIGNED with no pickup but the ` +
+        `pre-assignment status is ${restoreStatus ?? "missing"}`
+    );
+    throw new AppError({
+      statusCode: 500,
+      code: "INTERNAL_ERROR",
+      message: "Order assignment history is inconsistent — action was not performed",
+    });
+  }
+
+  const now = new Date();
+
+  // Same concurrency shape as assign/reassign: the conditional claim re-states
+  // the exact state read above (same driver, still ASSIGNED).
+  // A concurrent pickup (-> PICKED_UP) or reassign (driver changes) makes it
+  // match 0 rows -> 409. Ending the assignment by its exact row id additionally
+  // rejects an A -> B -> A reassign interleaving (the row read above is no
+  // longer current). Any 409 rolls the whole transaction back.
+  await prisma.$transaction(async (tx) => {
+    const claim = await tx.orders.updateMany({
+      where: { id: orderId, status: "ASSIGNED", current_driver_id: driverId },
+      data: { status: restoreStatus, current_driver_id: null, assigned_at: null, updated_at: now },
+    });
+    if (claim.count !== 1) {
+      throw new AppError({
+        statusCode: 409,
+        code: "CONFLICT",
+        message: "Order was changed by another request — please retry",
+      });
+    }
+
+    const ended = await tx.order_assignments.updateMany({
+      where: { id: currentAssignment.id, is_current: true },
+      data: { is_current: false, ended_at: now, end_reason: UNASSIGN_END_REASON },
+    });
+    if (ended.count !== 1) {
+      throw new AppError({
+        statusCode: 409,
+        code: "CONFLICT",
+        message: "Order was changed by another request — please retry",
+      });
+    }
+
+    // The ended assignment row keeps the previous driver; this row records
+    // who unassigned and when.
+    await tx.order_status_history.create({
+      data: {
+        order_id: orderId,
+        from_status: "ASSIGNED",
+        to_status: restoreStatus,
+        changed_by_id: actorUserId,
+        reason: UNASSIGN_END_REASON,
+      },
+    });
+  });
+
+  return getOrderById(orderId);
+}
+
 export async function bulkAssignOrders(
   orderIds: string[],
   driverId: string,
@@ -1693,7 +1810,7 @@ export async function bulkAssignOrders(
         message: `Order ${order.order_number} already has an assigned driver`,
       });
     }
-    if (!INITIAL_ASSIGNMENT_SOURCE_STATUSES.has(order.status)) {
+    if (!ASSIGN_SOURCE_STATUSES.has(order.status)) {
       throw new AppError({
         statusCode: 400,
         code: "VALIDATION_ERROR",
@@ -1937,8 +2054,10 @@ export async function rescheduleOrder(
 
 // POST /:id/cancel
 const CANCELLABLE_STATUSES = new Set(["RECEIVED", "READY_FOR_PICKUP", "ASSIGNED", "FAILED_DELIVERY", "RESCHEDULED"]);
-// These three statuses always carry an active current-driver assignment
-// that cancellation must close; RECEIVED/READY_FOR_PICKUP never do.
+// These three statuses carry an active current-driver assignment that
+// cancellation must close; RECEIVED/READY_FOR_PICKUP never do. Exception:
+// RESCHEDULED with no current driver (its new driver was unassigned before
+// pickup — see unassignOrder) has no assignment to close.
 const CANCEL_STATUSES_WITH_ACTIVE_ASSIGNMENT = new Set(["ASSIGNED", "FAILED_DELIVERY", "RESCHEDULED"]);
 
 export async function cancelOrder(
@@ -1998,14 +2117,16 @@ export async function cancelOrder(
     });
   }
 
-  const hasActiveAssignment = CANCEL_STATUSES_WITH_ACTIVE_ASSIGNMENT.has(existing.status);
+  const hasActiveAssignment =
+    CANCEL_STATUSES_WITH_ACTIVE_ASSIGNMENT.has(existing.status) &&
+    !(existing.status === "RESCHEDULED" && existing.current_driver_id === null);
   let currentAssignmentId: string | null = null;
 
   if (hasActiveAssignment) {
     const assignment = await assertConsistentCurrentAssignment(orderId, existing.current_driver_id);
     currentAssignmentId = assignment.id;
   } else if (existing.current_driver_id !== null) {
-    // RECEIVED/READY_FOR_PICKUP are expected to have no current driver.
+    // RECEIVED/READY_FOR_PICKUP (and driverless RESCHEDULED) have no current driver.
     console.error(
       `[order.service] data-consistency failure for order ${orderId}: ${existing.status} order unexpectedly ` +
         `has current_driver_id=${existing.current_driver_id}`

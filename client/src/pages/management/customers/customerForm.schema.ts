@@ -19,12 +19,18 @@ import type { CustomerDetail } from '../../../services/domain.types';
  *   - email is lowercased + validated as an email by the backend.
  *   - secondaryPhone / email / defaultAddress / notes / defaultAreaId are all
  *     optional; on PATCH, `null` clears them.
+ *   - portalPassword (Customer Portal login, same rule as the Driver initial
+ *     password) is optional and never prefilled. The customer signs in with
+ *     their email, so a password requires an email, and an email cannot be
+ *     cleared while a portal account exists. Blank -> sent as omitted, so an
+ *     existing password is never changed by an ordinary edit.
  */
 
 const NAME_MAX = 200;
 const PHONE_MAX = 30;
 const EMAIL_MAX = 255;
 const ADDRESS_MAX = 500;
+const PASSWORD_MIN = 8;
 
 const optionalEmail = z
   .string()
@@ -53,15 +59,33 @@ const baseShape = {
     .max(ADDRESS_MAX, `At most ${ADDRESS_MAX} characters`),
   defaultAreaId: optionalUuid,
   notes: z.string().trim(),
+  portalPassword: z
+    .string()
+    .refine(
+      (v) => v === '' || v.length >= PASSWORD_MIN,
+      `Password must be at least ${PASSWORD_MIN} characters`,
+    ),
 };
 
 /**
  * One schema / one form type for both create and edit — customerNumber is
- * never part of it; the backend generates it.
+ * never part of it; the backend generates it. `hasPortalAccount` is the
+ * customer's current state (false on create).
  */
-export const customerFormSchema = z.object({
-  ...baseShape,
-});
+export function buildCustomerFormSchema(hasPortalAccount: boolean) {
+  return z.object({ ...baseShape }).superRefine((values, ctx) => {
+    const needsEmail = hasPortalAccount || values.portalPassword !== '';
+    if (needsEmail && values.email.trim() === '') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['email'],
+        message: 'Email is required for portal access — the customer signs in with it',
+      });
+    }
+  });
+}
+
+export const customerFormSchema = buildCustomerFormSchema(false);
 
 export type CustomerFormValues = z.infer<typeof customerFormSchema>;
 
@@ -73,6 +97,7 @@ export const CUSTOMER_FORM_DEFAULTS: CustomerFormValues = {
   defaultAddress: '',
   defaultAreaId: '',
   notes: '',
+  portalPassword: '',
 };
 
 export function customerToFormValues(
@@ -86,6 +111,8 @@ export function customerToFormValues(
     defaultAddress: customer.defaultAddress ?? '',
     defaultAreaId: customer.area?.id ?? '',
     notes: customer.notes ?? '',
+    // Never prefilled — blank keeps the current password.
+    portalPassword: '',
   };
 }
 
@@ -109,6 +136,8 @@ export function toCreateCustomerRequest(
     defaultAddress: trimmedOrUndefined(values.defaultAddress),
     defaultAreaId: trimmedOrUndefined(values.defaultAreaId),
     notes: trimmedOrUndefined(values.notes),
+    // Passwords are sent exactly as typed (never trimmed); blank = no portal account.
+    portalPassword: values.portalPassword === '' ? undefined : values.portalPassword,
   };
 }
 
@@ -128,6 +157,10 @@ export function toUpdateCustomerRequest(
     defaultAddress: trimmedOrNull(values.defaultAddress),
     defaultAreaId: trimmedOrNull(values.defaultAreaId),
     notes: trimmedOrNull(values.notes),
+    // Blank -> omitted -> the current password (if any) is left unchanged.
+    ...(values.portalPassword === ''
+      ? {}
+      : { portalPassword: values.portalPassword }),
   };
 }
 
@@ -139,4 +172,5 @@ export const CUSTOMER_FORM_FIELDS = new Set<string>([
   'defaultAddress',
   'defaultAreaId',
   'notes',
+  'portalPassword',
 ]);

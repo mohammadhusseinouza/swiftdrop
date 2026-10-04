@@ -1171,20 +1171,23 @@ describe("Driver Workflow integration (Phase 7.6)", () => {
       assert.deepEqual(toStatuses, ["RECEIVED", "ASSIGNED", "PICKED_UP", "OUT_FOR_DELIVERY", "FAILED_DELIVERY"]);
     });
 
-    test("Management cannot generic-PATCH a DELIVERED or FAILED_DELIVERY order's workflow fields", async () => {
+    test("Management generic-PATCH: DELIVERED is locked (409); FAILED_DELIVERY is editable without changing workflow state", async () => {
       const driverDelivered = await createDriverWithToken("driver-patch-delivered");
       const deliveredOrder = await createOutForDeliveryOrder(driverDelivered.token, driverDelivered.driverId);
       await deliver(deliveredOrder, driverDelivered.token, { actualAmountCollected: "105.00" });
       const patchDelivered = await request(app).patch(mgmtDetailPath(deliveredOrder)).set(auth(tokens.admin)).send({ description: "no" });
-      assert.equal(patchDelivered.status, 400);
-      assert.equal(patchDelivered.body.error.code, "VALIDATION_ERROR");
+      assert.equal(patchDelivered.status, 409);
+      assert.equal(patchDelivered.body.error.code, "CONFLICT");
 
       const driverFailed = await createDriverWithToken("driver-patch-failed");
       const failedOrder = await createOutForDeliveryOrder(driverFailed.token, driverFailed.driverId);
       await fail(failedOrder, driverFailed.token, { failedReasonId: reasonNoNotesId });
       const patchFailed = await request(app).patch(mgmtDetailPath(failedOrder)).set(auth(tokens.admin)).send({ description: "no" });
-      assert.equal(patchFailed.status, 400);
-      assert.equal(patchFailed.body.error.code, "VALIDATION_ERROR");
+      assert.equal(patchFailed.status, 200, JSON.stringify(patchFailed.body));
+      const failedRow = await prisma.orders.findUniqueOrThrow({ where: { id: failedOrder } });
+      assert.equal(failedRow.description, "no");
+      assert.equal(failedRow.status, "FAILED_DELIVERY");
+      assert.equal(failedRow.current_driver_id, driverFailed.driverId);
     });
   });
 

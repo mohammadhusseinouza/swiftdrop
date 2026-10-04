@@ -12,6 +12,7 @@ import {
   readyOrder,
   rescheduleOrder,
   resolveCollectionDifference,
+  unassignOrder,
   updateOrder,
 } from "./order.service";
 import { getOrderTimeline } from "./order-timeline.service";
@@ -25,6 +26,7 @@ import type {
   ReassignOrderInput,
   ResolveCollectionDifferenceInput,
   RescheduleOrderInput,
+  UnassignOrderInput,
 } from "./order.schema";
 import type { BulkAssignResult, OrderDetail, OrderHistoryResponse, OrderSummary } from "./order.types";
 import type { OrderTimelineEvent } from "./order-timeline.types";
@@ -113,6 +115,23 @@ export const reassignOrderController: RequestHandler<
     }
 
     const order = await reassignOrder(req.params.id, req.body.driverId, req.body.reason, req.actor.userId);
+    res.json({ success: true, data: order });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const unassignOrderController: RequestHandler<
+  { id: string },
+  ApiSuccessResponse<OrderDetail>,
+  UnassignOrderInput
+> = async (req, res, next) => {
+  try {
+    if (!req.actor) {
+      throw new AppError({ statusCode: 401, code: "UNAUTHORIZED", message: "Authentication required" });
+    }
+
+    const order = await unassignOrder(req.params.id, req.body.driverId, req.actor.userId);
     res.json({ success: true, data: order });
   } catch (error) {
     next(error);

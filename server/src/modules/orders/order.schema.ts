@@ -260,6 +260,15 @@ export const ReassignOrderSchema = z.object({
 
 export type ReassignOrderInput = z.infer<typeof ReassignOrderSchema>;
 
+// driverId is the driver the caller expects to be removing (the one they saw
+// as current). A stale view — e.g. another manager reassigned in between —
+// gets a 409 instead of silently unassigning the newly assigned driver.
+export const UnassignOrderSchema = z.object({
+  driverId: z.string().uuid(),
+});
+
+export type UnassignOrderInput = z.infer<typeof UnassignOrderSchema>;
+
 export const BulkAssignOrdersSchema = z
   .object({
     orderIds: z

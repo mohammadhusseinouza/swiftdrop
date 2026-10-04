@@ -47,6 +47,9 @@ import {
   type EditOrderFormValues,
 } from './editOrder.schema';
 
+/** Exact backend message for an edit rejected because the order is DELIVERED. */
+const DELIVERED_ORDER_NOT_EDITABLE_MESSAGE = 'Delivered orders cannot be edited.';
+
 const PAYMENT_TYPE_OPTIONS = [
   { value: 'CASH_ON_DELIVERY', label: 'Cash on Delivery' },
   { value: 'ALREADY_PAID', label: 'Already Paid' },
@@ -231,8 +234,13 @@ export function EditOrderDialog({
       const status = getApiErrorStatus(err);
       const code = getApiErrorCode(err);
       if (status === 409 || code === 'CONFLICT') {
+        // The order was delivered after this dialog opened — the backend
+        // rejects the edit; surface that exact reason instead of a generic one.
+        const serverMessage = getApiErrorMessage(err);
         setFormError(
-          'This order changed while you were editing it. Close and review the latest details before trying again.',
+          serverMessage === DELIVERED_ORDER_NOT_EDITABLE_MESSAGE
+            ? serverMessage
+            : 'This order changed while you were editing it. Close and review the latest details before trying again.',
         );
         onStale();
         return;

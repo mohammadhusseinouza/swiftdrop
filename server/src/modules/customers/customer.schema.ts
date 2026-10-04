@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MIN_PASSWORD_LENGTH } from "../auth/auth.schema";
 
 const NAME_MAX_LENGTH = 200;
 const PHONE_MAX_LENGTH = 30;
@@ -6,6 +7,16 @@ const EMAIL_MAX_LENGTH = 255;
 const ADDRESS_MAX_LENGTH = 500;
 
 const uuid = z.string().uuid();
+
+// Customer Portal login password (same rule as Driver new-login). Optional:
+// a customer without one has no portal account. The login identifier is the
+// customer's own email, so a password requires an email. Never stored on the
+// customers row — only a bcrypt hash on the linked users row.
+const portalPasswordField = z
+  .string()
+  .min(MIN_PASSWORD_LENGTH, `Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
+
+export const PORTAL_EMAIL_REQUIRED_MESSAGE = "Email is required for portal access — the customer signs in with it";
 
 export const CustomerIdParamSchema = z.object({
   id: uuid,
@@ -24,6 +35,11 @@ export const CreateCustomerSchema = z.object({
   defaultAddress: z.string().trim().min(1).max(ADDRESS_MAX_LENGTH).optional(),
   defaultAreaId: uuid.optional(),
   notes: z.string().trim().min(1).optional(),
+  portalPassword: portalPasswordField.optional(),
+}).superRefine((data, ctx) => {
+  if (data.portalPassword !== undefined && !data.email) {
+    ctx.addIssue({ code: "custom", path: ["email"], message: PORTAL_EMAIL_REQUIRED_MESSAGE });
+  }
 });
 
 export type CreateCustomerInput = z.infer<typeof CreateCustomerSchema>;
@@ -41,6 +57,9 @@ export const UpdateCustomerSchema = z
     defaultAreaId: uuid.nullable().optional(),
     notes: z.string().trim().min(1).nullable().optional(),
     isActive: z.boolean().optional(),
+    // No portal account yet -> grants one; existing account -> sets a new
+    // password. Omitted -> the current password is left unchanged.
+    portalPassword: portalPasswordField.optional(),
   })
   .refine((data) => Object.keys(data).length > 0, { message: "At least one field must be provided" });
 

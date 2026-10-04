@@ -12,6 +12,7 @@ import {
   useReadyOrderMutation,
   useReassignOrderMutation,
   useRescheduleOrderMutation,
+  useUnassignOrderMutation,
 } from '../../../../services/ordersApi';
 import {
   getApiErrorCode,
@@ -29,6 +30,7 @@ import { StatusBadge } from '../../../../components/orders/StatusBadge';
 import { OrderTypeBadge } from '../../../../components/orders/OrderTypeBadge';
 import { LoadingState } from '../../../../components/feedback/LoadingState';
 import { ErrorState } from '../../../../components/feedback/ErrorState';
+import { ConfirmationModal } from '../../../../components/feedback/ConfirmationModal';
 
 import { getOrderDetailActions } from './orderDetailActions';
 import { ActionMenu, type ActionMenuItem } from './ActionMenu';
@@ -48,7 +50,14 @@ import {
   TimelineSection,
 } from './sections';
 
-type DialogKind = 'assign' | 'reassign' | 'reschedule' | 'cancel' | 'edit' | null;
+type DialogKind =
+  | 'assign'
+  | 'reassign'
+  | 'unassign'
+  | 'reschedule'
+  | 'cancel'
+  | 'edit'
+  | null;
 
 interface CreatedNavState {
   justCreated?: boolean;
@@ -108,6 +117,7 @@ export default function OrderDetailPage() {
   const [ready, readyState] = useReadyOrderMutation();
   const [assign, assignState] = useAssignOrderMutation();
   const [reassign, reassignState] = useReassignOrderMutation();
+  const [unassign, unassignState] = useUnassignOrderMutation();
   const [reschedule, rescheduleState] = useRescheduleOrderMutation();
   const [cancel, cancelState] = useCancelOrderMutation();
 
@@ -115,6 +125,7 @@ export default function OrderDetailPage() {
     readyState.isLoading ||
     assignState.isLoading ||
     reassignState.isLoading ||
+    unassignState.isLoading ||
     rescheduleState.isLoading ||
     cancelState.isLoading;
 
@@ -296,6 +307,13 @@ export default function OrderDetailPage() {
     disabled: printing,
     onSelect: printLabel,
   });
+  if (actions.canUnassign) {
+    menuItems.push({
+      key: 'unassign',
+      label: 'Unassign driver',
+      onSelect: () => openDialog('unassign'),
+    });
+  }
   if (actions.canReschedule) {
     menuItems.push({
       key: 'reschedule',
@@ -526,6 +544,39 @@ export default function OrderDetailPage() {
             true,
           )
         }
+      />
+
+      <ConfirmationModal
+        open={dialog === 'unassign'}
+        title="Unassign driver?"
+        description={
+          <div className="space-y-3">
+            <p>
+              This will remove{' '}
+              <span className="font-medium">
+                {currentDriverLabel ?? 'the assigned driver'}
+              </span>{' '}
+              from this order and return the order to the unassigned queue.
+            </p>
+            {dialogError && (
+              <p role="alert" className="text-xs text-danger-700">
+                {dialogError}
+              </p>
+            )}
+          </div>
+        }
+        confirmLabel="Unassign driver"
+        confirmLoading={unassignState.isLoading}
+        onCancel={closeDialog}
+        onConfirm={() => {
+          const driverId = order.currentDriver?.id;
+          if (!driverId) return;
+          void runAction(
+            () => unassign({ id: order.id, driverId }).unwrap(),
+            'Driver unassigned.',
+            true,
+          );
+        }}
       />
 
       <ReasonDialog

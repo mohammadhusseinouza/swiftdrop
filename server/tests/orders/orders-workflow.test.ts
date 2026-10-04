@@ -738,17 +738,19 @@ describe("Orders workflow backend (Phase 6.6 — Ready / Reschedule / Cancel / H
       }
     });
 
-    test("a PATCH attempted after a status transition has already completed is rejected up front", async () => {
+    test("a PATCH after a cancel has completed edits the order but never changes its status (only DELIVERED is locked)", async () => {
       const order = await createBaseOrder();
       const cancel = await request(app).post(cancelPath(order.id)).set(auth(tokens.admin)).send({ reason: "cancel first" });
       assert.equal(cancel.status, 200);
+      const historyBefore = await prisma.order_status_history.count({ where: { order_id: order.id } });
 
-      const patch = await request(app).patch(`/api/v1/orders/${order.id}`).set(auth(tokens.admin)).send({ receiverName: "Too Late" });
-      assert.equal(patch.status, 400);
-      assert.equal(patch.body.error.code, "VALIDATION_ERROR");
+      const patch = await request(app).patch(`/api/v1/orders/${order.id}`).set(auth(tokens.admin)).send({ receiverName: "After Cancel" });
+      assert.equal(patch.status, 200, JSON.stringify(patch.body));
 
       const row = await prisma.orders.findUniqueOrThrow({ where: { id: order.id } });
-      assert.notEqual(row.receiver_name, "Too Late");
+      assert.equal(row.receiver_name, "After Cancel");
+      assert.equal(row.status, "CANCELLED");
+      assert.equal(await prisma.order_status_history.count({ where: { order_id: order.id } }), historyBefore);
     });
   });
 

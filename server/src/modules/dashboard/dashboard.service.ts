@@ -2,6 +2,7 @@ import { Prisma } from "../../generated/prisma/client";
 import { prisma } from "../../db/prisma";
 import { getUtcDayBoundary } from "../../shared/date/day-boundary";
 import { buildWorkflowQueueWhere, WORKFLOW_QUEUE_VALUES } from "../orders/order-workflow-queue";
+import { ORDER_DELIVERY_ASSIGNABLE_STATUSES } from "../orders/order-lifecycle";
 import type {
   DashboardActivityItem,
   DashboardAttention,
@@ -36,7 +37,6 @@ import type {
 // finance-summary.service.ts's from/to range parsing shares the exact same
 // UTC-midnight arithmetic instead of a second copy).
 
-const UNASSIGNED_STATUSES = ["RECEIVED", "READY_FOR_PICKUP"] as const;
 const ACTIVE_ASSIGNED_STATUSES = ["ASSIGNED", "PICKED_UP", "OUT_FOR_DELIVERY", "RESCHEDULED"] as const;
 const RETURNED_STATUSES = ["RETURNED_TO_COMPANY", "RETURNED_TO_CUSTOMER"] as const;
 
@@ -54,10 +54,9 @@ async function getOrderMetrics(dayBoundary: { start: Date; end: Date }): Promise
   const [
     ordersToday,
     readyForPickup,
-    // "unassigned" also asserts current_driver_id: null as a harmless,
-    // self-documenting invariant check — RECEIVED/READY_FOR_PICKUP orders
-    // are always unassigned by construction (see order.service.ts's assign
-    // claim), this never narrows the real result.
+    // "unassigned" = the shared delivery-assignable statuses AND no current
+    // driver. current_driver_id: null is load-bearing for RESCHEDULED (which
+    // normally keeps its driver and only lacks one after an Unassign).
     unassigned,
     assigned,
     outForDelivery,
@@ -71,7 +70,7 @@ async function getOrderMetrics(dayBoundary: { start: Date; end: Date }): Promise
   ] = await Promise.all([
     prisma.orders.count({ where: { created_at: { gte: start, lt: end } } }),
     prisma.orders.count({ where: { status: "READY_FOR_PICKUP" } }),
-    prisma.orders.count({ where: { status: { in: [...UNASSIGNED_STATUSES] }, current_driver_id: null } }),
+    prisma.orders.count({ where: { status: { in: [...ORDER_DELIVERY_ASSIGNABLE_STATUSES] }, current_driver_id: null } }),
     prisma.orders.count({ where: { status: "ASSIGNED" } }),
     prisma.orders.count({ where: { status: "OUT_FOR_DELIVERY" } }),
     prisma.orders.count({ where: { delivered_at: { gte: start, lt: end } } }),

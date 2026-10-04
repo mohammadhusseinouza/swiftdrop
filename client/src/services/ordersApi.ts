@@ -363,6 +363,28 @@ export const ordersApi = api.injectEndpoints({
       ],
     }),
 
+    // driverId = the driver being removed (the one the user saw as current);
+    // the backend 409s if the assignment changed in the meantime.
+    unassignOrder: builder.mutation<
+      OrderDetail,
+      { id: string; driverId: string }
+    >({
+      query: ({ id, driverId }) => ({
+        url: `/orders/${id}/unassign`,
+        method: 'POST',
+        body: { driverId },
+      }),
+      transformResponse: (r: ApiSuccessResponse<OrderDetail>) => unwrapData(r),
+      invalidatesTags: (_res, _err, { id }) => [
+        { type: 'Order', id },
+        { type: 'Order', id: 'LIST' },
+        { type: 'Driver', id: 'LIST' },
+        { type: 'DriverOrder', id: 'LIST' },
+        { type: 'Dashboard', id: 'ROOT' },
+        { type: 'Report', id: 'LIST' },
+      ],
+    }),
+
     bulkAssignOrders: builder.mutation<
       BulkAssignResult,
       { orderIds: string[]; driverId: string }
@@ -734,6 +756,7 @@ export const {
   useUpdateOrderMutation,
   useAssignOrderMutation,
   useReassignOrderMutation,
+  useUnassignOrderMutation,
   useBulkAssignOrdersMutation,
   useReadyOrderMutation,
   useRescheduleOrderMutation,

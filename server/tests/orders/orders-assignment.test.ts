@@ -394,7 +394,8 @@ describe("Orders assignment backend (Phase 6.5 — Assign / Reassign / Bulk Assi
       "OUT_FOR_DELIVERY",
       "DELIVERED",
       "FAILED_DELIVERY",
-      "RESCHEDULED",
+      // RESCHEDULED with no current driver is assignable since Unassign Driver
+      // (orders-unassign.test.ts); RESCHEDULED with a driver is still a 409.
       "RETURNED_TO_COMPANY",
       "RETURNED_TO_CUSTOMER",
       "CANCELLED",

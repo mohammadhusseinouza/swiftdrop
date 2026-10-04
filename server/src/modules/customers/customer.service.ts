@@ -3,10 +3,12 @@ import type { areas, customers } from "../../generated/prisma/client";
 import { prisma } from "../../db/prisma";
 import { AppError } from "../../shared/errors/app-error";
 import { createAuditLog } from "../../shared/audit/audit.service";
+import { hashPassword } from "../auth/auth.utils";
 import {
   ORDER_ACTIVE_STATUSES,
   ORDER_TERMINAL_STATUSES,
 } from "../orders/order-lifecycle";
+import { PORTAL_EMAIL_REQUIRED_MESSAGE } from "./customer.schema";
 import type { CreateCustomerInput, ListCustomersQuery, UpdateCustomerInput } from "./customer.schema";
 import type { CustomerDetail, CustomerOrderSummary, CustomerSummary } from "./customer.types";
 
@@ -64,6 +66,62 @@ function handleKnownCustomerError(error: unknown, fallbackMessage: string): neve
   }
 
   throw new AppError({ statusCode: 500, code: "INTERNAL_ERROR", message: fallbackMessage });
+}
+
+// ============================================================
+// Customer Portal account (same architecture as Driver new-login): a users
+// row with the role FORCED to CUSTOMER and a bcrypt password hash, linked via
+// customers.portal_user_id (unique — one portal account per customer). The
+// login identifier is the customer's own email. The users profile (name /
+// email / phone) is derived from the customer record and kept in sync on
+// edit. Passwords are never stored on customers, returned, logged or audited.
+// ============================================================
+
+const PORTAL_EMAIL_TAKEN_MESSAGE = "An account with this email already exists";
+const USER_NAME_MAX_LENGTH = 100;
+
+// users.first_name / last_name are NOT NULL VARCHAR(100); a customer has a
+// single display name, split on the first whitespace.
+function portalUserNames(name: string): { first_name: string; last_name: string } {
+  const trimmed = name.trim();
+  const idx = trimmed.search(/\s/);
+  const first = idx === -1 ? trimmed : trimmed.slice(0, idx);
+  const last = idx === -1 ? "" : trimmed.slice(idx + 1).trim();
+  return { first_name: first.slice(0, USER_NAME_MAX_LENGTH), last_name: last.slice(0, USER_NAME_MAX_LENGTH) };
+}
+
+async function assertPortalEmailAvailable(
+  tx: Prisma.TransactionClient,
+  email: string,
+  exceptUserId: string | null
+): Promise<void> {
+  const taken = await tx.users.findUnique({ where: { email } });
+  if (taken && taken.id !== exceptUserId) {
+    throw new AppError({ statusCode: 409, code: "CONFLICT", message: PORTAL_EMAIL_TAKEN_MESSAGE });
+  }
+}
+
+async function createPortalUserTx(
+  tx: Prisma.TransactionClient,
+  params: { email: string; name: string; phone: string; passwordHash: string }
+): Promise<string> {
+  const customerRole = await tx.roles.findUnique({ where: { code: "CUSTOMER" } });
+  if (!customerRole) {
+    throw new AppError({ statusCode: 500, code: "INTERNAL_ERROR", message: "CUSTOMER role is not configured" });
+  }
+  await assertPortalEmailAvailable(tx, params.email, null);
+  const user = await tx.users.create({
+    data: {
+      email: params.email,
+      password_hash: params.passwordHash,
+      ...portalUserNames(params.name),
+      phone: params.phone,
+      // Role is FORCED — never taken from the request body.
+      role_id: customerRole.id,
+      is_active: true,
+    },
+  });
+  return user.id;
 }
 
 // ============================================================
@@ -151,8 +209,27 @@ export async function listCustomers(query: ListCustomersQuery): Promise<ListCust
 }
 
 export async function createCustomer(input: CreateCustomerInput, createdByUserId: string): Promise<CustomerDetail> {
+  const grantsPortalAccess = input.portalPassword !== undefined;
+  if (grantsPortalAccess && !input.email) {
+    throw new AppError({ statusCode: 400, code: "VALIDATION_ERROR", message: PORTAL_EMAIL_REQUIRED_MESSAGE });
+  }
+  // bcrypt runs BEFORE the transaction so it never holds the transaction open.
+  const passwordHash = grantsPortalAccess ? await hashPassword(input.portalPassword as string) : null;
+
   try {
     return await prisma.$transaction(async (tx) => {
+      // Optional portal login, created first so a duplicate email (409) rolls
+      // the whole create back — no customer without its requested account.
+      const portalUserId =
+        passwordHash !== null
+          ? await createPortalUserTx(tx, {
+              email: input.email as string,
+              name: input.name,
+              phone: input.primaryPhone,
+              passwordHash,
+            })
+          : null;
+
       // customer_number is never supplied here — the column DEFAULT (backed
       // by customer_number_seq, an atomic Postgres sequence) generates the
       // next CUST-###### value on INSERT. See customer.schema.ts.
@@ -165,6 +242,7 @@ export async function createCustomer(input: CreateCustomerInput, createdByUserId
           default_address: input.defaultAddress,
           default_area_id: input.defaultAreaId,
           notes: input.notes,
+          portal_user_id: portalUserId,
           created_by_id: createdByUserId,
         },
         include: { areas: true },
@@ -189,6 +267,7 @@ export async function createCustomer(input: CreateCustomerInput, createdByUserId
           name: customer.name,
           primaryPhone: customer.primary_phone,
           isActive: customer.is_active,
+          hasPortalAccount: portalUserId !== null,
         },
         metadata: { defaultAreaId: customer.default_area_id },
       });
@@ -278,8 +357,92 @@ export async function updateCustomer(
     newValues.isActive = input.isActive;
   }
 
+  // Portal account handling. portalPassword omitted -> password unchanged.
+  const existingPortalUserId = existing.portal_user_id;
+  const portalAction: "GRANTED" | "PASSWORD_RESET" | null =
+    input.portalPassword === undefined ? null : existingPortalUserId === null ? "GRANTED" : "PASSWORD_RESET";
+  const resultingEmail = input.email !== undefined ? input.email : existing.email;
+
+  if (existingPortalUserId !== null && input.email === null) {
+    throw new AppError({
+      statusCode: 400,
+      code: "VALIDATION_ERROR",
+      message: "The email cannot be removed while the customer has portal access — it is their login",
+    });
+  }
+  if (portalAction === "GRANTED") {
+    if (!resultingEmail) {
+      throw new AppError({ statusCode: 400, code: "VALIDATION_ERROR", message: PORTAL_EMAIL_REQUIRED_MESSAGE });
+    }
+    // Never create a login for a customer that is (or is being made) inactive.
+    if (!(input.isActive ?? existing.is_active)) {
+      throw new AppError({
+        statusCode: 409,
+        code: "CONFLICT",
+        message: "Reactivate the customer before giving them portal access",
+      });
+    }
+  }
+  if (portalAction !== null) {
+    // Marker only — the password itself is never audited.
+    newValues.portalAccess = portalAction;
+  }
+  // bcrypt runs BEFORE the transaction so it never holds the transaction open.
+  const passwordHash = input.portalPassword !== undefined ? await hashPassword(input.portalPassword) : null;
+
   try {
     return await prisma.$transaction(async (tx) => {
+      if (portalAction === "GRANTED" && passwordHash !== null) {
+        const portalUserId = await createPortalUserTx(tx, {
+          email: resultingEmail as string,
+          name: input.name ?? existing.name,
+          phone: input.primaryPhone ?? existing.primary_phone,
+          passwordHash,
+        });
+        // Conditional link: a concurrent grant that linked first makes this
+        // match 0 rows -> 409, and the user created above is rolled back.
+        const linked = await tx.customers.updateMany({
+          where: { id, portal_user_id: null },
+          data: { portal_user_id: portalUserId },
+        });
+        if (linked.count !== 1) {
+          throw new AppError({
+            statusCode: 409,
+            code: "CONFLICT",
+            message: "Customer was changed by another request — please retry",
+          });
+        }
+      } else if (existingPortalUserId !== null) {
+        // Keep the existing login in sync with the customer record — never a
+        // second account. Customer deactivation does NOT touch users.is_active
+        // (same convention as Driver deactivation).
+        const userData: Prisma.usersUpdateInput = {};
+        if (input.email !== undefined && input.email !== null && input.email !== existing.email) {
+          await assertPortalEmailAvailable(tx, input.email, existingPortalUserId);
+          userData.email = input.email;
+        }
+        if (input.name !== undefined && input.name !== existing.name) {
+          Object.assign(userData, portalUserNames(input.name));
+        }
+        if (input.primaryPhone !== undefined && input.primaryPhone !== existing.primary_phone) {
+          userData.phone = input.primaryPhone;
+        }
+        if (passwordHash !== null) {
+          userData.password_hash = passwordHash;
+        }
+        if (Object.keys(userData).length > 0) {
+          userData.updated_at = new Date();
+          await tx.users.update({ where: { id: existingPortalUserId }, data: userData });
+        }
+        if (passwordHash !== null) {
+          // A reset password ends every existing portal session.
+          await tx.auth_sessions.updateMany({
+            where: { user_id: existingPortalUserId, revoked_at: null },
+            data: { revoked_at: new Date() },
+          });
+        }
+      }
+
       const customer = await tx.customers.update({
         where: { id },
         data: {

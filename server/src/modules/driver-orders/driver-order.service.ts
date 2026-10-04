@@ -416,10 +416,11 @@ export async function failDriverOrder(
     });
   }
   const startedAt = existing.out_for_delivery_at;
-  // amount_to_collect cannot change while status is OUT_FOR_DELIVERY — that
-  // status is not in updateOrder()'s EDITABLE_ORDER_STATUSES set (Phase
-  // 6.4), so there is no race to guard against here; the pre-transaction
-  // read is authoritative.
+  // Management may edit an OUT_FOR_DELIVERY order (only DELIVERED is
+  // locked), so this pre-transaction amount_to_collect is re-asserted in the
+  // conditional claim below: if an edit changed it in between, the claim
+  // affects 0 rows and this action 409s instead of snapshotting a stale
+  // expected collection onto the attempt.
   const expectedCollection = existing.amount_to_collect;
 
   // Failed-reason validation — a NEW attempt may only select an active,
@@ -455,7 +456,12 @@ export async function failDriverOrder(
 
   return prisma.$transaction(async (tx) => {
     const claim = await tx.orders.updateMany({
-      where: { id: orderId, status: "OUT_FOR_DELIVERY", current_driver_id: driverId },
+      where: {
+        id: orderId,
+        status: "OUT_FOR_DELIVERY",
+        current_driver_id: driverId,
+        amount_to_collect: expectedCollection,
+      },
       // picked_up_at/out_for_delivery_at/assigned_at/delivered_at/
       // cancelled_at are all deliberately untouched — see the module doc
       // comment above (out_for_delivery_at must survive as the permanent
@@ -648,9 +654,11 @@ export async function deliverDriverOrder(
   }
   const startedAt = existing.out_for_delivery_at;
   // Expected collection is ALWAYS server-derived from amount_to_collect —
-  // never accepted as client input. Safe to read pre-transaction: OUT_FOR_
-  // DELIVERY is not in updateOrder()'s EDITABLE_ORDER_STATUSES (Phase 6.4),
-  // so Management cannot concurrently change financial fields on this order.
+  // never accepted as client input. Management may edit an OUT_FOR_DELIVERY
+  // order (only DELIVERED is locked), so every editable field the posting
+  // below reads from this pre-transaction row is re-asserted in the
+  // conditional claim: an edit that commits in between makes the claim
+  // affect 0 rows and this action 409s instead of posting stale amounts.
   const expectedAmountToCollect = existing.amount_to_collect;
 
   // Reuses the approved Phase 6.1 domain function — never a duplicate
@@ -705,7 +713,16 @@ export async function deliverDriverOrder(
 
   return prisma.$transaction(async (tx) => {
     const claim = await tx.orders.updateMany({
-      where: { id: orderId, status: "OUT_FOR_DELIVERY", current_driver_id: driverId },
+      where: {
+        id: orderId,
+        status: "OUT_FOR_DELIVERY",
+        current_driver_id: driverId,
+        customer_id: existing.customer_id,
+        amount_to_collect: existing.amount_to_collect,
+        remaining_order_amount: existing.remaining_order_amount,
+        remaining_delivery_fee: existing.remaining_delivery_fee,
+        collection_payment_method_id: existing.collection_payment_method_id,
+      },
       // picked_up_at/out_for_delivery_at/assigned_at/cancelled_at are all
       // deliberately untouched — current_driver_id/assigned_at/the current
       // assignment row are preserved too (no field here clears them; see

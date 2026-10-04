@@ -574,15 +574,16 @@ describe("Orders update backend (Phase 6.4 — Order Editing)", () => {
   });
 
   // ===========================================================
-  // LIFECYCLE (50-58 + ASSIGNED/RESCHEDULED)
+  // LIFECYCLE — every status except DELIVERED is editable
   // ===========================================================
 
   describe("Lifecycle editability", () => {
-    const EDITABLE = ["RECEIVED", "READY_FOR_PICKUP", "ASSIGNED"];
-    const NOT_EDITABLE = [
+    const EDITABLE = [
+      "RECEIVED",
+      "READY_FOR_PICKUP",
+      "ASSIGNED",
       "PICKED_UP",
       "OUT_FOR_DELIVERY",
-      "DELIVERED",
       "FAILED_DELIVERY",
       "RESCHEDULED",
       "RETURNED_TO_COMPANY",
@@ -591,31 +592,109 @@ describe("Orders update backend (Phase 6.4 — Order Editing)", () => {
     ];
 
     for (const status of EDITABLE) {
-      test(`editable: ${status}`, async () => {
+      test(`editable: ${status} (persisted, status unchanged, no history row)`, async () => {
         const id = await seedTestOrder(customerActive, admin.id, {
           areaId: areaActive.id,
           areaName: areaActive.name,
           status: status as never,
         });
         createdOrderIds.push(id);
-        const res = await patchOrder(id, { receiverName: `Edited while ${status}` });
+        const historyBefore = await prisma.order_status_history.count({ where: { order_id: id } });
+
+        const res = await patchOrder(id, {
+          receiverName: `Edited while ${status}`,
+          orderAmount: "120.00",
+          collectionPaymentMethodId: cashMethodId,
+        });
         assert.equal(res.status, 200, `expected ${status} to be editable: ${JSON.stringify(res.body)}`);
+        assert.equal(res.body.data.status, status);
+
+        const row = await prisma.orders.findUniqueOrThrow({ where: { id } });
+        assert.equal(row.receiver_name, `Edited while ${status}`);
+        assert.equal(row.status, status, "an edit must never change the order status");
+        assert.equal(row.amount_to_collect.toString(), "125", "financials are recomputed server-side");
+        assert.equal(await prisma.order_status_history.count({ where: { order_id: id } }), historyBefore);
       });
     }
 
-    for (const status of NOT_EDITABLE) {
-      test(`not editable: ${status}`, async () => {
-        const id = await seedTestOrder(customerActive, admin.id, {
-          areaId: areaActive.id,
-          areaName: areaActive.name,
-          status: status as never,
-        });
-        createdOrderIds.push(id);
-        const res = await patchOrder(id, { receiverName: `Attempted edit while ${status}` });
-        assert.equal(res.status, 400, `expected ${status} to be rejected`);
-        assert.equal(res.body.error.code, "VALIDATION_ERROR");
+    test("not editable: DELIVERED -> 409, order row completely unchanged", async () => {
+      const id = await seedTestOrder(customerActive, admin.id, {
+        areaId: areaActive.id,
+        areaName: areaActive.name,
+        status: "DELIVERED",
       });
-    }
+      createdOrderIds.push(id);
+      const before = await prisma.orders.findUniqueOrThrow({ where: { id } });
+
+      const res = await patchOrder(id, { receiverName: "Attempted edit while DELIVERED", orderAmount: "999.00" });
+      assert.equal(res.status, 409, JSON.stringify(res.body));
+      assert.equal(res.body.success, false);
+      assert.equal(res.body.error.code, "CONFLICT");
+      assert.equal(res.body.error.message, "Delivered orders cannot be edited.");
+
+      const after = await prisma.orders.findUniqueOrThrow({ where: { id } });
+      assert.deepEqual(after, before, "a rejected delivered edit must not modify any column");
+    });
+
+    test("DELIVERED is rejected for DISPATCHER too (the lock is not role-dependent)", async () => {
+      const id = await seedTestOrder(customerActive, admin.id, {
+        areaId: areaActive.id,
+        areaName: areaActive.name,
+        status: "DELIVERED",
+      });
+      createdOrderIds.push(id);
+      const res = await patchOrder(id, { receiverName: "Dispatcher attempt" }, tokens.dispatcher);
+      assert.equal(res.status, 409);
+    });
+
+    test("permissions still apply on a non-delivered status: FINANCE / DRIVER / CUSTOMER -> 403 on OUT_FOR_DELIVERY", async () => {
+      const id = await seedTestOrder(customerActive, admin.id, {
+        areaId: areaActive.id,
+        areaName: areaActive.name,
+        status: "OUT_FOR_DELIVERY",
+      });
+      createdOrderIds.push(id);
+      for (const role of ["finance", "driver", "customer"]) {
+        const res = await patchOrder(id, { receiverName: `${role} attempt` }, tokens[role]);
+        assert.equal(res.status, 403, `expected ${role} to be forbidden`);
+      }
+      const row = await prisma.orders.findUniqueOrThrow({ where: { id } });
+      assert.ok(!row.receiver_name.endsWith(" attempt"), "a forbidden edit must not be persisted");
+    });
+
+    test("concurrency: an order DELIVERED after the edit read but before the write loses safely with 409", async () => {
+      const id = await seedTestOrder(customerActive, admin.id, {
+        areaId: areaActive.id,
+        areaName: areaActive.name,
+        status: "OUT_FOR_DELIVERY",
+      });
+      createdOrderIds.push(id);
+
+      // Simulate a driver delivery committing between updateOrder()'s
+      // pre-transaction status read and its conditional claim.
+      const originalTransaction = prisma.$transaction.bind(prisma);
+      (prisma as { $transaction: typeof prisma.$transaction }).$transaction = (async (
+        ...args: Parameters<typeof originalTransaction>
+      ) => {
+        await prisma.orders.update({ where: { id }, data: { status: "DELIVERED" } });
+        return (originalTransaction as (...a: typeof args) => Promise<unknown>)(...args);
+      }) as typeof prisma.$transaction;
+
+      let res: Awaited<ReturnType<typeof patchOrder>>;
+      try {
+        res = await patchOrder(id, { receiverName: "Racing edit", orderAmount: "500.00", collectionPaymentMethodId: cashMethodId });
+      } finally {
+        (prisma as { $transaction: typeof prisma.$transaction }).$transaction = originalTransaction;
+      }
+      assert.equal(res.status, 409, JSON.stringify(res.body));
+      assert.equal(res.body.error.code, "CONFLICT");
+      assert.equal(res.body.error.message, "Delivered orders cannot be edited.");
+
+      const row = await prisma.orders.findUniqueOrThrow({ where: { id } });
+      assert.equal(row.status, "DELIVERED");
+      assert.notEqual(row.receiver_name, "Racing edit");
+      assert.equal(row.order_amount.toString(), "100");
+    });
   });
 
   // ===========================================================

@@ -13,6 +13,7 @@ import {
   ReassignOrderSchema,
   ResolveCollectionDifferenceSchema,
   RescheduleOrderSchema,
+  UnassignOrderSchema,
 } from "./order.schema";
 import {
   assignOrderController,
@@ -27,6 +28,7 @@ import {
   readyOrderController,
   resolveCollectionDifferenceController,
   rescheduleOrderController,
+  unassignOrderController,
   updateOrderController,
 } from "./order.controller";
 
@@ -86,6 +88,15 @@ orderRouter.post(
   authorize("orders.assign"),
   validate({ params: OrderIdParamSchema, body: ReassignOrderSchema }),
   reassignOrderController
+);
+
+// Unassign — same permission family as assign/reassign (orders.assign).
+orderRouter.post(
+  "/:id/unassign",
+  authenticate,
+  authorize("orders.assign"),
+  validate({ params: OrderIdParamSchema, body: UnassignOrderSchema }),
+  unassignOrderController
 );
 
 orderRouter.post(

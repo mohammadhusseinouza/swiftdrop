@@ -34,6 +34,8 @@ export interface CreateCustomerRequest {
   defaultAddress?: string;
   defaultAreaId?: string;
   notes?: string;
+  /** Optional Customer Portal password — creates the linked CUSTOMER login (requires email). */
+  portalPassword?: string;
 }
 
 export interface UpdateCustomerRequest {
@@ -45,6 +47,8 @@ export interface UpdateCustomerRequest {
   defaultAreaId?: string | null;
   notes?: string | null;
   isActive?: boolean;
+  /** No portal account -> grants one; existing account -> new password. Omit to keep the current one. */
+  portalPassword?: string;
 }
 
 export const customersApi = api.injectEndpoints({

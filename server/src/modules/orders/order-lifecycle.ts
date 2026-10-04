@@ -37,9 +37,19 @@ export const ORDER_ACTIVE_STATUSES: readonly OrderStatus[] = [
 // inconsistent, definition — CLAUDE.md §18/§80).
 // ============================================================
 
-// The only two OrderStatus values a FINAL delivery driver may be assigned
-// from (order.service.ts's assignOrder / the "Create & Assign" path).
-export const ORDER_INITIAL_ASSIGNMENT_STATUSES: readonly OrderStatus[] = ["RECEIVED", "READY_FOR_PICKUP"] as const;
+// The OrderStatus values a FINAL delivery driver may be assigned from — always
+// together with current_driver_id IS NULL. An order is "awaiting delivery
+// assignment" exactly when it has no current driver and is in one of these.
+// RESCHEDULED only lacks a driver after its (re)assigned driver was unassigned
+// before pickup (order.service.ts's unassignOrder); a RESCHEDULED order that
+// still has its driver is a Reassign case, never an Assign one. Shared by
+// assignOrder / bulkAssignOrders / unassignOrder, the READY_FOR_DELIVERY_
+// ASSIGNMENT workflow queue, and the dashboard "unassigned" count.
+export const ORDER_DELIVERY_ASSIGNABLE_STATUSES: readonly OrderStatus[] = [
+  "RECEIVED",
+  "READY_FOR_PICKUP",
+  "RESCHEDULED",
+] as const;
 
 export const PARCEL_NOT_READY_FOR_DELIVERY_MESSAGE =
   "Parcel must be received at the company before assigning a delivery driver";

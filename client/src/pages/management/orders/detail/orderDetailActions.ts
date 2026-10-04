@@ -11,10 +11,11 @@ import type { OrderDetail } from '../../../../services/domain.types';
  * returns 400/409 and the page reloads the real state.
  *
  * Status gates below are copied from order.service.ts:
- *   edit        -> EDITABLE_ORDER_STATUSES            (RECEIVED, READY_FOR_PICKUP, ASSIGNED)
+ *   edit        -> updateOrder()                      (every status except DELIVERED)
  *   ready       -> readyOrder()                       (RECEIVED only)
- *   assign      -> INITIAL_ASSIGNMENT_SOURCE_STATUSES (RECEIVED, READY_FOR_PICKUP) + no current driver
+ *   assign      -> ASSIGN_SOURCE_STATUSES             (RECEIVED, READY_FOR_PICKUP, RESCHEDULED) + no current driver
  *   reassign    -> REASSIGNABLE_SOURCE_STATUSES       (ASSIGNED, RESCHEDULED) + has current driver
+ *   unassign    -> unassignOrder()                    (ASSIGNED + has current driver)
  *   reschedule  -> rescheduleOrder()                  (FAILED_DELIVERY only)
  *   cancel      -> CANCELLABLE_STATUSES               (RECEIVED, READY_FOR_PICKUP, ASSIGNED, FAILED_DELIVERY, RESCHEDULED)
  *
@@ -29,6 +30,8 @@ export interface OrderDetailActionAvailability {
   canMarkReady: boolean;
   canAssign: boolean;
   canReassign: boolean;
+  /** Remove the current driver before pickup (returns the order to the unassigned queue). */
+  canUnassign: boolean;
   canReschedule: boolean;
   canCancel: boolean;
   /**
@@ -46,12 +49,8 @@ export interface OrderDetailActionAvailability {
   hasAnyAction: boolean;
 }
 
-const EDITABLE_STATUSES = new Set([
-  'RECEIVED',
-  'READY_FOR_PICKUP',
-  'ASSIGNED',
-]);
-const INITIAL_ASSIGNMENT_STATUSES = new Set(['RECEIVED', 'READY_FOR_PICKUP']);
+// RESCHEDULED only ever lacks a driver after an Unassign before pickup.
+const ASSIGN_STATUSES = new Set(['RECEIVED', 'READY_FOR_PICKUP', 'RESCHEDULED']);
 const REASSIGNABLE_STATUSES = new Set(['ASSIGNED', 'RESCHEDULED']);
 const CANCELLABLE_STATUSES = new Set([
   'RECEIVED',
@@ -60,6 +59,20 @@ const CANCELLABLE_STATUSES = new Set([
   'FAILED_DELIVERY',
   'RESCHEDULED',
 ]);
+
+/**
+ * Edit eligibility rule: any status except DELIVERED (the hard lock — a
+ * delivered order carries finalized financial effects). Mirrors
+ * updateOrder() in order.service.ts, which remains the authoritative check.
+ */
+export function canEditOrder(
+  status: string,
+  permissions: readonly string[],
+): boolean {
+  return (
+    permissions.includes(PERMISSIONS.ORDERS_UPDATE) && status !== 'DELIVERED'
+  );
+}
 
 /**
  * Mark Ready eligibility rule (RECEIVED -> READY_FOR_PICKUP), extracted so it
@@ -76,6 +89,23 @@ export function canMarkReadyOrder(
   );
 }
 
+/**
+ * Unassign Driver eligibility rule. The CURRENT assignment has not been picked
+ * up exactly while the order is ASSIGNED — pickup is the only way out of
+ * ASSIGNED. `pickedUpAt` is deliberately ignored: it is an order-level
+ * historical timestamp that may belong to an earlier driver.
+ */
+export function canUnassignOrder(
+  order: Pick<OrderDetail, 'status' | 'currentDriver'>,
+  permissions: readonly string[],
+): boolean {
+  return (
+    permissions.includes(PERMISSIONS.ORDERS_ASSIGN) &&
+    order.currentDriver != null &&
+    order.status === 'ASSIGNED'
+  );
+}
+
 export function getOrderDetailActions(
   order: Pick<OrderDetail, 'status' | 'currentDriver' | 'parcelCollectionStatus'>,
   permissions: readonly string[],
@@ -86,19 +116,19 @@ export function getOrderDetailActions(
   const parcelReady = order.parcelCollectionStatus === 'RECEIVED_AT_COMPANY';
   const parcelInCustody = order.parcelCollectionStatus === 'COLLECTED_FROM_SENDER';
 
-  const canEdit =
-    has(PERMISSIONS.ORDERS_UPDATE) && EDITABLE_STATUSES.has(status);
+  const canEdit = canEditOrder(status, permissions);
   const canMarkReady = canMarkReadyOrder(status, permissions);
   const assignOtherwiseAvailable =
     has(PERMISSIONS.ORDERS_ASSIGN) &&
     !assigned &&
-    INITIAL_ASSIGNMENT_STATUSES.has(status);
+    ASSIGN_STATUSES.has(status);
   const canAssign = assignOtherwiseAvailable && parcelReady;
   const assignBlockedByParcel = assignOtherwiseAvailable && !parcelReady;
   const canReassign =
     has(PERMISSIONS.ORDERS_ASSIGN) &&
     assigned &&
     REASSIGNABLE_STATUSES.has(status);
+  const canUnassign = canUnassignOrder(order, permissions);
   const canReschedule =
     has(PERMISSIONS.ORDERS_CHANGE_STATUS) && status === 'FAILED_DELIVERY';
   const cancelOtherwiseAvailable =
@@ -111,6 +141,7 @@ export function getOrderDetailActions(
     canMarkReady,
     canAssign,
     canReassign,
+    canUnassign,
     canReschedule,
     canCancel,
     assignBlockedByParcel,
@@ -120,6 +151,7 @@ export function getOrderDetailActions(
       canMarkReady ||
       canAssign ||
       canReassign ||
+      canUnassign ||
       canReschedule ||
       canCancel,
   };

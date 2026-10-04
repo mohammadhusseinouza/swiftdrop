@@ -1,5 +1,5 @@
 import type { Prisma } from "../../generated/prisma/client";
-import { ORDER_INITIAL_ASSIGNMENT_STATUSES, ORDER_TERMINAL_STATUSES } from "./order-lifecycle";
+import { ORDER_DELIVERY_ASSIGNABLE_STATUSES, ORDER_TERMINAL_STATUSES } from "./order-lifecycle";
 
 // ============================================================
 // Parcel Intake & Collection operational queues (Phase 11.17.6).
@@ -71,10 +71,12 @@ export function buildWorkflowQueueWhere(queue: WorkflowQueue): Prisma.ordersWher
         current_parcel_collection_driver_id: { not: null },
       };
     case "READY_FOR_DELIVERY_ASSIGNMENT":
-      // Already restricted to RECEIVED/READY_FOR_PICKUP, both non-terminal —
-      // no separate terminal-status filter needed.
+      // Already restricted to RECEIVED/READY_FOR_PICKUP/RESCHEDULED, all
+      // non-terminal — no separate terminal-status filter needed. The
+      // current_driver_id IS NULL condition keeps a RESCHEDULED order that
+      // still has its driver (a Reassign case) out of this queue.
       return {
-        status: { in: [...ORDER_INITIAL_ASSIGNMENT_STATUSES] },
+        status: { in: [...ORDER_DELIVERY_ASSIGNABLE_STATUSES] },
         current_driver_id: null,
         parcel_collection_status: "RECEIVED_AT_COMPANY",
       };
