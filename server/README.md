@@ -1,6 +1,6 @@
-# Spring Cargo Server
+# Spring Delivery Server
 
-Backend for the Spring Cargo delivery management system (Node.js + Express +
+Backend for the Spring Delivery delivery management system (Node.js + Express +
 PostgreSQL + Prisma).
 
 ## Getting started

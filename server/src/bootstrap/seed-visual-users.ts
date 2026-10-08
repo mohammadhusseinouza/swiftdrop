@@ -6,7 +6,7 @@ import { AppError } from "../shared/errors/app-error";
 /**
  * DEVELOPMENT-ONLY visual acceptance seed users.
  *
- * Creates deterministic, idempotent accounts so the Spring Cargo UI can be
+ * Creates deterministic, idempotent accounts so the Spring Delivery UI can be
  * reviewed under every role. Run with:  npm run seed:visual
  *
  * SAFETY:

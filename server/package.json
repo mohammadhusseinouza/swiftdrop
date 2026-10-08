@@ -1,8 +1,8 @@
 {
-  "name": "spring-cargo-server",
+  "name": "spring-delivery-server",
   "version": "0.1.0",
   "private": true,
-  "description": "Spring Cargo delivery management system backend",
+  "description": "Spring Delivery delivery management system backend",
   "main": "dist/server.js",
   "engines": {
     "node": "^20.19.0 || ^22.12.0 || ^24.0.0"

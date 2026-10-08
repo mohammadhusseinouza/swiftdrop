@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
-  /** Base URL of the Spring Cargo backend API, e.g. http://localhost:3000/api/v1 */
+  /** Base URL of the Spring Delivery backend API, e.g. http://localhost:3000/api/v1 */
   readonly VITE_API_BASE_URL: string;
 }
 

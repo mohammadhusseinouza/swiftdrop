@@ -31,7 +31,7 @@ import { escapeHtml, printHtmlDocument } from './printHtmlDocument';
 /** Base name used for the print document's `<title>` (the browser's default "Save as PDF" filename). */
 export function getOrderLabelDocumentName(orderNumber: string): string {
   const safe = orderNumber.trim().replace(/[^A-Za-z0-9._-]+/g, '-');
-  return `SpringCargo-${safe || 'order'}`;
+  return `SpringDelivery-${safe || 'order'}`;
 }
 
 /** Renders Code128 as an inline, viewBox-scaled SVG string — crisp at any print DPI, no image-load wait. */
@@ -179,7 +179,7 @@ function buildDocument(order: OrderDetail, barcodeSvg: string): string {
 <body>
 <div class="label">
   <div class="header">
-    <div class="brand">Spring Cargo</div>
+    <div class="brand">Spring Delivery</div>
     <div class="status">${escapeHtml(statusLabel)}</div>
   </div>
   <div class="header-sub">

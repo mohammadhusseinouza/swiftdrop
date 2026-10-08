@@ -112,7 +112,7 @@ export function getCustomerOrdersInvoiceDocumentName(
   to: string,
 ): string {
   const safe = customerNumber.trim().replace(/[^A-Za-z0-9._-]+/g, '-');
-  return `SpringCargo-Orders-${safe || 'customer'}-${from}_${to}`;
+  return `SpringDelivery-Orders-${safe || 'customer'}-${from}_${to}`;
 }
 
 // Same mark as the app's sidebar brand icon (lucide "truck").
@@ -192,6 +192,7 @@ const INVOICE_CSS = `
     display: flex; justify-content: space-between; gap: 4mm;
     padding: 1.4mm 2.5mm; font-size: 9pt; border-bottom: 0.5pt solid #999;
   }
+  .summary-row:last-child { border-bottom: 0; }
   .summary-row .label { color: #222; }
   .summary-row .value { font-weight: 700; font-variant-numeric: tabular-nums; }
   .summary-row.grand {
@@ -221,9 +222,9 @@ export function buildCustomerOrdersInvoiceHtml(
   <td class="nowrap">${escapeHtml(order.orderNumber)}</td>
   <td class="nowrap">${escapeHtml(formatDate(order.createdAt))}</td>
   <td class="receiver">${escapeHtml(order.receiverName)}</td>
-  <td class="num">${escapeHtml(formatMoney(order.orderAmount))}</td>
-  <td class="num">${escapeHtml(formatMoney(order.deliveryFee))}</td>
   <td class="num total">${escapeHtml(formatMoney(total))}</td>
+  <td class="num">${escapeHtml(formatMoney(order.deliveryFee))}</td>
+  <td class="num">${escapeHtml(formatMoney(order.orderAmount))}</td>
 </tr>`,
           )
           .join('\n');
@@ -243,7 +244,7 @@ export function buildCustomerOrdersInvoiceHtml(
     <div class="header">
       <div class="brand">
         <div class="logo">${LOGO_SVG}</div>
-        <div class="brand-name">Spring Cargo</div>
+        <div class="brand-name">Spring Delivery</div>
       </div>
       <div>
         <div class="doc-title">CUSTOMER ORDERS INVOICE</div>
@@ -274,9 +275,9 @@ export function buildCustomerOrdersInvoiceHtml(
           <th>Order #</th>
           <th>Date</th>
           <th>Receiver</th>
-          <th class="num">Order Price</th>
-          <th class="num">Delivery Fee</th>
           <th class="num">Total</th>
+          <th class="num">Delivery Fee</th>
+          <th class="num">Order Price</th>
         </tr>
       </thead>
       <tbody>
@@ -285,9 +286,9 @@ ${body}
     </table>
 
     <div class="summary">
-      <div class="summary-row"><span class="label">Total Order Prices</span><span class="value">${escapeHtml(formatMoney(totals.totalOrderPrices))}</span></div>
-      <div class="summary-row"><span class="label">Total Delivery Fees</span><span class="value">${escapeHtml(formatMoney(totals.totalDeliveryFees))}</span></div>
       <div class="summary-row grand"><span class="label">Grand Total (USD)</span><span class="value">${escapeHtml(formatMoney(totals.grandTotal))}</span></div>
+      <div class="summary-row"><span class="label">Total Delivery Fees</span><span class="value">${escapeHtml(formatMoney(totals.totalDeliveryFees))}</span></div>
+      <div class="summary-row"><span class="label">Total Order Prices</span><span class="value">${escapeHtml(formatMoney(totals.totalOrderPrices))}</span></div>
     </div>
     <div class="summary-note">Totals represent order values and delivery fees, not payments collected or outstanding balances.</div>
   </td></tr></tbody>

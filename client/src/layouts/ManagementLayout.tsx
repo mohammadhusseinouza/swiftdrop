@@ -163,7 +163,7 @@ export default function ManagementLayout() {
         <AppSidebar
           sections={sections}
           navLabel="Management navigation"
-          brand="Spring Cargo"
+          brand="Spring Delivery"
           brandIcon={<Truck />}
           user={sidebarUser}
         />
@@ -199,7 +199,7 @@ export default function ManagementLayout() {
           <AppSidebar
             sections={sections}
             navLabel="Management navigation"
-            brand="Spring Cargo"
+            brand="Spring Delivery"
             brandIcon={<Truck />}
             onNavigate={() => dispatch(closeMobileNavigation())}
             user={sidebarUser}

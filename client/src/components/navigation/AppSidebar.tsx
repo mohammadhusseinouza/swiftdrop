@@ -56,7 +56,7 @@ export interface AppSidebarProps {
 }
 
 export function AppSidebar({
-  brand = 'Spring Cargo',
+  brand = 'Spring Delivery',
   brandIcon,
   navLabel = 'Primary',
   sections,

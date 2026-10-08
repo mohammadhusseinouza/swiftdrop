@@ -12,7 +12,7 @@ export interface UiState {
   mobileNavigationOpen: boolean;
 }
 
-const SIDEBAR_PREFERENCE_KEY = 'spring-cargo.management.sidebarHidden';
+const SIDEBAR_PREFERENCE_KEY = 'spring-delivery.management.sidebarHidden';
 
 /**
  * Per-viewer convenience only. Storage may be unavailable (private mode,

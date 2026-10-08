@@ -3,7 +3,7 @@ import { formatDateTime, formatMoney, humanizeToken } from './format';
 import { escapeHtml, printHtmlDocument } from './printHtmlDocument';
 
 /**
- * A5 Customer Payout Receipt — the printed record of money Spring Cargo paid
+ * A5 Customer Payout Receipt — the printed record of money Spring Delivery paid
  * to a Customer from their wallet.
  *
  * Built ONLY from a persisted `PayoutSummary` returned by the backend (the
@@ -27,7 +27,7 @@ export interface PayoutReceiptOptions {
 /** Base name for the print document's `<title>` (the browser's default "Save as PDF" filename). */
 export function getPayoutReceiptDocumentName(payoutNumber: string): string {
   const safe = payoutNumber.trim().replace(/[^A-Za-z0-9._-]+/g, '-');
-  return `SpringCargo-Payout-${safe || 'receipt'}`;
+  return `SpringDelivery-Payout-${safe || 'receipt'}`;
 }
 
 // Same mark as the app's sidebar brand icon (lucide "truck"), inlined so the
@@ -148,7 +148,7 @@ export function buildPayoutReceiptHtml(
   <div class="header">
     <div class="brand">
       <div class="logo">${LOGO_SVG}</div>
-      <div class="brand-name">Spring Cargo</div>
+      <div class="brand-name">Spring Delivery</div>
     </div>
     <div class="doc-meta">
       <div class="doc-title">CUSTOMER PAYOUT RECEIPT</div>

@@ -56,7 +56,7 @@ export default function DriverLayout() {
         title={
           <span className="flex items-center gap-2">
             <Truck className="size-4 shrink-0 text-brand-600" aria-hidden="true" />
-            Spring Cargo
+            Spring Delivery
           </span>
         }
         actions={

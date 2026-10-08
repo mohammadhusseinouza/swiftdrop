@@ -1,6 +1,6 @@
-# Spring Cargo Client
+# Spring Delivery Client
 
-Frontend for the Spring Cargo delivery management system.
+Frontend for the Spring Delivery delivery management system.
 
 **Stack:** React + TypeScript + Vite + Tailwind CSS.
 
