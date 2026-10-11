@@ -13,6 +13,7 @@ import RootRedirect from './guards/RootRedirect';
 import GuestOnly from './guards/GuestOnly';
 import RequirePortal from './guards/RequirePortal';
 import RequirePermission from './guards/RequirePermission';
+import RequireRole from './guards/RequireRole';
 
 import NotFoundPage from '../pages/NotFoundPage';
 import UnauthorizedPage from '../pages/UnauthorizedPage';
@@ -36,6 +37,7 @@ import ReportsPage from '../pages/management/reports/ReportsPage';
 import EmployeesListPage from '../pages/management/employees/EmployeesListPage';
 import EmployeeDetailPage from '../pages/management/employees/EmployeeDetailPage';
 import AuditLogsPage from '../pages/management/audit/AuditLogsPage';
+import DriverExpensesPage from '../pages/management/driver-expenses/DriverExpensesPage';
 import SettingsPage from '../pages/management/settings/SettingsPage';
 import MyJobsPage from '../pages/driver/MyJobsPage';
 import DriverJobDetailPage from '../pages/driver/DriverJobDetailPage';
@@ -111,6 +113,13 @@ const managementChildren: RouteObject[] = [
   { path: 'reports', ...permitted(P.REPORTS_READ, <ReportsPage />) },
   { path: 'employees', ...permitted(P.EMPLOYEES_READ, <EmployeesListPage />) },
   { path: 'employees/:id', ...permitted(P.EMPLOYEES_READ, <EmployeeDetailPage />) },
+  // Driver Expenses — ADMIN only (ROLE-gated, matching the backend's
+  // requireRole("ADMIN"); a permission could be granted to other roles).
+  {
+    path: 'driver-expenses',
+    element: <RequireRole roles={['ADMIN']} />,
+    children: [{ index: true, element: <DriverExpensesPage /> }],
+  },
   { path: 'audit-logs', ...permitted(P.AUDIT_READ, <AuditLogsPage />) },
   { path: 'settings', ...permitted(P.SETTINGS_READ, <SettingsPage />) },
 ];

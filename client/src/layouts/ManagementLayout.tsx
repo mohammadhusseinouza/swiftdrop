@@ -62,10 +62,11 @@ export default function ManagementLayout() {
   const activeId = getActiveManagementNavId(location.pathname);
   const title = getManagementRouteTitle(location.pathname);
   const permissions = user?.permissions ?? [];
+  const roleCode = user?.role.code ?? null;
 
   const sections: SidebarSection[] = useMemo(
     () =>
-      buildManagementNavigation(permissions).map((group) => ({
+      buildManagementNavigation(permissions, roleCode).map((group) => ({
         id: group.id,
         label: group.label,
         items: group.items.map((item) => ({
@@ -77,7 +78,7 @@ export default function ManagementLayout() {
           active: item.id === activeId,
         })),
       })),
-    [permissions, activeId],
+    [permissions, roleCode, activeId],
   );
 
   useEffect(() => {

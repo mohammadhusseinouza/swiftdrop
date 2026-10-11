@@ -163,6 +163,11 @@ export const API_TAG_TYPES = [
   'AuditLog',
   'Employee',
   'Role',
+  // Driver Expenses (independent admin-only module).
+  'FuelSettings',
+  'ExpenseDriver',
+  'DailyExpense',
+  'DriverExpenseReport',
 ] as const;
 
 export type ApiTagType = (typeof API_TAG_TYPES)[number];

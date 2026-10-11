@@ -20,6 +20,7 @@ const TITLE_RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/^\/management\/reports\/?$/, 'Reports'],
   [/^\/management\/employees\/[^/]+\/?$/, 'Employee Details'],
   [/^\/management\/employees\/?$/, 'Employees'],
+  [/^\/management\/driver-expenses\/?$/, 'Driver Expenses'],
   [/^\/management\/audit-logs\/?$/, 'Audit Logs'],
   [/^\/management\/settings\/?$/, 'Settings'],
 ];

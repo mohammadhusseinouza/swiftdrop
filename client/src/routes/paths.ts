@@ -32,6 +32,7 @@ export const paths = {
     reports: '/management/reports',
     employees: '/management/employees',
     employeeDetail: (id = ':id') => `/management/employees/${id}`,
+    driverExpenses: '/management/driver-expenses',
     auditLogs: '/management/audit-logs',
     settings: '/management/settings',
   },

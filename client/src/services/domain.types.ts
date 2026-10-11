@@ -1612,3 +1612,103 @@ export interface AuditLogEntry {
   newValues: unknown | null;
   metadata: unknown | null;
 }
+
+/* ======================= Driver Expenses (admin-only) ======================= */
+/**
+ * Mirrors server/src/modules/driver-expenses/*.types.ts. Independent module:
+ * estimated fuel expenses only — never payments, driver cash or finance.
+ * Decimals are EXACT strings (never rounded, no exponent); dates are
+ * YYYY-MM-DD UTC calendar dates.
+ */
+export type ExpenseVehicleType = 'MOTORCYCLE' | 'CAR';
+
+export interface FuelSettingsDetail {
+  id: string;
+  effectiveFrom: string;
+  pricePer20Liters: string;
+  motorcycleConsumptionLPer100Km: string;
+  carConsumptionLPer100Km: string;
+  pricePerLiter: string;
+  motorcycleCostPerKm: string;
+  carCostPerKm: string;
+  createdAt: string;
+}
+
+/** GET /driver-expenses/fuel-settings/current and /effective?date=. */
+export interface FuelSettingsResolution {
+  date: string;
+  configured: boolean;
+  settings: FuelSettingsDetail | null;
+}
+
+export interface ExpenseDriverSummary {
+  driverId: string;
+  displayName: string;
+  isActive: boolean;
+  profileConfigured: boolean;
+  defaultVehicleType: ExpenseVehicleType | null;
+}
+
+export interface ExpenseProfileDetail {
+  driverId: string;
+  defaultVehicleType: ExpenseVehicleType;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DailyExpenseDetail {
+  id: string;
+  driverId: string;
+  driverName: string;
+  expenseDate: string;
+  vehicleType: ExpenseVehicleType;
+  distanceKm: string;
+  fuelSettingsId: string;
+  fuelSettingsEffectiveFrom: string;
+  pricePer20LitersSnapshot: string;
+  consumptionLPer100KmSnapshot: string;
+  pricePerLiter: string;
+  costPerKm: string;
+  estimatedExpense: string;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Driver Expenses reports — exact decimal strings; averageCostPerKm null when 0 km. */
+export interface DriverExpenseReportFilters {
+  from: string;
+  to: string;
+  driverId: string | null;
+  vehicleType: ExpenseVehicleType | null;
+}
+
+export interface DriverExpenseReportTotals {
+  entries: number;
+  totalDistanceKm: string;
+  totalEstimatedExpense: string;
+  averageCostPerKm: string | null;
+}
+
+export interface DriverExpenseReportSummary extends DriverExpenseReportTotals {
+  filters: DriverExpenseReportFilters;
+  driversWithRecords: number;
+}
+
+export interface DriverExpenseDriverReportRow extends DriverExpenseReportTotals {
+  driverId: string;
+  displayName: string;
+  isActive: boolean;
+  currentDefaultVehicleType: ExpenseVehicleType | null;
+}
+
+export interface DriverExpenseVehicleReportRow extends DriverExpenseReportTotals {
+  vehicleType: ExpenseVehicleType;
+}
+
+export interface DriverExpenseTrendRow {
+  date: string;
+  entries: number;
+  totalDistanceKm: string;
+  totalEstimatedExpense: string;
+}

@@ -3,6 +3,7 @@ import type { LucideProps } from 'lucide-react';
 import {
   Banknote,
   ChartColumn,
+  Fuel,
   HandCoins,
   Landmark,
   LayoutDashboard,
@@ -41,7 +42,14 @@ export interface ManagementNavItem {
   id: string;
   label: string;
   to: string;
-  permission: string;
+  /** Permission gate. Omitted only for a role-scoped item (see `roles`). */
+  permission?: string;
+  /**
+   * Role gate, for modules the backend restricts by ROLE rather than
+   * permission (a permission is grantable to other management roles from the
+   * Settings role matrix, so it cannot express "administrators only").
+   */
+  roles?: readonly string[];
   icon: ComponentType<LucideProps>;
   /** Visually subordinate row (Create Order under Orders). */
   indent?: boolean;
@@ -155,6 +163,13 @@ export const MANAGEMENT_NAVIGATION: readonly ManagementNavGroup[] = [
         icon: ChartColumn,
       },
       {
+        id: 'driver-expenses',
+        label: 'Driver Expenses',
+        to: '/management/driver-expenses',
+        roles: ['ADMIN'],
+        icon: Fuel,
+      },
+      {
         id: 'audit-logs',
         label: 'Audit Logs',
         to: '/management/audit-logs',
@@ -172,19 +187,31 @@ export const MANAGEMENT_NAVIGATION: readonly ManagementNavGroup[] = [
   },
 ];
 
+/** Pure: is a single nav item visible for this permission set + role? */
+export function isNavItemVisible(
+  item: ManagementNavItem,
+  permissions: readonly string[],
+  roleCode: string | null | undefined,
+): boolean {
+  if (item.permission !== undefined && !hasPermission(permissions, item.permission)) return false;
+  if (item.roles !== undefined && (!roleCode || !item.roles.includes(roleCode))) return false;
+  // An item must declare at least one gate; an ungated item is never shown.
+  return item.permission !== undefined || item.roles !== undefined;
+}
+
 /**
- * Pure: the navigation visible for a hydrated permission array. Items the user
- * lacks permission for are dropped; a group with no remaining items is removed
- * (no empty section headings). NEVER inspects role.
+ * Pure: the navigation visible for a hydrated permission array (+ role code
+ * for the few role-scoped items). Items the user cannot access are dropped; a
+ * group with no remaining items is removed (no empty section headings).
+ * UX only — every route and endpoint is independently guarded.
  */
 export function buildManagementNavigation(
   permissions: readonly string[],
+  roleCode?: string | null,
 ): ManagementNavGroup[] {
   return MANAGEMENT_NAVIGATION.map((group) => ({
     ...group,
-    items: group.items.filter((item) =>
-      hasPermission(permissions, item.permission),
-    ),
+    items: group.items.filter((item) => isNavItemVisible(item, permissions, roleCode)),
   })).filter((group) => group.items.length > 0);
 }
 

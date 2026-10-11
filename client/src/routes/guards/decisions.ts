@@ -77,3 +77,14 @@ export function decidePermission(
     ? { kind: 'allow' }
     : { kind: 'unauthorized' };
 }
+
+/**
+ * Page-level ROLE gate (any of `roles`), for modules the backend restricts by
+ * role (e.g. Driver Expenses — ADMIN only). Renders Unauthorized in place.
+ */
+export function decideRole(
+  roleCode: string | null | undefined,
+  roles: readonly string[],
+): GuardDecision {
+  return roleCode && roles.includes(roleCode) ? { kind: 'allow' } : { kind: 'unauthorized' };
+}
