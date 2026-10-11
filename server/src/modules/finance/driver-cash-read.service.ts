@@ -5,6 +5,7 @@ import type { DriverCashTransactionsQuery } from "./driver-cash-read.schema";
 import type {
   ManagementDriverCashDetail,
   ManagementDriverCashSummary,
+  ManagementDriverCashTotals,
   ManagementDriverCashTransactionEntry,
 } from "./driver-cash-read.types";
 
@@ -123,4 +124,14 @@ export async function getManagementDriverCashSummaries(
     select: { driver_id: true, current_balance: true },
   });
   return accounts.map((a) => ({ driverId: a.driver_id, currentBalance: a.current_balance.toString() }));
+}
+
+// System-wide Cash Held (Management Drivers page) — SUM of every driver's
+// authoritative driver_cash_accounts.current_balance (the same column the
+// per-driver card reads), active and inactive drivers alike. Collections,
+// settlements, adjustments and reversals are already reflected in that
+// ledger-maintained balance; never re-derived from orders or transactions.
+export async function getManagementDriverCashTotals(): Promise<ManagementDriverCashTotals> {
+  const result = await prisma.driver_cash_accounts.aggregate({ _sum: { current_balance: true } });
+  return { currentBalance: (result._sum.current_balance ?? new Prisma.Decimal(0)).toString() };
 }

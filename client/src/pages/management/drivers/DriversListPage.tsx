@@ -24,6 +24,7 @@ import { useDebouncedValue } from '../../../lib/useDebouncedValue';
 import { buildDriverColumns } from './driverColumns';
 import { MobileDriverCard } from './MobileDriverCard';
 import { DriverFormDialog } from './DriverFormDialog';
+import { DriverTotalsSummary } from './DriverTotalsSummary';
 import {
   EMPTY_DRIVERS_STATE,
   hasActiveDriverFilters,
@@ -123,6 +124,9 @@ export default function DriversListPage() {
           ) : undefined
         }
       />
+
+      {/* System-wide totals — independent of the table's filters / page. */}
+      <DriverTotalsSummary />
 
       <Card flush className="space-y-4 p-4 sm:p-6">
         <SearchInput

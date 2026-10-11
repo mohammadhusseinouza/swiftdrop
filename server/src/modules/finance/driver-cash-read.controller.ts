@@ -3,12 +3,14 @@ import { AppError } from "../../shared/errors/app-error";
 import {
   getManagementDriverCashDetail,
   getManagementDriverCashSummaries,
+  getManagementDriverCashTotals,
   listManagementDriverCashTransactions,
 } from "./driver-cash-read.service";
 import type { DriverCashSummariesQuery, DriverCashTransactionsQuery } from "./driver-cash-read.schema";
 import type {
   ManagementDriverCashDetail,
   ManagementDriverCashSummary,
+  ManagementDriverCashTotals,
   ManagementDriverCashTransactionEntry,
 } from "./driver-cash-read.types";
 import type { ApiListResponse, ApiSuccessResponse } from "../../shared/types/api-response";
@@ -59,6 +61,18 @@ export const getDriverCashSummariesController: RequestHandler<
     }
     const query = req.query as unknown as DriverCashSummariesQuery;
     const data = await getManagementDriverCashSummaries(query.driverIds);
+    res.json({ success: true, data });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getDriverCashTotalsController: RequestHandler<
+  Record<string, never>,
+  ApiSuccessResponse<ManagementDriverCashTotals>
+> = async (_req, res, next) => {
+  try {
+    const data = await getManagementDriverCashTotals();
     res.json({ success: true, data });
   } catch (error) {
     next(error);

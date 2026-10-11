@@ -10,10 +10,12 @@ import type {
 import type {
   DriverDeliveryHistoryRow,
   DriverDetail,
+  DriverOperationalSummary,
   DriverParcelCollectionHistoryRow,
   DriverSummary,
   ManagementDriverCashDetail,
   ManagementDriverCashSummary,
+  ManagementDriverCashTotals,
   ManagementDriverCashTransactionEntry,
   OrderSummary,
 } from './domain.types';
@@ -184,6 +186,36 @@ export const driversApi = api.injectEndpoints({
         unwrapData(r),
       providesTags: [{ type: 'DriverCash', id: 'SUMMARIES' }],
     }),
+
+    /**
+     * System-wide operational totals (drivers.read) for the Drivers page
+     * summary cards — same definitions as `DriverDetail.operationalSummary`,
+     * across ALL drivers. Never affected by list search / filters / page.
+     */
+    getDriverOperationalTotals: builder.query<DriverOperationalSummary, void>({
+      query: () => ({ url: '/drivers/totals' }),
+      transformResponse: (r: ApiSuccessResponse<DriverOperationalSummary>) =>
+        unwrapData(r),
+      providesTags: [
+        { type: 'Driver', id: 'LIST' },
+        { type: 'Order', id: 'LIST' },
+      ],
+    }),
+
+    /**
+     * System-wide Cash Held (finance.read). Settlements and finance
+     * corrections invalidate `DriverCash/SUMMARIES`; delivery / collection
+     * outcomes invalidate `Order/LIST`.
+     */
+    getDriverCashTotals: builder.query<ManagementDriverCashTotals, void>({
+      query: () => ({ url: '/finance/driver-cash/totals' }),
+      transformResponse: (r: ApiSuccessResponse<ManagementDriverCashTotals>) =>
+        unwrapData(r),
+      providesTags: [
+        { type: 'DriverCash', id: 'SUMMARIES' },
+        { type: 'Order', id: 'LIST' },
+      ],
+    }),
   }),
 });
 
@@ -198,4 +230,6 @@ export const {
   useGetManagementDriverCashQuery,
   useGetManagementDriverCashTransactionsQuery,
   useGetDriverCashSummariesQuery,
+  useGetDriverOperationalTotalsQuery,
+  useGetDriverCashTotalsQuery,
 } = driversApi;

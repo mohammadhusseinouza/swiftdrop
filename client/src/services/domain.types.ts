@@ -728,6 +728,13 @@ export interface ManagementDriverCashSummary {
   driverId: string;
   currentBalance: string;
 }
+/**
+ * `GET /finance/driver-cash/totals` (finance.read) — Cash Held summed across
+ * ALL drivers (active and inactive), from the authoritative cash balances.
+ */
+export interface ManagementDriverCashTotals {
+  currentBalance: string;
+}
 /** One row of `GET /finance/driver-cash/:driverId/transactions` (finance.read). */
 export interface ManagementDriverCashTransactionEntry {
   id: string;

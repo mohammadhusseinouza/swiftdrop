@@ -1,9 +1,9 @@
 import { RequestHandler } from "express";
 import { AppError } from "../../shared/errors/app-error";
-import { createDriver, getDriverById, listDrivers, updateDriver } from "./driver.service";
+import { createDriver, getDriverById, getDriverOperationalTotals, listDrivers, updateDriver } from "./driver.service";
 import { listDriverCurrentOrders, listDriverDeliveryHistory, listDriverParcelCollectionHistory } from "./driver-work.service";
 import type { CreateDriverInput, DriverWorkListQuery, ListDriversQuery, UpdateDriverInput } from "./driver.schema";
-import type { DriverDetail, DriverSummary } from "./driver.types";
+import type { DriverDetail, DriverOperationalSummary, DriverSummary } from "./driver.types";
 import type { DriverDeliveryHistoryRow, DriverParcelCollectionHistoryRow } from "./driver-work.types";
 import type { OrderSummary } from "../orders/order.types";
 import type { ApiListResponse, ApiSuccessResponse } from "../../shared/types/api-response";
@@ -42,6 +42,18 @@ export const createDriverController: RequestHandler<
     }
     const driver = await createDriver(req.body, req.actor.userId);
     res.status(201).json({ success: true, data: driver });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getDriverOperationalTotalsController: RequestHandler<
+  Record<string, never>,
+  ApiSuccessResponse<DriverOperationalSummary>
+> = async (_req, res, next) => {
+  try {
+    const data = await getDriverOperationalTotals();
+    res.json({ success: true, data });
   } catch (error) {
     next(error);
   }

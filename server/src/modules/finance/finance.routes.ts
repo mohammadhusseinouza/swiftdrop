@@ -27,6 +27,7 @@ import {
 import {
   getDriverCashDetailController,
   getDriverCashSummariesController,
+  getDriverCashTotalsController,
   getDriverCashTransactionsController,
 } from "./driver-cash-read.controller";
 
@@ -67,6 +68,10 @@ financeRouter.get(
   validate({ query: DriverCashSummariesQuerySchema }),
   getDriverCashSummariesController
 );
+
+// System-wide Cash Held across ALL drivers (Management Drivers page). Same
+// finance.read gate; also static, so declared before /driver-cash/:driverId.
+financeRouter.get("/driver-cash/totals", authenticate, authorize("finance.read"), getDriverCashTotalsController);
 
 financeRouter.get(
   "/driver-cash/:driverId",

@@ -12,6 +12,7 @@ import {
 import {
   createDriverController,
   getDriverController,
+  getDriverOperationalTotalsController,
   listDriverCurrentOrdersController,
   listDriverDeliveryHistoryController,
   listDriverParcelCollectionHistoryController,
@@ -36,6 +37,11 @@ driverRouter.post(
   validate({ body: CreateDriverSchema }),
   createDriverController
 );
+
+// System-wide operational totals (Management Drivers page). Operational, not
+// financial — same drivers.read gate as the list. MUST be registered before
+// "/:id" (a literal segment the dynamic route would otherwise capture).
+driverRouter.get("/totals", authenticate, authorize("drivers.read"), getDriverOperationalTotalsController);
 
 driverRouter.get(
   "/:id",

@@ -9,6 +9,11 @@ export interface ManagementDriverCashSummary {
   currentBalance: string;
 }
 
+// GET /finance/driver-cash/totals — Cash Held summed across ALL drivers.
+export interface ManagementDriverCashTotals {
+  currentBalance: string;
+}
+
 export interface ManagementDriverCashDetail {
   driverId: string;
   currentBalance: string;

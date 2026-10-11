@@ -82,6 +82,14 @@ function handleKnownDriverError(error: unknown, fallbackMessage: string): never 
 // UTC day boundary. For a page of drivers this runs exactly THREE grouped
 // queries total — never one (or three) per driver.
 // ============================================================
+// The ONE predicate per metric — shared by the per-driver summaries and the
+// system-wide totals so the two can never diverge.
+const ACTIVE_HELD_ORDER_WHERE: Prisma.ordersWhereInput = { status: { in: [...ORDER_ACTIVE_STATUSES] } };
+const OUT_FOR_DELIVERY_ORDER_WHERE: Prisma.ordersWhereInput = { status: "OUT_FOR_DELIVERY" };
+function deliveredAttemptWhere(start: Date, end: Date): Prisma.delivery_attemptsWhereInput {
+  return { outcome: "DELIVERED", completed_at: { gte: start, lt: end } };
+}
+
 export async function getDriverOperationalSummaries(
   driverIds: string[]
 ): Promise<Map<string, DriverOperationalSummary>> {
@@ -94,21 +102,17 @@ export async function getDriverOperationalSummaries(
   const [activeGrouped, outForDeliveryGrouped, completedTodayGrouped] = await Promise.all([
     prisma.orders.groupBy({
       by: ["current_driver_id"],
-      where: { current_driver_id: { in: driverIds }, status: { in: [...ORDER_ACTIVE_STATUSES] } },
+      where: { ...ACTIVE_HELD_ORDER_WHERE, current_driver_id: { in: driverIds } },
       _count: { _all: true },
     }),
     prisma.orders.groupBy({
       by: ["current_driver_id"],
-      where: { current_driver_id: { in: driverIds }, status: "OUT_FOR_DELIVERY" },
+      where: { ...OUT_FOR_DELIVERY_ORDER_WHERE, current_driver_id: { in: driverIds } },
       _count: { _all: true },
     }),
     prisma.delivery_attempts.groupBy({
       by: ["driver_id"],
-      where: {
-        driver_id: { in: driverIds },
-        outcome: "DELIVERED",
-        completed_at: { gte: start, lt: end },
-      },
+      where: { ...deliveredAttemptWhere(start, end), driver_id: { in: driverIds } },
       _count: { _all: true },
     }),
   ]);
@@ -131,6 +135,21 @@ export async function getDriverOperationalSummaries(
   }
 
   return map;
+}
+
+// GET /api/v1/drivers/totals — the same three metrics summed across ALL
+// drivers (active or inactive), independent of any list search/filter/page.
+// An order has at most one current_driver_id, so a held order is counted
+// once; Delivered Today counts DELIVERED attempts (historical attribution),
+// exactly what the per-driver figures add up to.
+export async function getDriverOperationalTotals(): Promise<DriverOperationalSummary> {
+  const { start, end } = getUtcDayBoundary();
+  const [activeOrders, outForDelivery, completedToday] = await Promise.all([
+    prisma.orders.count({ where: { ...ACTIVE_HELD_ORDER_WHERE, current_driver_id: { not: null } } }),
+    prisma.orders.count({ where: { ...OUT_FOR_DELIVERY_ORDER_WHERE, current_driver_id: { not: null } } }),
+    prisma.delivery_attempts.count({ where: deliveredAttemptWhere(start, end) }),
+  ]);
+  return { activeOrders, outForDelivery, completedToday };
 }
 
 export interface ListDriversResult {
