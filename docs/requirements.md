@@ -2069,3 +2069,63 @@ The next development stage should convert these business requirements into:
 - Order state machine
 - Financial transaction logic
 - Development phases and implementation roadmap
+
+---
+
+# 54. Driver Expenses (Fuel Expense Estimation)
+
+## Purpose
+
+Administrators record the kilometers each driver traveled per day; the system estimates the
+day's fuel expense from shared fuel settings. It is an **operational estimate only** — not a
+payment, reimbursement, wallet, driver-cash or company-finance figure, and it never affects
+orders, deliveries or any financial balance. The only existing data it uses is driver
+identity (name and active status).
+
+## Access
+
+Administrators only (role ADMIN). Dispatcher, Finance, Driver and Customer users cannot see
+or use the module.
+
+## Fuel Settings
+
+- Shared by all drivers: price for 20 liters, motorcycle consumption (L/100 km), car
+  consumption (L/100 km), effective date. All values must be greater than zero.
+- Price per liter = price for 20 liters / 20.
+- Fuel cost per km = price per liter × consumption / 100 (per vehicle type).
+- Settings are versioned by effective date (one version per date; future dates allowed). A
+  date uses the newest version effective on or before it. Versions are never edited or
+  deleted; a version that would change how already-recorded days are interpreted is rejected.
+- When no settings apply to a date, no expense can be recorded for it (no default rates).
+
+## Driver Vehicle Profiles
+
+- Each driver may have one default vehicle type: Motorcycle or Car. No profile = Not
+  Configured.
+- The default only pre-selects the vehicle for new daily entries; changing it never changes
+  recorded days.
+
+## Daily Expenses
+
+- One entry per driver per date: distance (km, >= 0, up to 2 decimals), vehicle actually used
+  (defaults to the profile, can be overridden for that day), optional notes.
+- Estimated expense = distance × fuel cost per km, calculated by the server from the settings
+  effective on the entry's date. The entry keeps a snapshot of the price and consumption
+  used, so later settings changes never alter it.
+- A saved 0 km entry is different from a day with no entry.
+- Entries cannot be created for future dates (UTC business date).
+- Corrections may change distance, vehicle and notes (not driver or date); they keep the
+  entry's original fuel settings. Concurrent corrections are detected and never silently
+  overwrite each other. Every create / correction is audited.
+
+## Reports
+
+- Periods: Today, This Week (Monday–Sunday), This Month, Custom range (UTC dates).
+- Filters: all drivers or one driver; all vehicles, Motorcycle or Car (the vehicle saved on
+  each entry).
+- Summary: total estimated expense, total distance, drivers with records, entries, average
+  cost per km (total expense / total distance; unavailable when no distance).
+- Per-driver totals (sortable, paginated), Motorcycle/Car breakdown, and a daily trend of
+  recorded dates (up to 366 days).
+- All figures are sums of the stored entry values; nothing is recalculated with current
+  prices.

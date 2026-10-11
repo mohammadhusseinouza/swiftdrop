@@ -2273,3 +2273,50 @@ Mandatory rules:
   receipt time = `created_at`, receipt confirmer = `created_by_id`. No existing delivery
   assignment may be reinterpreted as Collection work.
 - **Phase 12 (Driver Portal) remains blocked until all Phase 11.17 gates pass and are approved.**
+
+---
+
+# 73. Driver Expenses Module (independent, ADMIN-only)
+
+An **independent operational module** that estimates each driver's daily fuel expense from
+kilometers entered by an administrator. Code: `server/src/modules/driver-expenses/`,
+`client/src/pages/management/driver-expenses/` (`/management/driver-expenses`).
+Requirements: `docs/requirements.md` §54. Phase record: `docs/implementation_plan.md` §62.
+
+Mandatory rules:
+
+- **ADMIN only.** Every endpoint is gated by `requireRole("ADMIN")`
+  (`server/src/middleware/require-role.ts`) on the trusted, DB-reloaded actor — NOT by a
+  permission, because any management permission can be granted to DISPATCHER / FINANCE from
+  the Settings role matrix. Frontend: `RequireRole roles={['ADMIN']}` route guard and a
+  role-scoped sidebar item (UX only; the backend is authoritative).
+- **Strict independence.** The ONLY existing business data used is driver identity
+  (`drivers` + linked `users` names / active flag). Never read or write orders, deliveries,
+  assignments, driver cash, settlements, wallets, payouts or company finance. Estimated
+  expenses are **not payments, reimbursements or financial postings** and must never be
+  integrated into the Finance page or finance reports. Shared infrastructure only:
+  authentication, the audit log, UI components, the database.
+- **Tables** (all owned by the module): `driver_fuel_settings` (append-only, one version per
+  `effective_from` DATE), `driver_expense_profiles` (one default `DriverExpenseVehicleType`
+  per driver), `driver_daily_expenses` (one per driver per date). Do not add expense or
+  vehicle columns to `drivers` or any existing table.
+- **Formula** (server-side, `driver-expense-calculation.ts`, exact 64-digit Decimal — never
+  JS floats): price/L = price per 20 L / 20; cost/km = price/L × consumption / 100;
+  estimated expense = distance × cost/km. Stored exactly as NUMERIC(24,10) and enforced by a
+  DB CHECK; never rounded at rest (display rounding is the client's job). The report average
+  cost/km (total expense / total distance) is the only division and is rounded half-up to
+  10 decimals.
+- **History is immutable by design.** A settings change is a NEW effective-dated row; the
+  version for a date is the greatest `effective_from <= date`. Each daily record snapshots
+  the price and the used vehicle's consumption and is never recalculated. A correction keeps
+  its original settings version (a vehicle correction takes the new type's rate from THAT
+  version). A settings row that would reinterpret already-recorded days is rejected
+  (`RETROACTIVE_CONFLICT`).
+- **Concurrency:** settings creation holds the timeline advisory lock EXCLUSIVELY; daily
+  expense creation holds it SHARED (`lockFuelSettingsTimelineShared`) — keep that ordering.
+  Duplicates are arbitrated by the unique indexes; corrections use the `expectedUpdatedAt`
+  compare-and-update guard (`STALE_DAILY_EXPENSE`).
+- **Dates** are YYYY-MM-DD UTC calendar dates (project UTC business-day convention); new
+  expenses cannot be future-dated (`FUTURE_EXPENSE_DATE`).
+- **Reports** aggregate the STORED values only and classify by the vehicle SAVED on each
+  record, never the driver's current default.

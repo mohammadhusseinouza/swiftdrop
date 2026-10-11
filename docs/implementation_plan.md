@@ -3751,3 +3751,47 @@ two `orders` enum columns carry a **temporary DB default** (`ALREADY_AT_COMPANY`
 `RECEIVED_AT_COMPANY`) so the not-yet-updated Create-Order path keeps working; **Phase
 11.17.4 must set them explicitly from the request and drop both defaults**, and Phase
 11.17.4 owns `received_at_company_at` / `received_at_company_by_id` for new orders.
+
+---
+
+# 62. Driver Expenses Module (independent, ADMIN-only)
+
+Business rules: `docs/requirements.md` §54. Implementation rules: `CLAUDE.md` §73.
+
+| Phase | Scope | Status |
+|---|---|---|
+| 1 | Database: `DriverExpenseVehicleType` enum; `driver_fuel_settings`, `driver_expense_profiles`, `driver_daily_expenses` (FKs to `drivers` only); CHECKs incl. the exact formula; migration `server/prisma/migrations/20261011000000_driver_expenses_foundation` (additive, idempotent, one transaction) | Done |
+| 2 | Fuel settings API + exact 64-digit Decimal calculation engine | Done |
+| 3 | Driver profiles + daily expense create / correct / read API, audit, concurrency guards | Done |
+| 4 | Admin frontend `/management/driver-expenses` (Daily Expenses, Drivers, Fuel Settings); future-date rejection | Done |
+| 5 | Reports API + Reports tab; unsaved-changes counter refinement | Done |
+| 6 | Integration, regression audit, documentation, deployment readiness | Done (pending approval) |
+
+## API (all `/api/v1/driver-expenses`, ADMIN only)
+
+```text
+GET   /fuel-settings/current                GET  /fuel-settings/effective?date=
+GET   /fuel-settings?page&limit             POST /fuel-settings
+GET   /drivers?search&isActive&page&limit
+PUT   /drivers/:driverId/profile            { defaultVehicleType }
+GET   /drivers/:driverId/daily-expenses?from&to&page&limit
+GET   /daily-expenses?driverId&date|from&to&page&limit
+POST  /daily-expenses                       { driverId, expenseDate, distanceKm, vehicleType?, notes? }
+GET   /daily-expenses/by-date/:date         GET  /daily-expenses/:id
+PATCH /daily-expenses/:id                   { expectedUpdatedAt, distanceKm?, vehicleType?, notes? }
+GET   /reports/summary | /reports/by-vehicle | /reports/daily-trend   ?from&to&driverId&vehicleType
+GET   /reports/by-driver?from&to&driverId&vehicleType&sortBy=name|distance|expense&sortOrder&page&limit
+```
+
+Decimals travel as exact strings; dates as YYYY-MM-DD UTC. Structured 409 reasons:
+`DUPLICATE_EFFECTIVE_DATE`, `RETROACTIVE_CONFLICT`, `VEHICLE_TYPE_NOT_CONFIGURED`,
+`FUEL_SETTINGS_NOT_CONFIGURED`, `DUPLICATE_DAILY_EXPENSE`, `STALE_DAILY_EXPENSE`; 400
+`FUTURE_EXPENSE_DATE`.
+
+## Deployment note
+
+The migration lives in `server/prisma/migrations/` and is applied by `server/scripts/build.mjs`
+(`prisma migrate deploy`) only on a Vercel **Production** build with
+`PRISMA_MIGRATE_MODE=deploy`. It only creates new objects (no existing table or row is
+changed). With `preflight` / `disabled`, the code deploys without the tables and only the
+Driver Expenses endpoints fail until the migration is applied.
