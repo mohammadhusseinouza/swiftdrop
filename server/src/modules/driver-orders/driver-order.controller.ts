@@ -7,9 +7,15 @@ import {
   getDriverOrderById,
   listDriverOrders,
   pickupDriverOrder,
+  pickupDriverOrderByBarcode,
   startDeliveryDriverOrder,
 } from "./driver-order.service";
-import type { DeliverOrderInput, FailDeliveryOrderInput, ListDriverOrdersQuery } from "./driver-order.schema";
+import type {
+  DeliverOrderInput,
+  FailDeliveryOrderInput,
+  ListDriverOrdersQuery,
+  ScanPickupInput,
+} from "./driver-order.schema";
 import type { DriverOrderDetail, DriverOrderSummary } from "./driver-order.types";
 import type { ApiListResponse, ApiSuccessResponse } from "../../shared/types/api-response";
 
@@ -81,6 +87,26 @@ export const pickupDriverOrderController: RequestHandler<
 
     const driver = await getDriverProfileForUser(req.actor.userId);
     const order = await pickupDriverOrder(driver.id, req.params.id, req.actor.userId);
+    res.json({ success: true, data: order });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// POST /api/v1/driver/orders/scan-pickup — barcode entry point to the same
+// pickup transition; identical trusted-identity discipline as pickup above.
+export const scanPickupDriverOrderController: RequestHandler<
+  Record<string, never>,
+  ApiSuccessResponse<DriverOrderDetail>,
+  ScanPickupInput
+> = async (req, res, next) => {
+  try {
+    if (!req.actor) {
+      throw new AppError({ statusCode: 401, code: "UNAUTHORIZED", message: "Authentication required" });
+    }
+
+    const driver = await getDriverProfileForUser(req.actor.userId);
+    const order = await pickupDriverOrderByBarcode(driver.id, req.body.barcode, req.actor.userId);
     res.json({ success: true, data: order });
   } catch (error) {
     next(error);

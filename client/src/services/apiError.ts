@@ -60,6 +60,11 @@ export function getApiValidationDetails(error: UnknownApiError): unknown {
   return body?.code === 'VALIDATION_ERROR' ? body.details : undefined;
 }
 
+/** The backend's structured `error.details`, for any error code. */
+export function getApiErrorDetails(error: UnknownApiError): unknown {
+  return getBackendErrorBody(error)?.details;
+}
+
 /** A 401 (session/auth) — distinct from 403 (authenticated but forbidden). */
 export function isAuthError(error: UnknownApiError): boolean {
   return getApiErrorStatus(error) === 401;

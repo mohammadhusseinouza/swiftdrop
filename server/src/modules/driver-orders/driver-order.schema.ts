@@ -5,6 +5,25 @@ export const DriverOrderIdParamSchema = z.object({
   id: z.string().uuid(),
 });
 
+// POST /api/v1/driver/orders/scan-pickup — the raw value decoded from the
+// Code128 barcode on the printed order label, which encodes the Order's
+// tracking_code verbatim (client/src/lib/orderLabelPrint.ts). Same bounds as
+// the public TrackingCodeParamSchema; matched EXACTLY (no case folding). A
+// value with whitespace/control/non-ASCII characters can never be a
+// generated tracking code, so it is rejected as an invalid barcode.
+export const SCAN_BARCODE_PATTERN = /^[!-~]+$/;
+
+export const ScanPickupSchema = z.object({
+  barcode: z
+    .string()
+    .trim()
+    .min(1, "Barcode is required")
+    .max(100, "Invalid barcode")
+    .regex(SCAN_BARCODE_PATTERN, "Invalid barcode"),
+});
+
+export type ScanPickupInput = z.infer<typeof ScanPickupSchema>;
+
 // Only the statuses an Order can realistically hold while current_driver_id
 // is still set (Phase 6 lifecycle rules) — RECEIVED/READY_FOR_PICKUP/
 // CANCELLED/RETURNED_* always carry a null current_driver_id in normal

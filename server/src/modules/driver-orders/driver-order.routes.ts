@@ -8,6 +8,7 @@ import {
   DriverOrderIdParamSchema,
   FailDeliveryOrderSchema,
   ListDriverOrdersQuerySchema,
+  ScanPickupSchema,
 } from "./driver-order.schema";
 import {
   deliverDriverOrderController,
@@ -15,6 +16,7 @@ import {
   getDriverOrderController,
   listDriverOrdersController,
   pickupDriverOrderController,
+  scanPickupDriverOrderController,
   startDeliveryDriverOrderController,
 } from "./driver-order.controller";
 import { listDriverFailedDeliveryReasonsController } from "../reference-data/failed-delivery-reason.controller";
@@ -71,6 +73,18 @@ driverOrderActionRouter.post(
 );
 
 // POST /api/v1/driver/orders/:id/start-delivery (Phase 7.3)
+// Barcode scan -> the same pickup transition (body: { barcode }). Resolves
+// only within the authenticated driver's current orders, then delegates to
+// pickupDriverOrder — no second set of pickup rules.
+driverOrderActionRouter.post(
+  "/orders/scan-pickup",
+  authenticate,
+  requirePortal("driver"),
+  authorize("driver.orders.update_own"),
+  validate({ body: ScanPickupSchema }),
+  scanPickupDriverOrderController
+);
+
 driverOrderActionRouter.post(
   "/orders/:id/start-delivery",
   authenticate,

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
-import { PackageSearch } from 'lucide-react';
+import { PackageSearch, ScanBarcode } from 'lucide-react';
 
 import { useGetDriverJobsQuery } from '../../services/ordersApi';
 import { getApiErrorMessage, type UnknownApiError } from '../../services/apiError';
@@ -13,6 +13,8 @@ import { ErrorState } from '../../components/feedback/ErrorState';
 import { Card } from '../../components/ui/Card';
 import { cn } from '../../components/ui/cn';
 import { DriverJobCard } from '../../components/driver/DriverJobCard';
+import { BarcodeScannerDialog } from '../../components/driver/BarcodeScannerDialog';
+import { Button } from '../../components/ui/Button';
 import type { DriverJobType } from '../../services/domain.types';
 
 const JOB_TYPE_TABS: ReadonlyArray<{ id: 'ALL' | DriverJobType; label: string }> = [
@@ -62,6 +64,11 @@ export default function MyJobsPage() {
     [page, activeTab],
   );
 
+  // Standalone barcode pickup — mounted only while open (fresh session,
+  // camera released on close). The jobs list refreshes via the mutation's
+  // DriverJob/LIST invalidation, not by this page.
+  const [scannerOpen, setScannerOpen] = useState(false);
+
   const query = useGetDriverJobsQuery(params);
   const jobs = query.data?.items ?? [];
   const meta = query.data?.meta;
@@ -88,6 +95,14 @@ export default function MyJobsPage() {
         title="My Jobs"
         description="Your current Collection and Delivery work."
       />
+
+      <Button
+        icon={<ScanBarcode />}
+        onClick={() => setScannerOpen(true)}
+        className="h-12 w-full text-base sm:w-auto"
+      >
+        Scan Barcode
+      </Button>
 
       {notice && (
         <div
@@ -166,6 +181,8 @@ export default function MyJobsPage() {
       {meta && meta.totalPages > 1 && (
         <Pagination page={meta.page} totalPages={meta.totalPages} total={meta.total} onPageChange={setPage} />
       )}
+
+      {scannerOpen && <BarcodeScannerDialog onClose={() => setScannerOpen(false)} />}
     </div>
   );
 }

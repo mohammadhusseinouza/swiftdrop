@@ -665,6 +665,33 @@ export const ordersApi = api.injectEndpoints({
       ],
     }),
 
+    /**
+     * Barcode entry point to the SAME pickup transition: the printed label's
+     * Code128 barcode is the order's tracking code. The server resolves it
+     * within the driver's own current orders and delegates to the existing
+     * pickup. Lists are invalidated even on failure (a 409 "already picked
+     * up" means this device's list is stale); per-order tags only on success,
+     * when the order id is known.
+     */
+    scanPickupDriverOrder: builder.mutation<DriverOrderDetail, { barcode: string }>({
+      query: (body) => ({ url: '/driver/orders/scan-pickup', method: 'POST', body }),
+      transformResponse: (r: ApiSuccessResponse<DriverOrderDetail>) =>
+        unwrapData(r),
+      invalidatesTags: (res) => [
+        { type: 'DriverOrder', id: 'LIST' },
+        { type: 'DriverJob', id: 'LIST' },
+        { type: 'Order', id: 'LIST' },
+        { type: 'Dashboard', id: 'ROOT' },
+        ...(res
+          ? [
+              { type: 'DriverOrder' as const, id: res.id },
+              { type: 'DriverJob' as const, id: `DELIVERY:${res.id}` },
+              { type: 'Order' as const, id: res.id },
+            ]
+          : []),
+      ],
+    }),
+
     startDriverOrderDelivery: builder.mutation<DriverOrderDetail, string>({
       query: (id) => ({
         url: `/driver/orders/${id}/start-delivery`,
@@ -774,6 +801,7 @@ export const {
   useGetDriverOrderQuery,
   useGetDriverCashQuery,
   usePickupDriverOrderMutation,
+  useScanPickupDriverOrderMutation,
   useStartDriverOrderDeliveryMutation,
   useFailDriverOrderMutation,
   useDeliverDriverOrderMutation,

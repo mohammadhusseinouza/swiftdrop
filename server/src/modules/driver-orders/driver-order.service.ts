@@ -280,6 +280,86 @@ export async function pickupDriverOrder(driverId: string, orderId: string, actor
 }
 
 // ============================================================
+// POST /api/v1/driver/orders/scan-pickup — barcode entry point to the SAME
+// pickup transition.
+//
+// Only resolves the scanned label to an Order and then delegates to
+// pickupDriverOrder above, which remains the single authority for
+// ownership, the ASSIGNED -> PICKED_UP rule, the atomic conditional claim and
+// status history. The barcode grants nothing: resolution is scoped to the
+// authenticated driver's CURRENT orders, so another driver's order, a
+// reassigned-away order and a nonexistent code are the identical 404 (no
+// existence leak).
+//
+// When pickupDriverOrder rejects on state (its 400 status guard or its 409
+// lost-claim conflict), the order is re-read — still scoped to this driver —
+// purely to explain the outcome to a scanning driver as a 409 with a stable
+// `details.reason`. That mapping never decides whether pickup is allowed.
+// ============================================================
+
+export type ScanPickupConflictReason =
+  | "ALREADY_PICKED_UP"
+  | "ALREADY_DELIVERED"
+  | "ORDER_CANCELLED"
+  | "INVALID_STATUS"
+  | "ORDER_CHANGED";
+
+const POST_PICKUP_STATUSES = new Set<string>(["PICKED_UP", "OUT_FOR_DELIVERY", "FAILED_DELIVERY", "RESCHEDULED"]);
+
+function scanPickupConflict(status: string): AppError {
+  let reason: ScanPickupConflictReason;
+  let message: string;
+  if (POST_PICKUP_STATUSES.has(status)) {
+    reason = "ALREADY_PICKED_UP";
+    message = "Order already picked up";
+  } else if (status === "DELIVERED") {
+    reason = "ALREADY_DELIVERED";
+    message = "Order already delivered";
+  } else if (status === "CANCELLED") {
+    reason = "ORDER_CANCELLED";
+    message = "Order is cancelled";
+  } else if (status === "ASSIGNED") {
+    reason = "ORDER_CHANGED";
+    message = "Order was changed by another request — please retry";
+  } else {
+    reason = "INVALID_STATUS";
+    message = `Order cannot be picked up while its status is ${status}`;
+  }
+  return new AppError({ statusCode: 409, code: "CONFLICT", message, details: { reason, status } });
+}
+
+export async function pickupDriverOrderByBarcode(
+  driverId: string,
+  barcode: string,
+  actorUserId: string
+): Promise<DriverOrderDetail> {
+  const scanned = await prisma.orders.findFirst({
+    where: { tracking_code: barcode, current_driver_id: driverId },
+    select: { id: true },
+  });
+  if (!scanned) {
+    throw new AppError({ statusCode: 404, code: "NOT_FOUND", message: "Order not found" });
+  }
+
+  try {
+    return await pickupDriverOrder(driverId, scanned.id, actorUserId);
+  } catch (error) {
+    if (!(error instanceof AppError) || (error.statusCode !== 400 && error.statusCode !== 409)) {
+      throw error;
+    }
+    const current = await prisma.orders.findFirst({
+      where: { id: scanned.id, current_driver_id: driverId },
+      select: { status: true },
+    });
+    if (!current) {
+      // Reassigned / cancelled away while the scan was in flight.
+      throw new AppError({ statusCode: 404, code: "NOT_FOUND", message: "Order not found" });
+    }
+    throw scanPickupConflict(current.status);
+  }
+}
+
+// ============================================================
 // POST /api/v1/driver/orders/:id/start-delivery (Phase 7.3)
 //
 // Two approved source statuses, both requiring the authenticated CURRENT
