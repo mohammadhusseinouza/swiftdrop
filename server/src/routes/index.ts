@@ -15,6 +15,8 @@ import { driverCashRouter } from "../modules/driver-cash/driver-cash.routes";
 import { driverOrderActionRouter, driverOrderRouter } from "../modules/driver-orders/driver-order.routes";
 import { driverJobRouter } from "../modules/driver-jobs/driver-job.routes";
 import { driverHistoryRouter } from "../modules/driver-history/driver-history.routes";
+import { fuelSettingsRouter } from "../modules/driver-expenses/fuel-settings.routes";
+import { driverExpensesRouter } from "../modules/driver-expenses/driver-expenses.routes";
 import { employeeRouter } from "../modules/employees/employee.routes";
 import {
   driverParcelCollectionRouter,
@@ -65,6 +67,11 @@ apiRouter.use("/driver", driverJobRouter);
 // Phase 12.5 — Driver Work History (read-only, Collection + Delivery
 // combined, chronological). GET /api/v1/driver/history.
 apiRouter.use("/driver", driverHistoryRouter);
+// Driver Expenses (independent module, Admin-only) — fuel settings history.
+// Never connected to finance, driver cash, settlements, wallets or orders.
+apiRouter.use("/driver-expenses/fuel-settings", fuelSettingsRouter);
+// Driver profiles (default vehicle) + daily expense records — same isolation.
+apiRouter.use("/driver-expenses", driverExpensesRouter);
 apiRouter.use("/orders", orderRouter);
 // Phase 11.17.3 — Parcel Collection Management read + assign/reassign/
 // reschedule/receive-at-company. A second router on /api/v1/orders,

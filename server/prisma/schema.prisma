@@ -252,6 +252,11 @@ model drivers {
   parcel_collection_assignments    parcel_collection_assignments[]
   parcel_collection_attempts       parcel_collection_attempts[]
 
+  // Driver Expenses module — Prisma inverse relations only (no columns on
+  // drivers). See the driver_expense_* models below.
+  driver_expense_profiles driver_expense_profiles?
+  driver_daily_expenses   driver_daily_expenses[]
+
   @@index([is_active])
 }
 
@@ -724,4 +729,76 @@ enum ParcelCollectionAssignmentEndReason {
   FAILED
   RECEIVED_AT_COMPANY
   ORDER_CANCELLED
+}
+
+// ============================================================================
+// DRIVER EXPENSES MODULE (Phase 1 — database only)
+//
+// Fully independent of every financial/operational module: no relation to
+// orders, delivery, driver cash, settlements, wallets, payouts or company
+// finance, and nothing here is ever posted to those ledgers. The ONLY
+// external business-data reference is drivers.id (driver identity).
+//
+// Calculation (performed by the Driver Expenses backend, later phases):
+//   price per liter      = price_per_20_liters / 20
+//   fuel expense per km  = price per liter * consumption (L/100 km) / 100
+//   daily expense        = distance_km * fuel expense per km
+//                        = distance_km * price_per_20_liters * consumption * 0.0005
+// CHECK constraints in the migration enforce positivity and that every daily
+// row's estimated_expense equals that formula over its own snapshots (stored
+// exactly — never rounded at rest).
+// ============================================================================
+
+enum DriverExpenseVehicleType {
+  MOTORCYCLE
+  CAR
+}
+
+// Append-only configuration history. The settings applicable to an expense
+// date are the row with the greatest effective_from <= that date. A change is
+// a NEW row with a new effective_from — existing rows (and the daily expenses
+// that reference and snapshot them) are never rewritten.
+model driver_fuel_settings {
+  id                                 String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  price_per_20_liters                Decimal                 @db.Decimal(14, 2)
+  motorcycle_consumption_l_per_100km Decimal                 @db.Decimal(6, 2)
+  car_consumption_l_per_100km        Decimal                 @db.Decimal(6, 2)
+  effective_from                     DateTime                @unique @db.Date
+  created_at                         DateTime                @default(now()) @db.Timestamptz(3)
+  driver_daily_expenses              driver_daily_expenses[]
+}
+
+// One per driver — the vehicle type a new daily expense defaults to. Holds no
+// copy of driver identity data (name/phone live on drivers -> users).
+model driver_expense_profiles {
+  id                   String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  driver_id            String                   @unique @db.Uuid
+  default_vehicle_type DriverExpenseVehicleType
+  created_at           DateTime                 @default(now()) @db.Timestamptz(3)
+  updated_at           DateTime                 @default(now()) @db.Timestamptz(3)
+  drivers              drivers                  @relation(fields: [driver_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+}
+
+// One row per driver per calendar date. The fuel price and the consumption
+// rate of the vehicle type used are SNAPSHOTTED so a later settings change
+// can never alter a recorded day.
+model driver_daily_expenses {
+  id                               String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  driver_id                        String                   @db.Uuid
+  expense_date                     DateTime                 @db.Date
+  vehicle_type                     DriverExpenseVehicleType
+  distance_km                      Decimal                  @db.Decimal(8, 2)
+  fuel_settings_id                 String                   @db.Uuid
+  price_per_20_liters_snapshot     Decimal                  @db.Decimal(14, 2)
+  consumption_l_per_100km_snapshot Decimal                  @db.Decimal(6, 2)
+  estimated_expense                Decimal                  @db.Decimal(24, 10)
+  notes                            String?
+  created_at                       DateTime                 @default(now()) @db.Timestamptz(3)
+  updated_at                       DateTime                 @default(now()) @db.Timestamptz(3)
+  drivers                          drivers                  @relation(fields: [driver_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  driver_fuel_settings             driver_fuel_settings     @relation(fields: [fuel_settings_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([driver_id, expense_date])
+  @@index([expense_date])
+  @@index([fuel_settings_id])
 }
