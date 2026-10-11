@@ -65,6 +65,13 @@ export interface WalletCustomerSummaryEntry {
   pendingAmount: string;
 }
 
+// GET /api/v1/wallets/totals — system-wide figures across ALL customers,
+// same definitions as a single Customer's wallet. Money as strings.
+export interface WalletTotals {
+  availableBalance: string;
+  pendingAmount: string;
+}
+
 export interface WalletTransactionOrderSummary {
   id: string;
   orderNumber: string;

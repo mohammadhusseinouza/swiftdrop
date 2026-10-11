@@ -12,6 +12,7 @@ import type {
   WalletCustomerSummary,
   WalletDetail,
   WalletSummary,
+  WalletTotals,
   WalletTransactionEntry,
 } from './domain.types';
 
@@ -87,6 +88,20 @@ export const walletsApi = api.injectEndpoints({
       providesTags: [{ type: 'Wallet', id: 'LIST' }],
     }),
 
+    /**
+     * System-wide available + pending totals (wallets.read) for the
+     * Management Customers page summary cards. Pending depends on active
+     * orders, hence `Order/LIST` alongside `Wallet/LIST`.
+     */
+    getWalletTotals: builder.query<WalletTotals, void>({
+      query: () => ({ url: '/wallets/totals' }),
+      transformResponse: (r: ApiSuccessResponse<WalletTotals>) => unwrapData(r),
+      providesTags: [
+        { type: 'Wallet', id: 'LIST' },
+        { type: 'Order', id: 'LIST' },
+      ],
+    }),
+
     getWalletTransactions: builder.query<
       Paginated<WalletTransactionEntry>,
       { customerId: string; params?: ListWalletTransactionsParams }
@@ -160,6 +175,7 @@ export const {
   useGetWalletsQuery,
   useGetWalletQuery,
   useGetWalletCustomerSummariesQuery,
+  useGetWalletTotalsQuery,
   useGetWalletTransactionsQuery,
   useAdjustWalletMutation,
   useReverseWalletTransactionMutation,

@@ -646,6 +646,14 @@ export interface CustomerOrderSummary {
   totalOrders: number;
 }
 /**
+ * GET /customers/totals (customers.read) — system-wide operational counts
+ * across ALL customers, same definitions as `CustomerOrderSummary`.
+ */
+export interface CustomerOrderTotals {
+  activeOrders: number;
+  deliveredOrders: number;
+}
+/**
  * Management-safe OPERATIONAL data only. Wallet balance / pending / ledger
  * data is NOT here (Phase 11.6 correction) — it comes exclusively from the
  * `wallets.read`-gated `GET /wallets/:customerId`.
@@ -657,6 +665,15 @@ export interface CustomerDetail extends CustomerSummary {
 /** `GET /wallets/customer-summaries` (wallets.read) — one entry per requested id with a wallet. */
 export interface WalletCustomerSummary {
   customerId: string;
+  availableBalance: string;
+  pendingAmount: string;
+}
+
+/**
+ * GET /wallets/totals (wallets.read) — system-wide available + pending money
+ * across ALL customers, same definitions as a single customer's wallet.
+ */
+export interface WalletTotals {
   availableBalance: string;
   pendingAmount: string;
 }

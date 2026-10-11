@@ -11,6 +11,7 @@ import {
 import {
   createCustomerController,
   getCustomerController,
+  getCustomerOrderTotalsController,
   listCustomersController,
   updateCustomerController,
 } from "./customer.controller";
@@ -32,6 +33,10 @@ customerRouter.post(
   validate({ body: CreateCustomerSchema }),
   createCustomerController
 );
+
+// MUST be registered before "/:id" — a literal segment the dynamic route
+// would otherwise capture (and reject as a non-UUID).
+customerRouter.get("/totals", authenticate, authorize("customers.read"), getCustomerOrderTotalsController);
 
 customerRouter.get(
   "/:id",

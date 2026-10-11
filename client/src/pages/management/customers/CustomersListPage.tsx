@@ -26,6 +26,7 @@ import { useDebouncedValue } from '../../../lib/useDebouncedValue';
 import { buildCustomerColumns } from './customerColumns';
 import { MobileCustomerCard } from './MobileCustomerCard';
 import { CustomerFormDialog } from './CustomerFormDialog';
+import { CustomerTotalsSummary } from './CustomerTotalsSummary';
 import {
   EMPTY_CUSTOMERS_STATE,
   hasActiveCustomerFilters,
@@ -133,6 +134,9 @@ export default function CustomersListPage() {
         description="Manage customer accounts and delivery relationships."
         actions={addButton}
       />
+
+      {/* System-wide totals — independent of the table's filters / page. */}
+      <CustomerTotalsSummary />
 
       <Card flush className="space-y-4 p-4 sm:p-6">
         <SearchInput

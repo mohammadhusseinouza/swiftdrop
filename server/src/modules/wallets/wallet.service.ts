@@ -7,6 +7,7 @@ import type {
   WalletCustomerSummaryEntry,
   WalletDetail,
   WalletSummary,
+  WalletTotals,
   WalletTransactionEntry,
 } from "./wallet.types";
 
@@ -34,9 +35,20 @@ import type {
 // DELIVERY_ONLY in the queries below.
 const PENDING_ACTIVE_STATUSES = [...ORDER_ACTIVE_STATUSES];
 
+// The ONE pending-qualification predicate — every pending query (single
+// Customer, batched page, system-wide total) builds on this so they can
+// never diverge.
+function pendingOrdersWhere(customerScope?: Prisma.ordersWhereInput["customer_id"]): Prisma.ordersWhereInput {
+  return {
+    ...(customerScope !== undefined ? { customer_id: customerScope } : {}),
+    order_type: "DELIVERY_ONLY",
+    status: { in: PENDING_ACTIVE_STATUSES },
+  };
+}
+
 export async function getPendingAmountForCustomer(customerId: string): Promise<Prisma.Decimal> {
   const result = await prisma.orders.aggregate({
-    where: { customer_id: customerId, order_type: "DELIVERY_ONLY", status: { in: PENDING_ACTIVE_STATUSES } },
+    where: pendingOrdersWhere(customerId),
     _sum: { remaining_order_amount: true },
   });
   return result._sum.remaining_order_amount ?? new Prisma.Decimal(0);
@@ -50,7 +62,7 @@ export async function getPendingAmountsForCustomers(customerIds: string[]): Prom
 
   const grouped = await prisma.orders.groupBy({
     by: ["customer_id"],
-    where: { customer_id: { in: customerIds }, order_type: "DELIVERY_ONLY", status: { in: PENDING_ACTIVE_STATUSES } },
+    where: pendingOrdersWhere({ in: customerIds }),
     _sum: { remaining_order_amount: true },
   });
   for (const row of grouped) {
@@ -99,6 +111,26 @@ export async function getCustomerWalletFigures(customerId: string): Promise<Cust
   return {
     availableBalance: wallet.available_balance.toString(),
     pendingAmount: pending.toString(),
+  };
+}
+
+// ============================================================
+// GET /api/v1/wallets/totals — system-wide figures for the Management
+// Customers page summary cards. Same definitions as a single Customer's
+// Wallet Detail, summed across ALL customers in the database:
+//   availableBalance -> SUM(customer_wallets.available_balance)
+//   pendingAmount    -> pendingOrdersWhere() with no customer scope
+// Never derived from a client page of rows.
+// ============================================================
+
+export async function getWalletTotals(): Promise<WalletTotals> {
+  const [wallets, pending] = await Promise.all([
+    prisma.customer_wallets.aggregate({ _sum: { available_balance: true } }),
+    prisma.orders.aggregate({ where: pendingOrdersWhere(), _sum: { remaining_order_amount: true } }),
+  ]);
+  return {
+    availableBalance: (wallets._sum.available_balance ?? new Prisma.Decimal(0)).toString(),
+    pendingAmount: (pending._sum.remaining_order_amount ?? new Prisma.Decimal(0)).toString(),
   };
 }
 

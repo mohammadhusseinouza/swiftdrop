@@ -7,7 +7,11 @@ import type {
   Paginated,
   PaginationParams,
 } from './apiTypes';
-import type { CustomerDetail, CustomerSummary } from './domain.types';
+import type {
+  CustomerDetail,
+  CustomerOrderTotals,
+  CustomerSummary,
+} from './domain.types';
 
 /**
  * Customers (Phase 5.1). Backend: server/src/modules/customers.
@@ -72,6 +76,21 @@ export const customersApi = api.injectEndpoints({
       providesTags: (_res, _err, id) => [{ type: 'Customer', id }],
     }),
 
+    /**
+     * System-wide active / delivered order counts for the Customers page
+     * summary cards. Never affected by list search / filters / page. Order
+     * mutations invalidate `Order/LIST`, so the counts refresh with them.
+     */
+    getCustomerOrderTotals: builder.query<CustomerOrderTotals, void>({
+      query: () => ({ url: '/customers/totals' }),
+      transformResponse: (r: ApiSuccessResponse<CustomerOrderTotals>) =>
+        unwrapData(r),
+      providesTags: [
+        { type: 'Customer', id: 'LIST' },
+        { type: 'Order', id: 'LIST' },
+      ],
+    }),
+
     createCustomer: builder.mutation<CustomerDetail, CreateCustomerRequest>({
       query: (body) => ({ url: '/customers', method: 'POST', body }),
       transformResponse: (r: ApiSuccessResponse<CustomerDetail>) =>
@@ -101,6 +120,7 @@ export const customersApi = api.injectEndpoints({
 export const {
   useGetCustomersQuery,
   useGetCustomerQuery,
+  useGetCustomerOrderTotalsQuery,
   useCreateCustomerMutation,
   useUpdateCustomerMutation,
 } = customersApi;

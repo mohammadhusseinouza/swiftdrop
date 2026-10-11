@@ -1,8 +1,14 @@
 import { RequestHandler } from "express";
 import { AppError } from "../../shared/errors/app-error";
-import { createCustomer, getCustomerById, listCustomers, updateCustomer } from "./customer.service";
+import {
+  createCustomer,
+  getCustomerById,
+  getCustomerOrderTotals,
+  listCustomers,
+  updateCustomer,
+} from "./customer.service";
 import type { CreateCustomerInput, ListCustomersQuery, UpdateCustomerInput } from "./customer.schema";
-import type { CustomerDetail, CustomerSummary } from "./customer.types";
+import type { CustomerDetail, CustomerOrderTotals, CustomerSummary } from "./customer.types";
 import type { ApiListResponse, ApiSuccessResponse } from "../../shared/types/api-response";
 
 export const listCustomersController: RequestHandler<
@@ -40,6 +46,18 @@ export const createCustomerController: RequestHandler<
 
     const customer = await createCustomer(req.body, req.actor.userId);
     res.status(201).json({ success: true, data: customer });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getCustomerOrderTotalsController: RequestHandler<
+  Record<string, never>,
+  ApiSuccessResponse<CustomerOrderTotals>
+> = async (_req, res, next) => {
+  try {
+    const data = await getCustomerOrderTotals();
+    res.json({ success: true, data });
   } catch (error) {
     next(error);
   }

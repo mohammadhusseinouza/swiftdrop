@@ -12,6 +12,7 @@ import { AdjustWalletBodySchema } from "./wallet-correction.schema";
 import {
   getWalletCustomerSummariesController,
   getWalletDetailController,
+  getWalletTotalsController,
   listWalletsController,
   listWalletTransactionsController,
 } from "./wallet.controller";
@@ -32,6 +33,10 @@ walletRouter.get(
   validate({ query: WalletCustomerSummariesQuerySchema }),
   getWalletCustomerSummariesController
 );
+
+// System-wide available + pending totals (Management Customers page). Also a
+// literal segment — registered before "/:customerId" for the same reason.
+walletRouter.get("/totals", authenticate, authorize("wallets.read"), getWalletTotalsController);
 
 walletRouter.get(
   "/:customerId",

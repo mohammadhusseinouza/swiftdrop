@@ -10,7 +10,12 @@ import {
 } from "../orders/order-lifecycle";
 import { PORTAL_EMAIL_REQUIRED_MESSAGE } from "./customer.schema";
 import type { CreateCustomerInput, ListCustomersQuery, UpdateCustomerInput } from "./customer.schema";
-import type { CustomerDetail, CustomerOrderSummary, CustomerSummary } from "./customer.types";
+import type {
+  CustomerDetail,
+  CustomerOrderSummary,
+  CustomerOrderTotals,
+  CustomerSummary,
+} from "./customer.types";
 
 type CustomerWithArea = customers & { areas: areas | null };
 
@@ -149,15 +154,29 @@ async function getActiveOrderCounts(customerIds: string[]): Promise<Map<string, 
   return map;
 }
 
+// The ONE active / delivered predicates — shared by the per-Customer summary
+// and the system-wide totals so the two can never diverge.
+const ACTIVE_ORDER_WHERE: Prisma.ordersWhereInput = { status: { in: [...ORDER_ACTIVE_STATUSES] } };
+const DELIVERED_ORDER_WHERE: Prisma.ordersWhereInput = { status: "DELIVERED" };
+
 async function getCustomerOrderSummary(customerId: string): Promise<CustomerOrderSummary> {
   const [activeOrders, deliveredOrders, totalOrders] = await Promise.all([
-    prisma.orders.count({
-      where: { customer_id: customerId, status: { in: [...ORDER_ACTIVE_STATUSES] } },
-    }),
-    prisma.orders.count({ where: { customer_id: customerId, status: "DELIVERED" } }),
+    prisma.orders.count({ where: { ...ACTIVE_ORDER_WHERE, customer_id: customerId } }),
+    prisma.orders.count({ where: { ...DELIVERED_ORDER_WHERE, customer_id: customerId } }),
     prisma.orders.count({ where: { customer_id: customerId } }),
   ]);
   return { activeOrders, deliveredOrders, totalOrders };
+}
+
+// GET /api/v1/customers/totals — system-wide operational counts across ALL
+// customers (every order belongs to exactly one customer). Independent of
+// any list search/filter/page.
+export async function getCustomerOrderTotals(): Promise<CustomerOrderTotals> {
+  const [activeOrders, deliveredOrders] = await Promise.all([
+    prisma.orders.count({ where: ACTIVE_ORDER_WHERE }),
+    prisma.orders.count({ where: DELIVERED_ORDER_WHERE }),
+  ]);
+  return { activeOrders, deliveredOrders };
 }
 
 export interface ListCustomersResult {

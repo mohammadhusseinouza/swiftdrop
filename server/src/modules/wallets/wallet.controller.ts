@@ -2,6 +2,7 @@ import { RequestHandler } from "express";
 import {
   getWalletCustomerSummaries,
   getWalletDetail,
+  getWalletTotals,
   listWallets,
   listWalletTransactions,
 } from "./wallet.service";
@@ -14,6 +15,7 @@ import type {
   WalletCustomerSummaryEntry,
   WalletDetail,
   WalletSummary,
+  WalletTotals,
   WalletTransactionEntry,
 } from "./wallet.types";
 import type { ApiListResponse, ApiSuccessResponse } from "../../shared/types/api-response";
@@ -47,6 +49,18 @@ export const getWalletCustomerSummariesController: RequestHandler<
   try {
     const query = req.query as unknown as WalletCustomerSummariesQuery;
     const data = await getWalletCustomerSummaries(query.customerIds);
+    res.json({ success: true, data });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getWalletTotalsController: RequestHandler<
+  Record<string, never>,
+  ApiSuccessResponse<WalletTotals>
+> = async (_req, res, next) => {
+  try {
+    const data = await getWalletTotals();
     res.json({ success: true, data });
   } catch (error) {
     next(error);

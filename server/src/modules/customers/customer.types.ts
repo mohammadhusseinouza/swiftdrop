@@ -30,6 +30,15 @@ export interface CustomerOrderSummary {
   totalOrders: number;
 }
 
+// GET /customers/totals — system-wide operational counts across ALL
+// customers, same active/delivered definitions as CustomerOrderSummary.
+// Operational only: wallet totals are served by GET /wallets/totals
+// (wallets.read), never under customers.read.
+export interface CustomerOrderTotals {
+  activeOrders: number;
+  deliveredOrders: number;
+}
+
 // CustomerDetail is management-safe OPERATIONAL data only. Wallet balance /
 // pending / ledger data is NOT here — it is served exclusively by
 // GET /wallets/:customerId (wallets.read). See the Phase 11.6 correction:
