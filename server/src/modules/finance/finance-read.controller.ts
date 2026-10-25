@@ -1,8 +1,9 @@
+import { getFinancialReleaseReconciliation, type ReconciliationReport } from "../financial-release/financial-release-reconciliation.service";
 import { RequestHandler } from "express";
 import { AppError } from "../../shared/errors/app-error";
 import { getFinanceSummary } from "./finance-summary.service";
 import { getFinanceTransactions } from "./finance-transaction.service";
-import type { FinanceDateRangeQuery, FinanceTransactionsQuery } from "./finance-read.schema";
+import type { FinanceSummaryQuery, FinanceTransactionsQuery } from "./finance-read.schema";
 import type { FinanceSummaryDto, FinanceTransactionEntry } from "./finance-read.types";
 import type { ApiListResponse, ApiSuccessResponse } from "../../shared/types/api-response";
 
@@ -15,7 +16,7 @@ export const getFinanceSummaryController: RequestHandler<Record<string, never>, 
     if (!req.actor) {
       throw new AppError({ statusCode: 401, code: "UNAUTHORIZED", message: "Authentication required" });
     }
-    const query = req.query as unknown as FinanceDateRangeQuery;
+    const query = req.query as unknown as FinanceSummaryQuery;
     const summary = await getFinanceSummary(query);
     res.json({ success: true, data: summary });
   } catch (error) {
@@ -41,6 +42,20 @@ export const getFinanceTransactionsController: RequestHandler<Record<string, nev
       data: items,
       meta: { page: query.page, limit: query.limit, total, totalPages },
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// FR.8 — GET /finance/reconciliation/financial-release (read-only).
+export const getFinancialReleaseReconciliationController: RequestHandler<Record<string, never>, ApiSuccessResponse<ReconciliationReport>> = async (
+  _req,
+  res,
+  next
+) => {
+  try {
+    const report = await getFinancialReleaseReconciliation();
+    res.json({ success: true, data: report });
   } catch (error) {
     next(error);
   }

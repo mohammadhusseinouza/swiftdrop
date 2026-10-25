@@ -1,6 +1,13 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { Controller, useForm, type UseFormSetError } from 'react-hook-form';
+import {
+  Controller,
+  useForm,
+  type FieldErrors,
+  type UseFormRegister,
+  type UseFormSetError,
+} from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
+import { Link } from 'react-router-dom';
 import { ArrowLeft, X } from 'lucide-react';
 
 import { cn } from '../../../components/ui/cn';
@@ -8,64 +15,93 @@ import { Button } from '../../../components/ui/Button';
 import { FormSection } from '../../../components/forms/FormSection';
 import { SelectField, TextAreaField } from '../../../components/forms/Field';
 import { MoneyInput } from '../../../components/forms/MoneyInput';
+import { CalculatedField } from '../../../components/forms/CalculatedField';
 import { ServerSearchSelect } from '../../../components/forms/ServerSearchSelect';
+import { LoadingState } from '../../../components/feedback/LoadingState';
 
+import { usePermissions } from '../../../features/auth/usePermissions';
+import { paths } from '../../../routes/paths';
 import { useDebouncedValue } from '../../../lib/useDebouncedValue';
+import { MD_QUERY, useMediaQuery } from '../../../lib/useMediaQuery';
 import { formatMoney, isZeroMoney } from '../../../lib/format';
-import {
-  compareMoney,
-  formatCents,
-  parseMoneyToCents,
-  subtractMoney,
-} from '../../../lib/money';
-import {
-  useGetDriversQuery,
-  useGetDriverQuery,
-  useGetManagementDriverCashQuery,
-} from '../../../services/driversApi';
+import { formatCents, parseMoneyToCents, subtractMoney } from '../../../lib/money';
+import { useGetDriversQuery, useGetDriverQuery } from '../../../services/driversApi';
 import { useGetPaymentMethodsQuery } from '../../../services/settingsApi';
-import { useCreateSettlementMutation } from '../../../services/settlementsApi';
+import {
+  useCreateSettlementMutation,
+  useGetOutstandingCollectionsQuery,
+  type CreateSettlementRequest,
+  type DriverOutstandingCollections,
+} from '../../../services/settlementsApi';
 import type { SettlementSummary } from '../../../services/domain.types';
 import {
   getApiErrorCode,
-  getApiErrorMessage,
   getApiErrorStatus,
   getApiValidationDetails,
-  isTransportError,
   type UnknownApiError,
 } from '../../../services/apiError';
 
 import {
+  legacyAmountError,
   makeProcessSettlementDefaults,
   processSettlementSchema,
   toCreateSettlementRequest,
   PROCESS_SETTLEMENT_FIELDS,
   type ProcessSettlementFormValues,
 } from './processSettlement.schema';
+import {
+  UNATTRIBUTED_REASON_MIN_LENGTH,
+  applyAllocationRejection,
+  buildAllocationRequest,
+  buildSettlementPreview,
+  chooseSettlementFormat,
+  draftForDriver,
+  emptyAllocationDraft,
+  reconcileDraft,
+  validateAllocationDraft,
+  type AllocationDraft,
+  type ReconcileResult,
+} from './settlementAllocation';
+import {
+  INITIAL_IDEMPOTENCY_STATE,
+  afterFailure,
+  afterSuccess,
+  classifySettlementError,
+  isAmbiguousSettlementFailure,
+  generateIdempotencyKey,
+  needsPositionRefresh,
+  resolveIdempotencyKey,
+  settlementErrorMessage,
+  type IdempotencyState,
+} from './settlementSubmission';
+import { settlementCapabilities } from './settlementPresentation';
+import { OutstandingCollectionsPanel } from './OutstandingCollectionsPanel';
+import { SettlementPreviewPanel } from './SettlementPreviewPanel';
 
 /**
- * Phase 11.10 — Process Driver Settlement.
+ * Process Driver Settlement (Phase 11.10; settlement allocation FR.9).
  *
- * A settlement records physical cash a driver hands back to the company —
- * a transfer of CUSTODY, never revenue:
- *   driver cash-held balance   ↓   (a SETTLEMENT debit ledger row)
- *   customer wallet / payouts   unchanged
- *   company revenue             unchanged
- *   order financial allocation  unchanged
+ * A settlement records physical cash a driver hands back to the company. It
+ * reduces driver cash and NEVER debits a customer wallet. Two request formats
+ * (contract §5.2):
  *
- * Only cash the driver currently holds is settleable. ONE atomic
- * `POST /api/v1/driver-settlements` per confirmed intent — the backend
- * (settlement.service.ts) runs the driver-cash debit, the settlement row and
- * the audit record in a single transaction with an advisory lock +
- * concurrency-safe conditional decrement. The frontend never PATCHes the cash
- * account or posts a ledger row itself.
+ *   ALLOCATION — the driver holds settlement-mode collections (or the server
+ *     required it): Finance explicitly selects collections and amounts, plus
+ *     an optional explained unattributed amount. amountReceived is CALCULATED
+ *     (Σ allocations + unattributed). Collections this settlement fully
+ *     settles release their already-earned wallet credit / revenue on the
+ *     server, in the same transaction.
+ *   LEGACY — no settlement-mode money: the existing amount-only workflow,
+ *     unchanged.
  *
- * IDEMPOTENCY (Phase 8.9): every confirmed submission carries one
- * `Idempotency-Key`. Same key reused when retrying an AMBIGUOUS transport
- * failure (so a possibly-succeeded settlement is never charged twice); a new
- * key only for a genuinely new intent (dialog reopened, or the body
- * meaningfully changed after a definitive business failure). Keys live in
- * refs — never Redux, never localStorage.
+ * ONE atomic `POST /api/v1/driver-settlements` per confirmed intent; the
+ * server re-validates everything. The preview is provisional and is rebuilt
+ * from freshly fetched collections before confirmation.
+ *
+ * IDEMPOTENCY (Phase 8.9): one key per intended settlement, bound to the
+ * exact body (settlementSubmission.ts). Reused on retry; after an ambiguous
+ * failure the request is locked to that body until the dialog closes. Keys
+ * live in refs — never Redux, never localStorage.
  */
 
 interface ProcessSettlementDialogProps {
@@ -78,18 +114,8 @@ interface ProcessSettlementDialogProps {
 
 type Step = 'form' | 'confirm' | 'done';
 
-function genIdempotencyKey(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  const b = crypto.getRandomValues(new Uint8Array(16));
-  b[6] = (b[6] & 0x0f) | 0x40;
-  b[8] = (b[8] & 0x3f) | 0x80;
-  const h = Array.from(b, (x) => x.toString(16).padStart(2, '0'));
-  return `${h.slice(0, 4).join('')}-${h.slice(4, 6).join('')}-${h
-    .slice(6, 8)
-    .join('')}-${h.slice(8, 10).join('')}-${h.slice(10, 16).join('')}`;
-}
+/** Outstanding collections per page (backend default 50, max 100). */
+const OUTSTANDING_PAGE_SIZE = 50;
 
 function applyServerFieldErrors(
   error: UnknownApiError,
@@ -118,6 +144,19 @@ function applyServerFieldErrors(
   return mapped;
 }
 
+function staleMessage(result: ReconcileResult): string | null {
+  const parts: string[] = [];
+  if (result.removed.length > 0)
+    parts.push(`${result.removed.length} selected collection(s) are no longer outstanding and were removed`);
+  if (result.overAllocated.length > 0)
+    parts.push(`${result.overAllocated.length} amount(s) now exceed the outstanding amount`);
+  if (result.changed.length > 0 && result.removed.length === 0 && result.overAllocated.length === 0)
+    parts.push(`${result.changed.length} selected collection(s) changed`);
+  return parts.length > 0
+    ? `Collections changed since they were loaded: ${parts.join('; ')}. Review the selection before continuing.`
+    : null;
+}
+
 export function ProcessSettlementDialog({
   open,
   initialDriverId = '',
@@ -127,19 +166,27 @@ export function ProcessSettlementDialog({
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const formErrorId = useId();
+  const isDesktop = useMediaQuery(MD_QUERY);
+  const caps = settlementCapabilities(usePermissions());
 
   const [step, setStep] = useState<Step>('form');
   const [formError, setFormError] = useState<string | null>(null);
   const [ambiguous, setAmbiguous] = useState(false);
-  const [doneSettlement, setDoneSettlement] = useState<SettlementSummary | null>(
-    null,
-  );
+  const [doneSettlement, setDoneSettlement] = useState<SettlementSummary | null>(null);
+  const [contractRequired, setContractRequired] = useState(false);
+  const [page, setPage] = useState(1);
+  const [draft, setDraft] = useState<AllocationDraft>(() => emptyAllocationDraft(initialDriverId));
+  const [serverRowErrors, setServerRowErrors] = useState<Record<string, string>>({});
+  const [unattributedServerError, setUnattributedServerError] = useState<string | null>(null);
+  const [showAllErrors, setShowAllErrors] = useState(false);
+  const [checking, setChecking] = useState(false);
 
-  const keyRef = useRef<string | null>(null);
-  const failedBodyRef = useRef<string | null>(null);
+  const idemRef = useRef<IdempotencyState>(INITIAL_IDEMPOTENCY_STATE);
+  // Synchronous double-submit guard: a second click can arrive before React
+  // re-renders the disabled button.
+  const submittingRef = useRef(false);
 
-  const [createSettlement, { isLoading: creating }] =
-    useCreateSettlementMutation();
+  const [createSettlement, { isLoading: creating }] = useCreateSettlementMutation();
 
   const {
     control,
@@ -148,6 +195,7 @@ export function ProcessSettlementDialog({
     reset,
     setValue,
     setError,
+    clearErrors,
     watch,
     formState: { errors },
   } = useForm<ProcessSettlementFormValues>({
@@ -169,41 +217,68 @@ export function ProcessSettlementDialog({
     limit: 20,
   });
   const driver = useGetDriverQuery(driverId, { skip: !driverId });
-  const cash = useGetManagementDriverCashQuery(driverId, { skip: !driverId });
   const paymentMethods = useGetPaymentMethodsQuery({ isActive: true });
+
+  // Cash position + outstanding collections from ONE server snapshot. Fresh on
+  // every open / driver / page (never a cached position from an earlier
+  // session); also refreshed by every settlement / adjustment for the driver.
+  const outstanding = useGetOutstandingCollectionsQuery(
+    { driverId, page, limit: OUTSTANDING_PAGE_SIZE },
+    { skip: !open || !driverId || !caps.canReadFinance, refetchOnMountOrArgChange: true },
+  );
+  // currentData: never show the previous driver's position while switching.
+  const position: DriverOutstandingCollections | undefined =
+    outstanding.currentData?.driverId === driverId ? outstanding.currentData : undefined;
+  const totalPages = outstanding.currentData?.meta.totalPages ?? 1;
+  const totalOutstanding = outstanding.currentData?.meta.total ?? 0;
 
   const methodOptions = useMemo(
     () => (paymentMethods.data ?? []).map((m) => ({ value: m.id, label: m.name })),
     [paymentMethods.data],
   );
+  const methodName = methodOptions.find((m) => m.value === values.paymentMethodId)?.label ?? '';
 
-  const cashHeld = cash.data?.currentBalance ?? null;
-  const cashStatus = getApiErrorStatus(cash.error);
+  const format = chooseSettlementFormat(position ?? null, contractRequired);
+  const isAllocation = format === 'ALLOCATION';
+
+  const cashHeld = position?.cashBalance ?? null;
+  const zeroCash = cashHeld !== null && isZeroMoney(cashHeld);
+  const positionStatus = getApiErrorStatus(outstanding.error);
   const driverNotFound =
     !!driverId &&
-    (driver.isError || cash.isError) &&
-    (cashStatus === 404 ||
-      getApiErrorCode(cash.error) === 'NOT_FOUND' ||
+    (positionStatus === 404 ||
+      getApiErrorCode(outstanding.error) === 'NOT_FOUND' ||
       getApiErrorStatus(driver.error) === 404);
 
-  const zeroCash = cashHeld !== null && isZeroMoney(cashHeld);
+  const validation = validateAllocationDraft(draft, position ?? null);
+  const preview = buildSettlementPreview(draft, position ?? null);
+  const rowErrors = { ...validation.rowErrors, ...serverRowErrors };
+  const unattributedTouched = draft.unattributedAmount.trim() !== '' || showAllErrors;
+  const unattributedAmountError =
+    unattributedServerError ?? (unattributedTouched ? validation.unattributedAmountError : undefined);
+  const unattributedReasonError =
+    unattributedTouched || draft.unattributedReason.trim() !== ''
+      ? validation.unattributedReasonError
+      : undefined;
 
-  const overBalance =
-    cashHeld !== null &&
-    values.amountReceived.trim() !== '' &&
-    compareMoney(values.amountReceived.trim(), cashHeld) === 1;
-
-  const balanceAfter =
-    cashHeld !== null && !overBalance && values.amountReceived.trim() !== ''
-      ? subtractMoney(cashHeld, values.amountReceived.trim())
-      : null;
-
-  const methodName =
-    methodOptions.find((m) => m.value === values.paymentMethodId)?.label ?? '';
+  const legacyError = legacyAmountError(values.amountReceived, cashHeld);
+  const legacyOverBalance =
+    values.amountReceived.trim() !== '' && legacyError === 'Amount exceeds the cash held';
+  const legacyBalanceAfter =
+    cashHeld !== null && !legacyError ? subtractMoney(cashHeld, values.amountReceived.trim()) : null;
 
   const driverLabel = driver.data
     ? `${driver.data.driverNumber} · ${driver.data.user.firstName} ${driver.data.user.lastName}`
     : undefined;
+  const dataAsOf = outstanding.fulfilledTimeStamp
+    ? new Date(outstanding.fulfilledTimeStamp).toLocaleTimeString()
+    : null;
+
+  const changeDraft = (next: AllocationDraft) => {
+    setDraft(next);
+    setServerRowErrors({});
+    setUnattributedServerError(null);
+  };
 
   /* --------------------------- open / close ---------------------------- */
   const wasOpen = useRef(false);
@@ -215,8 +290,14 @@ export function ProcessSettlementDialog({
       setAmbiguous(false);
       setDoneSettlement(null);
       setDriverTerm('');
-      keyRef.current = null;
-      failedBodyRef.current = null;
+      setContractRequired(false);
+      setPage(1);
+      setDraft(emptyAllocationDraft(initialDriverId));
+      setServerRowErrors({});
+      setUnattributedServerError(null);
+      setShowAllErrors(false);
+      idemRef.current = INITIAL_IDEMPOTENCY_STATE;
+      submittingRef.current = false;
     }
     wasOpen.current = open;
   }, [open, initialDriverId, reset]);
@@ -228,126 +309,164 @@ export function ProcessSettlementDialog({
     else if (!open && dialog.open) dialog.close();
   }, [open]);
 
-  /* ------------------------------- submit ------------------------------ */
-  const canReview =
-    !!cash.data && !zeroCash && !overBalance && !paymentMethods.isError;
+  // Driver switch: selections never carry over to another driver.
+  useEffect(() => {
+    setDraft((d) => draftForDriver(d, driverId));
+    setPage(1);
+    setContractRequired(false);
+    setServerRowErrors({});
+    setUnattributedServerError(null);
+    setShowAllErrors(false);
+  }, [driverId]);
 
-  const goToConfirm = handleSubmit((v) => {
+  // A preview is never final: if the collections change while it is shown
+  // (another settlement, a correction), send Finance back to review them.
+  // Not while an ambiguous attempt is pending: it may have committed (that
+  // alone changes the collections), and the only safe action is retrying the
+  // SAME request, which the server replays.
+  useEffect(() => {
+    if (step !== 'confirm' || !isAllocation || !position || creating || ambiguous) return;
+    const result = reconcileDraft(draft, position, { completeList: totalPages <= 1 });
+    const message = staleMessage(result);
+    if (message) {
+      setDraft(result.draft);
+      setStep('form');
+      setFormError(message);
+    }
+    // Re-run only when fresh server data arrives.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [position]);
+
+  /* ------------------------------- review ------------------------------ */
+  const canReview =
+    caps.canReadFinance && !!position && !zeroCash && !paymentMethods.isError && !checking;
+
+  const goToConfirm = handleSubmit(async (v) => {
     if (!canReview) return;
-    if (
-      cashHeld !== null &&
-      compareMoney(v.amountReceived.trim(), cashHeld) === 1
-    ) {
+    setShowAllErrors(true);
+    setFormError(null);
+
+    if (!isAllocation) {
+      const err = legacyAmountError(v.amountReceived, cashHeld);
+      if (err) {
+        setError('amountReceived', { type: 'manual', message: err });
+        return;
+      }
+      setStep('confirm');
       return;
     }
-    setFormError(null);
-    setAmbiguous(false);
-    setStep('confirm');
+
+    if (!validation.valid) return;
+    // Rebuild the preview from fresh collections — never confirm a stale one.
+    setChecking(true);
+    try {
+      const fresh = await outstanding.refetch();
+      const data = fresh.data;
+      if (!data || data.driverId !== driverId) {
+        setFormError('Could not refresh the outstanding collections. Try again.');
+        return;
+      }
+      const result = reconcileDraft(draft, data, { completeList: data.meta.totalPages <= 1 });
+      const message = staleMessage(result);
+      if (message) {
+        changeDraft(result.draft);
+        setFormError(message);
+        return;
+      }
+      if (!validateAllocationDraft(result.draft, data).valid) return;
+      setStep('confirm');
+    } finally {
+      setChecking(false);
+    }
   });
 
+  /* ------------------------------- submit ------------------------------ */
   const runSettlement = async () => {
-    const body = toCreateSettlementRequest(values);
-    const serial = JSON.stringify(body);
+    if (submittingRef.current) return;
+    submittingRef.current = true;
 
-    if (keyRef.current === null) {
-      keyRef.current = genIdempotencyKey();
-    } else if (
-      failedBodyRef.current !== null &&
-      failedBodyRef.current !== serial
-    ) {
-      keyRef.current = genIdempotencyKey();
-      failedBodyRef.current = null;
+    const body: CreateSettlementRequest = isAllocation
+      ? buildAllocationRequest(draft, { paymentMethodId: values.paymentMethodId, notes: values.notes })
+      : toCreateSettlementRequest(values);
+    const resolution = resolveIdempotencyKey(idemRef.current, JSON.stringify(body), generateIdempotencyKey);
+    if (!resolution.ok) {
+      submittingRef.current = false;
+      setFormError(
+        'An earlier attempt may already have been processed. Retry it unchanged, or close this dialog and check the settlement history.',
+      );
+      return;
     }
-    const idempotencyKey = keyRef.current;
+    idemRef.current = resolution.state;
+    const selections = Object.values(draft.selections);
+    const affected = isAllocation
+      ? {
+          customerIds: selections.map((s) => s.item.customer.id),
+          orderIds: selections.map((s) => s.item.order.id),
+        }
+      : undefined;
 
     setFormError(null);
-    setAmbiguous(false);
     try {
-      const settlement = await createSettlement({
-        body,
-        idempotencyKey,
-      }).unwrap();
-      keyRef.current = null;
-      failedBodyRef.current = null;
+      const settlement = await createSettlement({ body, idempotencyKey: resolution.key, affected }).unwrap();
+      idemRef.current = afterSuccess();
+      setAmbiguous(false);
       setDoneSettlement(settlement);
       setStep('done');
       onProcessed?.(settlement);
     } catch (e) {
       const err = e as UnknownApiError;
-
-      if (isTransportError(err)) {
-        setAmbiguous(true);
-        setFormError(
-          'We could not confirm whether the settlement was processed. Retry with the same request — the backend will not process it twice.',
-        );
-        return;
-      }
-
-      failedBodyRef.current = serial;
-      const status = getApiErrorStatus(err);
-      const code = getApiErrorCode(err);
-      const message = getApiErrorMessage(err);
-
-      if (status === 409 || code === 'CONFLICT') {
-        setStep('form');
-        setFormError(
-          'This request conflicts with a previous settlement attempt. Review the amount and try again.',
-        );
-        return;
-      }
-      if (status === 403) {
-        setStep('form');
-        setFormError('You do not have permission to process settlements.');
-        return;
-      }
-      if (
-        (status === 400 || status === 422) &&
-        /balance|insufficient|cash/i.test(message)
-      ) {
-        setStep('form');
-        setFormError(
-          'Driver cash balance changed. Review the current balance before trying again.',
-        );
-        void cash.refetch();
-        return;
-      }
-      if (status === 404) {
-        setStep('form');
-        setFormError(
-          'The driver or cash account could not be found. Refresh and try again.',
-        );
-        void cash.refetch();
-        return;
-      }
+      const kind = classifySettlementError(err);
+      const ambiguousFailure = isAmbiguousSettlementFailure(kind);
+      idemRef.current = afterFailure(idemRef.current, ambiguousFailure);
+      setAmbiguous(idemRef.current.ambiguous);
+      setFormError(settlementErrorMessage(kind));
+      if (ambiguousFailure) return; // stay on confirm: retry the same request only
 
       setStep('form');
-      if (applyServerFieldErrors(err, setError)) {
+      let nextDraft = draft;
+      if (kind.kind === 'ALLOCATION_INVALID' && kind.releaseId) {
+        const rejection = applyAllocationRejection(draft, kind.releaseId, kind.problem);
+        nextDraft = rejection.draft;
+        setDraft(nextDraft);
+        setFormError(rejection.message);
+        if (!rejection.removed) setServerRowErrors({ [kind.releaseId]: kind.problem });
+      } else if (kind.kind === 'UNATTRIBUTED_EXCEEDS_BALANCE') {
+        setUnattributedServerError(settlementErrorMessage(kind));
+      } else if (kind.kind === 'ALLOCATION_CONTRACT_REQUIRED') {
+        setContractRequired(true);
+      } else if (kind.kind === 'VALIDATION' && applyServerFieldErrors(err, setError)) {
         setFormError('Please fix the highlighted fields and try again.');
-      } else if (typeof status === 'number' && status >= 500) {
-        setFormError('Something went wrong on the server. Please try again.');
-      } else {
-        setFormError(message);
       }
+      if (needsPositionRefresh(kind) && caps.canReadFinance && driverId) {
+        const fresh = await outstanding.refetch();
+        if (fresh.data && fresh.data.driverId === driverId && isAllocation) {
+          setDraft(reconcileDraft(nextDraft, fresh.data, { completeList: fresh.data.meta.totalPages <= 1 }).draft);
+        }
+      }
+    } finally {
+      submittingRef.current = false;
     }
   };
 
   /* ------------------------------- render ------------------------------ */
   const dialogClass = cn(
-    'm-auto w-[calc(100vw-2rem)] max-w-lg rounded-card border border-line',
+    'm-auto w-[calc(100vw-2rem)] rounded-card border border-line',
     'bg-card p-0 text-ink shadow-overlay backdrop:bg-ink/40',
     'max-h-[calc(100vh-3rem)]',
+    isAllocation ? 'max-w-5xl' : 'max-w-lg',
   );
 
   return (
     <dialog
       ref={ref}
       aria-labelledby={titleId}
+      aria-describedby={formError ? formErrorId : undefined}
       onCancel={(e) => {
         e.preventDefault();
-        onClose();
+        if (!creating) onClose();
       }}
       onClick={(e) => {
-        if (e.target === ref.current) onClose();
+        if (e.target === ref.current && !creating) onClose();
       }}
       className={dialogClass}
     >
@@ -362,8 +481,9 @@ export function ProcessSettlementDialog({
         <button
           type="button"
           onClick={onClose}
+          disabled={creating}
           aria-label="Close"
-          className="rounded-control p-1 text-ink-muted hover:bg-neutral-50 hover:text-ink"
+          className="rounded-control p-1 text-ink-muted hover:bg-neutral-50 hover:text-ink disabled:opacity-50"
         >
           <X className="size-5" aria-hidden="true" />
         </button>
@@ -418,39 +538,46 @@ export function ProcessSettlementDialog({
                 )}
               />
 
+              {!caps.canReadFinance && (
+                <p role="alert" className="rounded-control border border-warning-200 bg-warning-50 px-3 py-2 text-xs text-warning-700">
+                  Processing a settlement needs the driver&rsquo;s cash position,
+                  which requires finance read access. Ask an administrator for
+                  the <code>finance.read</code> permission.
+                </p>
+              )}
+
               {driverNotFound && (
                 <p className="text-xs text-danger-700">
                   The selected driver could not be found. Choose another driver.
                 </p>
               )}
 
-              {driverId && cash.isLoading && (
-                <p className="text-xs text-ink-muted">
-                  Loading driver cash balance…
-                </p>
+              {driverId && caps.canReadFinance && outstanding.isLoading && (
+                <LoadingState className="py-4" label="Loading driver cash and collections…" />
               )}
 
-              {driverId && cash.isError && !driverNotFound && (
+              {driverId && outstanding.isError && !driverNotFound && (
                 <div className="rounded-control border border-danger-200 bg-danger-50 px-3 py-2 text-xs text-danger-700">
-                  Could not load the driver cash balance.{' '}
+                  Could not load the driver&rsquo;s cash position.{' '}
                   <button
                     type="button"
                     className="font-medium underline"
-                    onClick={() => void cash.refetch()}
+                    onClick={() => void outstanding.refetch()}
                   >
                     Retry
                   </button>
                 </div>
               )}
 
-              {cash.data && (
+              {position && driver.data && !driver.data.isActive && (
+                <p className="text-xs text-warning-700">
+                  This driver is inactive. Cash they physically hold on behalf
+                  of the company can still be settled.
+                </p>
+              )}
+
+              {position && !isAllocation && (
                 <div className="rounded-control border border-line-subtle bg-sunken px-3 py-2.5 text-sm">
-                  {driver.data && !driver.data.isActive && (
-                    <p className="mb-1.5 text-xs text-warning-700">
-                      This driver is inactive. Cash they physically hold on
-                      behalf of the company can still be settled.
-                    </p>
-                  )}
                   <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                     <span className="text-ink-muted">Current cash held</span>
                     <span className="font-semibold tabular-nums text-ink">
@@ -465,102 +592,129 @@ export function ProcessSettlementDialog({
               )}
             </FormSection>
 
-            <FormSection title="Settlement">
-              {zeroCash ? (
-                <p className="rounded-control border border-line-subtle bg-sunken px-3 py-2 text-sm text-ink-muted">
-                  No cash currently held by this driver.
-                </p>
-              ) : (
-                <>
-                  <Controller
-                    control={control}
-                    name="amountReceived"
-                    render={({ field }) => (
-                      <div className="space-y-1.5">
-                        <MoneyInput
-                          label="Amount received"
-                          required
-                          value={field.value}
-                          onChange={field.onChange}
-                          error={
-                            errors.amountReceived?.message ??
-                            (overBalance
-                              ? `Amount exceeds the cash held (${formatMoney(
-                                  cashHeld,
-                                )}).`
-                              : undefined)
-                          }
-                          disabled={!cash.data}
-                        />
-                        {cash.data && !zeroCash && (
-                          <button
-                            type="button"
-                            className="text-xs font-medium text-brand-600 hover:text-brand-700"
-                            onClick={() => {
-                              const c =
-                                cashHeld !== null
-                                  ? parseMoneyToCents(cashHeld)
-                                  : null;
-                              setValue(
-                                'amountReceived',
-                                c !== null ? formatCents(c) : (cashHeld ?? ''),
-                                { shouldValidate: true, shouldTouch: true },
-                              );
-                            }}
-                          >
-                            Settle full balance
-                          </button>
-                        )}
-                      </div>
-                    )}
+            {position && zeroCash ? (
+              <p className="rounded-control border border-line-subtle bg-sunken px-3 py-2 text-sm text-ink-muted">
+                No cash currently held by this driver.
+              </p>
+            ) : position && isAllocation ? (
+              <>
+                <FormSection title="Collections">
+                  <OutstandingCollectionsPanel
+                    position={position}
+                    page={page}
+                    totalPages={totalPages}
+                    total={totalOutstanding}
+                    onPageChange={setPage}
+                    fetching={outstanding.isFetching}
+                    draft={draft}
+                    onDraftChange={changeDraft}
+                    rowErrors={rowErrors}
+                    isDesktop={isDesktop}
+                    disabled={creating || checking}
                   />
+                </FormSection>
 
-                  <SelectField
-                    label="Payment method"
-                    required
-                    placeholder={
-                      paymentMethods.isLoading
-                        ? 'Loading methods…'
-                        : 'Select a method…'
-                    }
-                    options={methodOptions}
-                    error={errors.paymentMethodId?.message}
-                    disabled={paymentMethods.isLoading || paymentMethods.isError}
-                    {...register('paymentMethodId')}
+                <FormSection title="Unattributed cash">
+                  <p className="text-xs text-ink-muted">
+                    Cash not reserved for any collection above (legacy
+                    collections, adjustments, settlement corrections). It cannot
+                    exceed the driver&rsquo;s unattributed cash of{' '}
+                    <strong className="tabular-nums">{formatMoney(position.unattributedBalance)}</strong>{' '}
+                    and never releases an order.
+                  </p>
+                  <MoneyInput
+                    label="Unattributed amount (optional)"
+                    value={draft.unattributedAmount}
+                    onChange={(v) => changeDraft({ ...draft, unattributedAmount: v })}
+                    error={unattributedAmountError}
+                    disabled={creating || checking}
                   />
-                  {paymentMethods.isError && (
-                    <div className="rounded-control border border-danger-200 bg-danger-50 px-3 py-2 text-xs text-danger-700">
-                      Could not load payment methods.{' '}
+                  <TextAreaField
+                    label="Reason for the unattributed amount"
+                    rows={2}
+                    required={(parseMoneyToCents(draft.unattributedAmount || '0') ?? 0n) > 0n}
+                    hint={`Required when an unattributed amount is entered (at least ${UNATTRIBUTED_REASON_MIN_LENGTH} characters).`}
+                    value={draft.unattributedReason}
+                    onChange={(e) => changeDraft({ ...draft, unattributedReason: e.target.value })}
+                    error={unattributedReasonError}
+                    disabled={creating || checking}
+                  />
+                </FormSection>
+
+                <FormSection title="Settlement">
+                  <CalculatedField
+                    label="Amount received"
+                    supportingText="Allocated to orders + unattributed — calculated, exact cents"
+                    value={formatMoney(formatCents(validation.amountReceivedCents))}
+                    emphasis
+                  />
+                  {showAllErrors && validation.formErrors.length > 0 && (
+                    <ul role="alert" className="space-y-1 text-xs text-danger-700">
+                      {validation.formErrors.map((m) => (
+                        <li key={m}>{m}</li>
+                      ))}
+                    </ul>
+                  )}
+                  <PaymentAndNotes
+                    register={register}
+                    errors={errors}
+                    methodOptions={methodOptions}
+                    paymentMethods={paymentMethods}
+                  />
+                </FormSection>
+              </>
+            ) : position ? (
+              <FormSection title="Settlement">
+                <Controller
+                  control={control}
+                  name="amountReceived"
+                  render={({ field }) => (
+                    <div className="space-y-1.5">
+                      <MoneyInput
+                        label="Amount received"
+                        required
+                        value={field.value}
+                        onChange={(v) => {
+                          field.onChange(v);
+                          clearErrors('amountReceived');
+                        }}
+                        error={
+                          errors.amountReceived?.message ??
+                          (legacyOverBalance
+                            ? `Amount exceeds the cash held (${formatMoney(cashHeld)}).`
+                            : undefined)
+                        }
+                      />
                       <button
                         type="button"
-                        className="font-medium underline"
-                        onClick={() => void paymentMethods.refetch()}
+                        className="text-xs font-medium text-brand-600 hover:text-brand-700"
+                        onClick={() => {
+                          const c = cashHeld !== null ? parseMoneyToCents(cashHeld) : null;
+                          setValue('amountReceived', c !== null ? formatCents(c) : (cashHeld ?? ''), {
+                            shouldTouch: true,
+                          });
+                          clearErrors('amountReceived');
+                        }}
                       >
-                        Retry
+                        Settle full balance
                       </button>
                     </div>
                   )}
-
-                  <TextAreaField
-                    label="Notes (optional)"
-                    rows={2}
-                    error={errors.notes?.message}
-                    {...register('notes')}
-                  />
-                </>
-              )}
-            </FormSection>
+                />
+                <PaymentAndNotes
+                  register={register}
+                  errors={errors}
+                  methodOptions={methodOptions}
+                  paymentMethods={paymentMethods}
+                />
+              </FormSection>
+            ) : null}
 
             <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={onClose}
-                disabled={creating}
-              >
+              <Button type="button" variant="secondary" onClick={onClose} disabled={creating}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={creating || !canReview}>
+              <Button type="submit" disabled={creating || !canReview} loading={checking}>
                 Review settlement
               </Button>
             </div>
@@ -569,74 +723,72 @@ export function ProcessSettlementDialog({
 
         {step === 'confirm' && (
           <div className="space-y-4">
-            <p className="text-sm text-ink-secondary">
-              You are recording that{' '}
-              <strong>{driver.data?.user.firstName} {driver.data?.user.lastName}</strong>{' '}
-              returned{' '}
-              <strong className="tabular-nums">
-                {formatMoney(values.amountReceived)}
-              </strong>{' '}
-              to the company
-              {methodName ? (
-                <>
-                  {' '}
-                  using <strong>{methodName}</strong>
-                </>
-              ) : null}
-              . This reduces the driver&rsquo;s cash-held balance.
-            </p>
-
-            <dl className="divide-y divide-line-subtle rounded-control border border-line-subtle">
-              <ConfirmRow
-                label="Driver"
-                value={driverLabel ?? '—'}
+            {isAllocation ? (
+              <SettlementPreviewPanel
+                preview={preview}
+                driverLabel={driverLabel ?? '—'}
+                methodName={methodName}
+                notes={values.notes.trim()}
+                dataAsOf={dataAsOf}
               />
-              <ConfirmRow
-                label="Current cash held"
-                value={formatMoney(cashHeld)}
-              />
-              <ConfirmRow
-                label="Settlement amount"
-                value={formatMoney(values.amountReceived)}
-                emphasis
-              />
-              <ConfirmRow label="Payment method" value={methodName || '—'} />
-              {values.notes.trim() !== '' && (
-                <ConfirmRow label="Notes" value={values.notes.trim()} />
-              )}
-              {balanceAfter !== null && (
-                <ConfirmRow
-                  label="Expected cash held after settlement"
-                  value={formatMoney(balanceAfter)}
-                />
-              )}
-            </dl>
-
-            <p className="text-xs text-ink-muted">
-              The server validates the final balance at processing time. This
-              does <strong>not</strong> change customer wallet balances, customer
-              payouts, company revenue or order totals.
-            </p>
+            ) : (
+              <>
+                <p className="text-sm text-ink-secondary">
+                  You are recording that{' '}
+                  <strong>{driver.data?.user.firstName} {driver.data?.user.lastName}</strong>{' '}
+                  returned{' '}
+                  <strong className="tabular-nums">{formatMoney(values.amountReceived)}</strong>{' '}
+                  to the company
+                  {methodName ? (
+                    <>
+                      {' '}
+                      using <strong>{methodName}</strong>
+                    </>
+                  ) : null}
+                  . This reduces the driver&rsquo;s cash-held balance.
+                </p>
+                <dl className="divide-y divide-line-subtle rounded-control border border-line-subtle">
+                  <ConfirmRow label="Driver" value={driverLabel ?? '—'} />
+                  <ConfirmRow label="Current cash held" value={formatMoney(cashHeld)} />
+                  <ConfirmRow label="Settlement amount" value={formatMoney(values.amountReceived)} emphasis />
+                  <ConfirmRow label="Payment method" value={methodName || '—'} />
+                  {values.notes.trim() !== '' && <ConfirmRow label="Notes" value={values.notes.trim()} />}
+                  {legacyBalanceAfter !== null && (
+                    <ConfirmRow label="Expected cash held after settlement" value={formatMoney(legacyBalanceAfter)} />
+                  )}
+                </dl>
+                <p className="text-xs text-ink-muted">
+                  The server validates the final balance at processing time. This
+                  does <strong>not</strong> change customer wallet balances, customer
+                  payouts, company revenue or order totals.
+                </p>
+              </>
+            )}
 
             <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
-              <Button
-                type="button"
-                variant="secondary"
-                icon={<ArrowLeft />}
-                onClick={() => {
-                  setFormError(null);
-                  setAmbiguous(false);
-                  setStep('form');
-                }}
-                disabled={creating}
-              >
-                Back
-              </Button>
+              {ambiguous ? (
+                <Button type="button" variant="secondary" onClick={onClose} disabled={creating}>
+                  Close and check history
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  icon={<ArrowLeft />}
+                  onClick={() => {
+                    setFormError(null);
+                    setStep('form');
+                  }}
+                  disabled={creating}
+                >
+                  Back
+                </Button>
+              )}
               <Button
                 type="button"
                 onClick={() => void runSettlement()}
                 loading={creating}
-                disabled={creating}
+                disabled={creating || (isAllocation && outstanding.isFetching)}
               >
                 {ambiguous ? 'Retry settlement' : 'Process settlement'}
               </Button>
@@ -646,25 +798,28 @@ export function ProcessSettlementDialog({
 
         {step === 'done' && doneSettlement && (
           <div className="space-y-4">
-            <div className="rounded-control border border-success-200 bg-success-50 px-4 py-3 text-sm text-success-700">
+            <div role="status" className="rounded-control border border-success-200 bg-success-50 px-4 py-3 text-sm text-success-700">
               Settlement processed successfully.
             </div>
             <dl className="divide-y divide-line-subtle rounded-control border border-line-subtle">
-              <ConfirmRow
-                label="Settlement number"
-                value={doneSettlement.settlementNumber}
-              />
-              <ConfirmRow
-                label="Amount received"
-                value={formatMoney(doneSettlement.amountReceived)}
-                emphasis
-              />
-              <ConfirmRow
-                label="Driver cash after"
-                value={formatMoney(doneSettlement.balanceAfter)}
-              />
+              <ConfirmRow label="Settlement number" value={doneSettlement.settlementNumber} />
+              <ConfirmRow label="Amount received" value={formatMoney(doneSettlement.amountReceived)} emphasis />
+              {doneSettlement.allocatedTotal !== null && (
+                <ConfirmRow label="Allocated to orders" value={formatMoney(doneSettlement.allocatedTotal)} />
+              )}
+              {doneSettlement.unattributedAmount !== null && (
+                <ConfirmRow label="Unattributed" value={formatMoney(doneSettlement.unattributedAmount)} />
+              )}
+              <ConfirmRow label="Driver cash after" value={formatMoney(doneSettlement.balanceAfter)} />
             </dl>
-            <div className="flex justify-end pt-1">
+            <div className="flex flex-wrap justify-end gap-2 pt-1">
+              <Link
+                to={paths.management.driverSettlementDetail(doneSettlement.id)}
+                onClick={onClose}
+                className="inline-flex h-10 items-center rounded-control border border-line bg-card px-4 text-sm font-medium text-ink-secondary hover:bg-sunken"
+              >
+                View settlement
+              </Link>
               <Button type="button" onClick={onClose}>
                 Done
               </Button>
@@ -673,6 +828,41 @@ export function ProcessSettlementDialog({
         )}
       </div>
     </dialog>
+  );
+}
+
+function PaymentAndNotes({
+  register,
+  errors,
+  methodOptions,
+  paymentMethods,
+}: {
+  register: UseFormRegister<ProcessSettlementFormValues>;
+  errors: FieldErrors<ProcessSettlementFormValues>;
+  methodOptions: { value: string; label: string }[];
+  paymentMethods: { isLoading: boolean; isError: boolean; refetch: () => unknown };
+}) {
+  return (
+    <>
+      <SelectField
+        label="Payment method"
+        required
+        placeholder={paymentMethods.isLoading ? 'Loading methods…' : 'Select a method…'}
+        options={methodOptions}
+        error={errors.paymentMethodId?.message}
+        disabled={paymentMethods.isLoading || paymentMethods.isError}
+        {...register('paymentMethodId')}
+      />
+      {paymentMethods.isError && (
+        <div className="rounded-control border border-danger-200 bg-danger-50 px-3 py-2 text-xs text-danger-700">
+          Could not load payment methods.{' '}
+          <button type="button" className="font-medium underline" onClick={() => void paymentMethods.refetch()}>
+            Retry
+          </button>
+        </div>
+      )}
+      <TextAreaField label="Notes (optional)" rows={2} error={errors.notes?.message} {...register('notes')} />
+    </>
   );
 }
 

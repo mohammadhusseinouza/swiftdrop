@@ -119,6 +119,21 @@ export async function reverseCompanyTransaction(
   const reversalAmount = original.amount.negated();
 
   return prisma.$transaction(async (tx) => {
+    // FR.6 (contract §8): revenue posted by a settlement-mode financial
+    // release is corrected only through the release-reversal workflow.
+    const release = await tx.order_financial_releases.findFirst({
+      where: { OR: [{ company_product_transaction_id: original.id }, { company_fee_transaction_id: original.id }] },
+      select: { id: true },
+    });
+    if (release) {
+      throw new AppError({
+        statusCode: 409,
+        code: "CONFLICT",
+        message: "This revenue was posted by a financial release — use the release reversal workflow",
+        details: { reason: "USE_RELEASE_CORRECTION" },
+      });
+    }
+
     const created = await createSignedCompanyFinancialTransaction(tx, {
       type: "REVERSAL",
       amount: reversalAmount,

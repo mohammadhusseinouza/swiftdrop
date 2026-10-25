@@ -31,6 +31,7 @@ import WalletsListPage from '../pages/management/wallets/WalletsListPage';
 import WalletDetailPage from '../pages/management/wallets/WalletDetailPage';
 import PayoutsListPage from '../pages/management/payouts/PayoutsListPage';
 import SettlementsListPage from '../pages/management/settlements/SettlementsListPage';
+import SettlementDetailPage from '../pages/management/settlements/SettlementDetailPage';
 import ManagementDashboardPage from '../pages/management/dashboard/ManagementDashboardPage';
 import FinancePage from '../pages/management/finance/FinancePage';
 import ReportsPage from '../pages/management/reports/ReportsPage';
@@ -39,6 +40,9 @@ import EmployeeDetailPage from '../pages/management/employees/EmployeeDetailPage
 import AuditLogsPage from '../pages/management/audit/AuditLogsPage';
 import DriverExpensesPage from '../pages/management/driver-expenses/DriverExpensesPage';
 import SettingsPage from '../pages/management/settings/SettingsPage';
+import HistoricalReconciliationsPage from '../pages/management/finance/historical-reconciliation/HistoricalReconciliationsPage';
+import HistoricalReconciliationDetailPage from '../pages/management/finance/historical-reconciliation/HistoricalReconciliationDetailPage';
+import { HISTORICAL_RECONCILIATION_ROLES } from '../pages/management/finance/historical-reconciliation/historicalReconciliationModel';
 import MyJobsPage from '../pages/driver/MyJobsPage';
 import DriverJobDetailPage from '../pages/driver/DriverJobDetailPage';
 import DriverCompletedPage from '../pages/driver/DriverCompletedPage';
@@ -72,7 +76,7 @@ import {
  *   orders         orders.read         drivers[/:id]    drivers.read
  *   orders/new     orders.create       wallets[/:id]    wallets.read
  *   orders/:id     orders.read         payouts          payouts.read
- *   driver-settlements settlements.read finance         finance.read
+ *   driver-settlements[/:id] settlements.read   finance  finance.read
  *   reports        reports.read        employees[/:id]  employees.read
  *   audit-logs     audit.read          settings         settings.read
  *
@@ -109,7 +113,19 @@ const managementChildren: RouteObject[] = [
   { path: 'wallets/:customerId', ...permitted(P.WALLETS_READ, <WalletDetailPage />) },
   { path: 'payouts', ...permitted(P.PAYOUTS_READ, <PayoutsListPage />) },
   { path: 'driver-settlements', ...permitted(P.SETTLEMENTS_READ, <SettlementsListPage />) },
+  { path: 'driver-settlements/:id', ...permitted(P.SETTLEMENTS_READ, <SettlementDetailPage />) },
   { path: 'finance', ...permitted(P.FINANCE_READ, <FinancePage />) },
+  // Historical ledger reconciliation (FR.12A.6) — ADMIN / FINANCE by ROLE,
+  // matching the backend's requireRole (finance.read is grantable to other
+  // roles, so it cannot express this).
+  {
+    path: 'finance/historical-reconciliations',
+    element: <RequireRole roles={HISTORICAL_RECONCILIATION_ROLES} />,
+    children: [
+      { index: true, element: <HistoricalReconciliationsPage /> },
+      { path: ':id', element: <HistoricalReconciliationDetailPage /> },
+    ],
+  },
   { path: 'reports', ...permitted(P.REPORTS_READ, <ReportsPage />) },
   { path: 'employees', ...permitted(P.EMPLOYEES_READ, <EmployeesListPage />) },
   { path: 'employees/:id', ...permitted(P.EMPLOYEES_READ, <EmployeeDetailPage />) },

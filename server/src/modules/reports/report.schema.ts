@@ -87,6 +87,9 @@ export const FinanceReportQuerySchema = z
   .object({
     ...baseDateRange,
     groupBy: FinanceReportGroupBySchema.optional().default("month"),
+    // FR.8 — "released" (default): existing rows only. "delivered": adds the
+    // delivery-date summary and, for day/week/month, delivery-date rows.
+    basis: z.enum(["released", "delivered"]).optional().default("released"),
   })
   .refine(fromNotAfterTo, { message: "from must be on or before to", path: ["to"] });
 

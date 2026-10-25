@@ -30,12 +30,15 @@ import { StatusBadge } from '../../../../components/orders/StatusBadge';
 import { OrderTypeBadge } from '../../../../components/orders/OrderTypeBadge';
 import { LoadingState } from '../../../../components/feedback/LoadingState';
 import { ErrorState } from '../../../../components/feedback/ErrorState';
+import { StaleDataNotice } from '../../../../components/feedback/StaleDataNotice';
 import { ConfirmationModal } from '../../../../components/feedback/ConfirmationModal';
 
 import { getOrderDetailActions } from './orderDetailActions';
 import { ActionMenu, type ActionMenuItem } from './ActionMenu';
 import { DriverDialog } from './DriverDialog';
 import { ParcelCollectionSection } from './ParcelCollectionSection';
+import { FinancialReleaseSection } from './FinancialReleaseSection';
+import { canViewFinancialRelease } from '../../../../components/finance/financialRelease';
 import { ReasonDialog } from './ReasonDialog';
 import { EditOrderDialog } from './EditOrderDialog';
 import {
@@ -199,7 +202,9 @@ export default function OrderDetailPage() {
 
   /* ----------------------------- loading / error --------------------------- */
 
-  if (!id || query.isError || (query.isSuccess && !order)) {
+  // A failed background refresh keeps the loaded order (and any dialog open
+  // on it) mounted; only a failure with nothing loaded replaces the page.
+  if (!id || (query.isError && !order) || (query.isSuccess && !order)) {
     const status = getApiErrorStatus(query.error);
     const code = getApiErrorCode(query.error);
     const notFound = !id || status === 404 || code === 'NOT_FOUND';
@@ -247,6 +252,9 @@ export default function OrderDetailPage() {
   const canViewCustomer = permissions.includes(PERMISSIONS.CUSTOMERS_READ);
   const canViewWallet = permissions.includes(PERMISSIONS.WALLETS_READ);
   const canViewDriver = permissions.includes(PERMISSIONS.DRIVERS_READ);
+  // FR.10 — the release sub-resource is finance.read; never fetched otherwise.
+  const canViewRelease = canViewFinancialRelease(permissions);
+  const canViewSettlements = permissions.includes(PERMISSIONS.SETTLEMENTS_READ);
 
   const currentAssignment =
     order.assignmentHistory.find((a) => a.isCurrent) ?? null;
@@ -377,6 +385,7 @@ export default function OrderDetailPage() {
   return (
     <div className="space-y-5 pb-6">
       <BackLink />
+      {query.isError && <StaleDataNotice onRetry={() => void query.refetch()} />}
 
       {showCreatedBanner && (
         <div className="flex items-start justify-between gap-3 rounded-card border border-success-200 bg-success-50 px-4 py-3 text-sm">
@@ -493,6 +502,9 @@ export default function OrderDetailPage() {
             canViewWallet={canViewWallet}
           />
           <FinancialSection order={order} />
+          {canViewRelease && (
+            <FinancialReleaseSection order={order} canViewSettlements={canViewSettlements} />
+          )}
         </aside>
 
         <div className="space-y-5 lg:col-span-2 lg:col-start-1 lg:row-start-1">

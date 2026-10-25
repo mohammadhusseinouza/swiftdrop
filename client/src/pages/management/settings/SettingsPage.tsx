@@ -3,10 +3,13 @@ import { useSearchParams } from 'react-router-dom';
 
 import { PageHeader } from '../../../components/data-display/PageHeader';
 import {
-  SETTINGS_TABS,
   parseSettingsTab,
+  visibleSettingsTabs,
   type SettingsTabId,
 } from './settingsTabs';
+import { FinancialReleaseTab } from './FinancialReleaseTab';
+import { useAppSelector } from '../../../app/hooks';
+import { selectRoleCode } from '../../../features/auth/authSlice';
 import { GeneralTab } from './GeneralTab';
 import { DeliveryTab } from './DeliveryTab';
 import { PaymentMethodsTab } from './PaymentMethodsTab';
@@ -23,7 +26,9 @@ import { RolePermissionsTab } from './RolePermissionsTab';
  */
 export default function SettingsPage() {
   const [sp, setSp] = useSearchParams();
-  const tab = parseSettingsTab(sp.get('tab'));
+  const roleCode = useAppSelector(selectRoleCode);
+  const tabs = useMemo(() => visibleSettingsTabs(roleCode), [roleCode]);
+  const tab = parseSettingsTab(sp.get('tab'), roleCode);
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
   const selectTab = useCallback(
@@ -43,16 +48,16 @@ export default function SettingsPage() {
   );
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    const idx = SETTINGS_TABS.findIndex((t) => t.id === tab);
+    const idx = tabs.findIndex((t) => t.id === tab);
     let nextIdx: number | null = null;
-    if (e.key === 'ArrowRight') nextIdx = (idx + 1) % SETTINGS_TABS.length;
+    if (e.key === 'ArrowRight') nextIdx = (idx + 1) % tabs.length;
     if (e.key === 'ArrowLeft')
-      nextIdx = (idx - 1 + SETTINGS_TABS.length) % SETTINGS_TABS.length;
+      nextIdx = (idx - 1 + tabs.length) % tabs.length;
     if (e.key === 'Home') nextIdx = 0;
-    if (e.key === 'End') nextIdx = SETTINGS_TABS.length - 1;
+    if (e.key === 'End') nextIdx = tabs.length - 1;
     if (nextIdx !== null) {
       e.preventDefault();
-      const nextTab = SETTINGS_TABS[nextIdx].id;
+      const nextTab = tabs[nextIdx].id;
       selectTab(nextTab);
       tabRefs.current[nextTab]?.focus();
     }
@@ -74,6 +79,8 @@ export default function SettingsPage() {
         return <AreasTab />;
       case 'permissions':
         return <RolePermissionsTab />;
+      case 'financial-release':
+        return <FinancialReleaseTab />;
     }
   }, [tab]);
 
@@ -92,7 +99,7 @@ export default function SettingsPage() {
           onKeyDown={onKeyDown}
           className="flex min-w-max gap-1"
         >
-          {SETTINGS_TABS.map((t) => {
+          {tabs.map((t) => {
             const active = t.id === tab;
             return (
               <button

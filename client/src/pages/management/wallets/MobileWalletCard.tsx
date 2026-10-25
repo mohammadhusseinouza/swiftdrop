@@ -3,9 +3,12 @@ import { Badge } from '../../../components/ui/Badge';
 import { paths } from '../../../routes/paths';
 import { formatDate, formatMoney, humanizeToken } from '../../../lib/format';
 import type { WalletSummary } from '../../../services/domain.types';
+import { pendingBreakdown, pendingSubline } from '../../../components/finance/financialRelease';
 
 /** Compact Customer Wallet card for mobile widths — opens Wallet Detail. */
 export function MobileWalletCard({ wallet }: { wallet: WalletSummary }) {
+  const breakdown = pendingBreakdown(wallet);
+  const subline = pendingSubline(breakdown, formatMoney);
   return (
     <Link
       to={paths.management.walletDetail(wallet.customer.id)}
@@ -28,10 +31,18 @@ export function MobileWalletCard({ wallet }: { wallet: WalletSummary }) {
             Pending
           </p>
           <p className="tabular-nums text-ink-muted">
-            {formatMoney(wallet.pendingAmount)}
+            {formatMoney(breakdown.totalPending)}
           </p>
         </div>
       </div>
+      {(subline || breakdown.underReviewOrderCount > 0) && (
+        <p className="mt-1 flex flex-wrap items-center justify-end gap-1.5 text-right text-[11px] tabular-nums text-ink-subtle">
+          {subline}
+          {breakdown.underReviewOrderCount > 0 && (
+            <Badge tone="warning">{breakdown.underReviewOrderCount} under review</Badge>
+          )}
+        </p>
+      )}
 
       <dl className="mt-3 space-y-1 border-t border-line pt-2 text-xs text-ink-muted">
         <div className="flex items-center justify-between gap-2">

@@ -34,8 +34,12 @@ import {
   FEED_LEDGER_LABEL,
   isReversibleType,
   ledgerTypeLabel,
+  reverseActionState,
+  type DedicatedWorkflow,
 } from '../../../components/finance/ledgerCorrection';
+import { ReverseRowAction } from '../../../components/finance/ReverseRowAction';
 import { MetricTile } from '../dashboard/MetricTile';
+import { SettlementReleasePanel } from '../../../components/finance/SettlementReleasePanel';
 
 import { buildFinanceColumns } from './financeTransactionColumns';
 import { MobileFinanceTransactionCard } from './MobileFinanceTransactionCard';
@@ -146,6 +150,8 @@ export default function FinancePage() {
   const [companyAdjustOpen, setCompanyAdjustOpen] = useState(false);
   const [reverseTarget, setReverseTarget] =
     useState<FinanceTransactionEntry | null>(null);
+  // FR.10 closure — rows the backend refused as dedicated-workflow-only.
+  const [dedicated, setDedicated] = useState<ReadonlyMap<string, DedicatedWorkflow>>(() => new Map());
 
   const [adjustCompany, adjustCompanyState] = useAdjustCompanyFinanceMutation();
   const [reverseCompany, reverseCompanyState] =
@@ -194,17 +200,12 @@ export default function FinancePage() {
     isReversibleType(t.type) &&
     (t.ledger === 'WALLET' ? canAdjustWallet : canAdjustFinance);
 
-  const renderRowActions = (t: FinanceTransactionEntry) =>
-    canReverseRow(t) ? (
-      <Button
-        size="sm"
-        variant="ghost"
-        onClick={() => setReverseTarget(t)}
-        className="text-danger-700 hover:bg-danger-50"
-      >
-        Reverse
-      </Button>
-    ) : null;
+  const renderRowActions = (t: FinanceTransactionEntry) => (
+    <ReverseRowAction
+      state={reverseActionState(t, { canReverse: canReverseRow(t), dedicated })}
+      onReverse={() => setReverseTarget(t)}
+    />
+  );
 
   const anyRowReversible = rows.some(canReverseRow);
   const columns = useMemo(
@@ -288,9 +289,14 @@ export default function FinancePage() {
 
       {/* summary cards */}
       <section aria-labelledby="summary-heading" className="space-y-3">
-        <h2 id="summary-heading" className="text-sm font-semibold text-ink">
-          Summary
-        </h2>
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 id="summary-heading" className="text-sm font-semibold text-ink">
+            Summary
+          </h2>
+          <p className="text-xs text-ink-muted">
+            Released basis — revenue and credits count on their ledger posting date.
+          </p>
+        </div>
         {summary.isLoading && !s ? (
           <Card flush>
             <LoadingState className="py-12" />
@@ -356,6 +362,23 @@ export default function FinancePage() {
           </>
         ) : null}
       </section>
+
+      {/* FR.10 — settlement-based release position + activity in range */}
+      {s?.settlementRelease && (
+        <section aria-labelledby="release-heading" className="space-y-3">
+          <h2 id="release-heading" className="text-sm font-semibold text-ink">
+            Settlement-based release
+          </h2>
+          <Card flush className="p-4 sm:p-5">
+            <SettlementReleasePanel
+              headingId="release-heading"
+              snapshot={s.settlementRelease.current}
+              activity={s.settlementRelease.activity}
+              activityLabel={state.from || state.to ? 'in the selected period' : 'to date'}
+            />
+          </Card>
+        </section>
+      )}
 
       {/* transaction feed */}
       <section aria-labelledby="activity-heading" className="space-y-3">
@@ -501,6 +524,9 @@ export default function FinancePage() {
           submitting={reverseSubmitting}
           onRefetch={refetchAll}
           onClose={() => setReverseTarget(null)}
+          onDedicatedWorkflow={(workflow) =>
+            setDedicated((m) => new Map(m).set(reverseTarget.id, workflow))
+          }
           onSubmit={runReverse}
           original={{
             ledgerLabel: FEED_LEDGER_LABEL[reverseTarget.ledger],

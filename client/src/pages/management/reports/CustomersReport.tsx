@@ -18,6 +18,7 @@ import { DataTable, type DataTableColumn } from '../../../components/data-displa
 import { ServerSearchSelect } from '../../../components/forms/ServerSearchSelect';
 import { useDebouncedValue } from '../../../lib/useDebouncedValue';
 import { formatMoney } from '../../../lib/format';
+import { pendingBreakdown, pendingSubline } from '../../../components/finance/financialRelease';
 
 import { ReportResult, ReportSection } from './reportShared';
 import { FilterSelect } from './OrdersReport';
@@ -124,11 +125,26 @@ export function CustomersReport() {
       header: 'Pending value',
       align: 'right',
       hideBelow: 'md',
-      cell: (r) => (
-        <span className="tabular-nums text-ink-muted">
-          {formatMoney(r.pendingOrderValue)}
-        </span>
-      ),
+      // FR.10 — pendingOrderValue = pending delivery + pending settlement;
+      // under-review differences are a count, never part of the value.
+      cell: (r) => {
+        const b = pendingBreakdown({
+          pendingAmount: r.pendingOrderValue,
+          pendingDeliveryAmount: r.pendingDeliveryAmount,
+          pendingSettlementAmount: r.pendingSettlementAmount,
+          underReviewOrderCount: r.underReviewOrderCount,
+        });
+        const sub = pendingSubline(b, formatMoney);
+        return (
+          <span className="flex flex-col items-end gap-0.5">
+            <span className="tabular-nums text-ink-muted">{formatMoney(b.totalPending)}</span>
+            {sub && <span className="text-[11px] tabular-nums text-ink-subtle">{sub}</span>}
+            {b.underReviewOrderCount > 0 && (
+              <span className="text-[11px] text-warning-700">{num(b.underReviewOrderCount)} under review</span>
+            )}
+          </span>
+        );
+      },
     },
   ];
 

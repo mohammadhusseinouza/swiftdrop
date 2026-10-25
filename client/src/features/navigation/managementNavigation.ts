@@ -3,6 +3,7 @@ import type { LucideProps } from 'lucide-react';
 import {
   Banknote,
   ChartColumn,
+  FileSearch,
   Fuel,
   HandCoins,
   Landmark,
@@ -141,6 +142,15 @@ export const MANAGEMENT_NAVIGATION: readonly ManagementNavGroup[] = [
         to: '/management/finance',
         permission: P.FINANCE_READ,
         icon: Landmark,
+      },
+      {
+        // FR.12A.6 — role-scoped like the backend (requireRole ADMIN / FINANCE).
+        id: 'historical-reconciliations',
+        label: 'Ledger Reconciliation',
+        to: '/management/finance/historical-reconciliations',
+        roles: ['ADMIN', 'FINANCE'],
+        icon: FileSearch,
+        indent: true,
       },
     ],
   },

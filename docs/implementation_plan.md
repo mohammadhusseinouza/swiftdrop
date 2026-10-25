@@ -3741,6 +3741,91 @@ Backend regression baseline        1593 / 1593 (1568 + 25 Phase 11.17.4 tests)
 
 NEXT: Phase 11.17.5 — Management UI Integration (after 11.17.4 review)
       Phase 12 (Driver Portal) is BLOCKED until Phase 11.17 is complete and approved.
+
+Financial Release track (§63)
+FR.1 (Documentation + technical contract)   COMPLETE — approved
+FR.2 (Database / Prisma + migration)        COMPLETE — conditionally approved; migration
+      20261016000000_settlement_financial_release_foundation verified on isolated DBs and
+      applied to the LOCAL DEV DB only (via `prisma db execute`, after a verified backup).
+      NOT applied to production. Backend regression 2080 / 2080 before and after.
+FR.3 (Release domain service + delivery)    COMPLETE — pending approval. financial-release
+      module (mode decision, planned amounts, release creation, releaseOrder for FR.4/FR.5);
+      /deliver persists the mode and creates ON_SETTLEMENT releases. Interim guards: generic
+      settings PATCH rejects the activation key; resolve-collection-difference refuses
+      ON_SETTLEMENT orders until FR.5.
+FR.4 (Settlement allocations + release)     COMPLETE — pending approval. Allocation-format
+      POST /driver-settlements (explicit allocations, unattributed amount + reason, legacy
+      format only when safe), automatic releaseOrder on full allocation, replay comparison
+      incl. allocations. Performance: ~25 + 15 DB round trips per allocation; 20 allocations
+      exceed the 5 s Prisma transaction timeout above ~12 ms RTT — see contract §14.
+FR.5 (Difference resolution)                COMPLETE — pending approval. ON_SETTLEMENT branch
+      of resolve-collection-difference (resolveReleaseDifference): split recorded on the
+      release, release only when also fully allocated (whichever comes last releases, once);
+      NULL / IMMEDIATE path unchanged; FR.3 guard removed. Regression 2162 / 2162 (isolated DB).
+      Settlement performance proposal: docs/fr-settlement-performance-proposal.md (not implemented).
+FR.6 (Corrections + guards)                 COMPLETE — pending approval (deep financial review).
+      Void collection, release reversal, settlement reversal, settlement shortfall endpoints;
+      generic reverse guards (USE_RELEASE_CORRECTION / USE_SETTLEMENT_CORRECTION); U cap on
+      driver cash debits. Decisions recorded in contract §8.1.
+FR.7 (Read APIs)                            COMPLETE — pending approval. Outstanding
+      collections, settlement detail, order financial release, pending breakdown on wallet and
+      customer DTOs (contract §9.1). Read-only snapshot reads.
+FR.8 (Reporting + reconciliation)          COMPLETE — pending approval. Released / delivery-date
+      bases, settlement-release snapshot, report splits, dashboard, read-only
+      GET /finance/reconciliation/financial-release (R1–R13 + historical / informational
+      checks; contract §12.1).
+FR.9 (Settlement allocation UI)              COMPLETE — pending approval. Allocation dialog
+      (explicit selection, oldest-first preselect, partial amounts, unattributed + reason,
+      calculated amount received, provisional release preview rebuilt from fresh data before
+      confirmation), settlement detail route /management/driver-settlements/:id, list
+      Allocated / Unattributed columns, allocation-aware cache invalidation. Additive read
+      field: planned split on outstanding-collection items (contract §9.1).
+FR.10 (Release frontend integration)         COMPLETE — pending approval. Wallet / customer
+      pending breakdown (delivery + settlement, review count), Order Detail financial-release
+      panel (finance.read, ON_SETTLEMENT only), financial-status labels + filter, Finance /
+      Financial report (released vs delivery-date basis) / Dashboard release snapshot, driver /
+      customer / order report splits, Driver Detail outstanding collections. Frontend only.
+      Closure: GET /orders financialStatus filter accepts all seven statuses (schema derived
+      from the Prisma enum); the generic Reverse dialog recognises the backend's
+      USE_RELEASE_CORRECTION / USE_SETTLEMENT_CORRECTION refusal (no longer "already
+      reversed") and the row then shows the dedicated-workflow explanation.
+FR.10.1 (Correction eligibility)             COMPLETE — pending approval. Wallet ledger, driver
+      cash ledger and finance feed rows carry read-only correctionWorkflow / canReverseGenerically /
+      reversed (finance/correction-eligibility.service.ts, batched, mirrors the generic reversal
+      guards). Generic Reverse is shown only when eligible; otherwise "Already reversed",
+      "Requires financial release / settlement correction" or "Not reversible".
+FR.10.2 (Dedicated correction UI)            COMPLETE — pending approval. finance.adjust users get
+      Void collection + Reverse release (Order Detail release panel) and Reverse settlement
+      (Settlement Detail), each with reason ≥ 10, explicit consequences, snapshot-based
+      confirmation, idempotent retry and correction history. Settlement SHORTFALL UI WITHHELD:
+      its business authorization / accounting review (blocker below) is still open.
+FR.11A (Readiness + activation safeguards)   COMPLETE — pending approval. Batched settlement
+      release (20 allocations: 317 -> 88 transaction round trips; no timeout at 20 ms RTT; limit
+      20 kept, conditional on production RTT); Admin-only activation / deactivation / readiness
+      endpoints with hard gate G0-G7 (G7 = client /version.json handshake); new settlement
+      shortfalls fail closed (SETTLEMENT_SHORTFALL_POLICY_APPROVED unset); reconciliation and
+      end-to-end rehearsal on isolated copies; cutover / rollback plan in
+      docs/fr11a-release-readiness.md. Activation NOT performed anywhere.
+FR.11B (Activation UI + release readiness)   COMPLETE — pending approval. Admin-only Settings →
+      Financial Release tab (state, G0-G7, reconciliation, H1/H2, latency probe, confirmed
+      activate / deactivate); db-inspect recognizes the FR.2 migration; read-only
+      scripts/fr-production-preflight.mjs; latency probe endpoint; P2028 -> 503
+      TRANSACTION_TIMEOUT and 5xx treated as ambiguous by the settlement dialog; ink-muted /
+      ink-subtle contrast tokens to WCAG AA; final runbook in docs/fr11b-release-readiness.md §8.
+      No production action taken.
+
+Activation blockers carried forward (unresolved — FR.11 hard gate):
+  - Production RTT measurement (allocation limit precondition, fr11a-release-readiness.md §1.6).
+  - Production migration readiness.
+  - Pre-FR.6 collection reversals left PENDING (now reported by reconciliation R12; never
+    repaired automatically).
+  - Shortfall policy decisions P1-P8 (new shortfalls disabled until approved).
+  - Database session time zone must be verified UTC in production (contract §14 item 0;
+    not verifiable from FR.11A - no approved production read path).
+  - Historical anomalies H1 / H2 (e.g. 40 order-less negative fee rows in local dev) need a
+    separate review decision.
+  - FR.11B: Admin activation UI; decision on H1/H2 blocking.
+Settlement-based release activation          DISABLED (seeded false) — not authorized for any environment
 ```
 
 **Phase 11.17.2 migration note.** This project does not use `prisma migrate` — the DB was
@@ -3795,3 +3880,76 @@ The migration lives in `server/prisma/migrations/` and is applied by `server/scr
 `PRISMA_MIGRATE_MODE=deploy`. It only creates new objects (no existing table or row is
 changed). With `preflight` / `disabled`, the code deploys without the tables and only the
 Driver Expenses endpoints fail until the migration is applied.
+
+---
+
+# 63. Financial Release Track — Settlement-Based Financial Release
+
+Business rules: `docs/requirements.md` §55 (plus §9.1, §10, §13, §24–§26, §37, §38, §42,
+§46, §47, §52). Implementation rules: `CLAUDE.md` §74 / §75. Technical contract (schema,
+algorithms, state machines, locks, invariants R1–R13, test matrix):
+`docs/settlement-financial-release-contract.md`.
+
+## Objective
+
+For deliveries collected into Driver Cash while the feature is active, release the customer
+wallet credit and company revenue only after the collection is fully settled (explicit
+allocations) and any collection difference is resolved. Legacy orders, direct (bypass)
+payments and zero-cash deliveries keep immediate posting. No historical record is changed.
+
+## Execution model
+
+Same as every other phase: one sub-phase per session → checks → closing report → STOP →
+human review. **Mandatory deep financial review gates: FR.4, FR.6, FR.11.** The activation
+setting stays `false` in every environment throughout; enabling it requires a separate,
+explicit production-cutover authorization after FR.11.
+
+## Sub-phases
+
+| Sub-phase | Scope | Must NOT include | Definition of done |
+|---|---|---|---|
+| **FR.1** Documentation | Contract doc; amendments to CLAUDE.md, requirements.md, implementation_plan.md, page_structure.md | Any code, schema, migration, DB operation | Docs approved |
+| **FR.2** Database / Prisma — **DONE** | Additive Prisma Migrate migration `server/prisma/migrations/20261016000000_settlement_financial_release_foundation` (`server/migrations/` is superseded): 3 `OrderFinancialStatus` values, 5 new enums, `orders.financial_release_mode`, 3 `driver_settlements` columns + `UNIQUE(id, driver_id)`, 4 new tables, 22 RESTRICT FKs (2 composite), CHECKs, 2 partial indexes, seeded setting `false`; `schema.prisma` synced (redundant draft columns removed — contract §3.5 / §3.7) | Service logic | Idempotent re-run; zero FR.2 Prisma drift; historical row hashes unchanged; 2080 / 2080 tests before and after |
+| **FR.3** Release service + delivery — **DONE (pending approval)** | `server/src/modules/financial-release/financial-release.service.ts` (`releaseOrder`, planned-amount derivation/validation, mode decision, release creation); `/deliver` reads the flag `FOR SHARE` and writes the mode; ON_SETTLEMENT posts COLLECTION + release only; interim guards (activation key not PATCHable; ON_SETTLEMENT difference resolution refused until FR.5) | Settlement allocation, UI | Off = unchanged (group A); groups B, G partial; R9–R11 |
+| **FR.4** Settlement allocations — **DONE (pending approval)** | `POST /driver-settlements` allocation format; legacy-format guard; unattributed line + reason; lock order; release on full allocation; replay comparison; `MAX_ALLOCATIONS_PER_SETTLEMENT = 20` + latency measurement at 20/50/100 | Corrections, UI | Groups C, L; R2–R5, R7 — **deep financial review** |
+| **FR.5** Difference resolution — **DONE (pending approval)** | ON_SETTLEMENT branch of `resolve-collection-difference`; deferred release; legacy/IMMEDIATE path unchanged | — | Group D; legacy resolution after activation still immediate |
+| **FR.6** Corrections + guards — **DONE (pending approval)** | Void collection, settlement reversal, settlement shortfall, release reversal endpoints + correction tables; generic reverse endpoint guards; `amount ≤ U` guards on cash debits | — | Groups F, G; R6, R12 — **deep financial review** |
+| **FR.7** Read APIs — **DONE (pending approval)** | Outstanding collections per driver; settlement detail with allocations; order release detail; pending delivery / settlement / under-review fields (Management + customer, safe DTOs) | Reports | Group E; customer-isolation tests |
+| **FR.8** Finance / reports / dashboard — **DONE (pending approval)** | Released vs delivery-date basis; pending-settlement, under-review, attributed/unattributed cards; reconciliation endpoint R1–R13 | UI | Groups I, J |
+| **FR.9** Settlement UI | Allocation dialog (explicit selection, oldest-first preselect, partial amounts, unattributed + reason, release preview, confirmation); settlement detail; RTK Query tag invalidation | — | Frontend tests; responsive review |
+| **FR.10** Other UI | Order Detail release panel; wallet / customer Pending Settlement + Under Review; Finance and Reports basis switch; Driver Detail attributed/unattributed cash; correction dialogs | — | Frontend tests; customer sees only safe data |
+| **FR.11** Activation + regression | Admin activation/deactivation/readiness endpoints; hard gate G0–G7; generic settings PATCH guard; Settings UI (Admin only); full regression + E2E (group M); performance limit finalized | Turning the setting on | Groups H, M; all suites pass — **deep financial review + release decision** |
+
+## Cutover (after FR.11 approval, separately authorized)
+
+1. Deploy FR.11 with the setting OFF; full regression green.
+2. Settle every driver's cash to zero through normal settlements; resolve legacy collection
+   differences.
+3. Run the readiness report (dry run); fix nothing automatically.
+4. Set `FINANCIAL_RELEASE_ACTIVATION_AUTHORIZED=true` for the authorized environment.
+5. An Admin activates (gate re-evaluated inside the transaction; audited).
+6. Monitor the reconciliation endpoint daily.
+
+Rollback: deactivate (always safe, future deliveries only). Code rollback only before the first
+ON_SETTLEMENT delivery or once all releases are terminal. Never roll back the schema.
+
+## FR.3 dependencies (from FR.2)
+
+- Every environment that runs FR.3+ code must have the FR.2 migration applied (the generated
+  Prisma client selects the new columns). Production receives it only through the normal
+  `prisma migrate deploy` build path, separately authorized.
+- Cross-table invariants are NOT database-enforced and must be enforced by FR.3–FR.6 code and
+  checked by the FR.8 reconciliation: `orders.financial_status` ⇔ release state (§4.5),
+  `allocated_amount = Σ ACTIVE allocations`, release `customer_id` / `order_type` /
+  `collection_amount` matching the order and its COLLECTION row, the shortfall total cap, and
+  `reversed_by_correction_id` pointing at a SETTLEMENT_REVERSAL of the same settlement.
+- The ≥ 10-character reason rule for new settlement corrections is application-level
+  (database: non-blank only, for legacy reversal compatibility).
+- `scripts/db-inspect.mjs` has no pending/applied state checks for this migration yet (the Driver
+  Expenses migration has none either); consider adding them before production rollout.
+
+## Open issues carried forward
+
+See contract §14: production allocation limit (measured), G7 version handshake (FR.11),
+paid-out mis-attribution recovery (no customer receivable in V1), shortfall write-off
+(no workflow in V1).

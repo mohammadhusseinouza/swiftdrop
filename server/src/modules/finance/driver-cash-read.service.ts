@@ -1,4 +1,5 @@
 import { Prisma } from "../../generated/prisma/client";
+import { driverCashCorrectionEligibility, type CorrectionEligibility } from "./correction-eligibility.service";
 import { prisma } from "../../db/prisma";
 import { AppError } from "../../shared/errors/app-error";
 import type { DriverCashTransactionsQuery } from "./driver-cash-read.schema";
@@ -61,7 +62,7 @@ const transactionSelect = {
 
 type TransactionRow = Prisma.driver_cash_transactionsGetPayload<{ select: typeof transactionSelect }>;
 
-function toEntry(row: TransactionRow): ManagementDriverCashTransactionEntry {
+function toEntry(row: TransactionRow, eligibility: CorrectionEligibility): ManagementDriverCashTransactionEntry {
   const delta = row.balance_after.minus(row.balance_before);
   const settlementPaymentMethod = row.driver_settlements?.payment_methods;
   return {
@@ -83,6 +84,7 @@ function toEntry(row: TransactionRow): ManagementDriverCashTransactionEntry {
       : null,
     notes: row.notes,
     createdAt: row.created_at.toISOString(),
+    ...eligibility,
   };
 }
 
@@ -110,7 +112,11 @@ export async function listManagementDriverCashTransactions(
     prisma.driver_cash_transactions.count({ where }),
   ]);
 
-  return { items: rows.map(toEntry), total };
+  // FR.10.1 — correction eligibility for the page, batched.
+  const eligibility = await driverCashCorrectionEligibility(
+    rows.map((r) => ({ id: r.id, type: r.type, settlementId: r.driver_settlements?.id ?? null }))
+  );
+  return { items: rows.map((r) => toEntry(r, eligibility.get(r.id) as CorrectionEligibility)), total };
 }
 
 // Batched Cash-Held for a page of the Driver List — one query, only the

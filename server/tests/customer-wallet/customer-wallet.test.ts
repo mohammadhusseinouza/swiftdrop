@@ -31,7 +31,8 @@ import {
 // Dashboard endpoint, and zero write side effects.
 // ============================================================
 
-const SAFE_KEYS = ["customer", "availableBalance", "pendingAmount"].sort();
+// FR.7 adds the Customer-safe pending breakdown (contract §9).
+const SAFE_KEYS = ["customer", "availableBalance", "pendingAmount", "pendingDeliveryAmount", "pendingSettlementAmount", "underReviewOrderCount"].sort();
 
 const FORBIDDEN_SUBSTRINGS = [
   "walletId",

@@ -9,7 +9,9 @@ import {
 import type {
   ParcelCollectionStatus,
   ParcelIntakeMethod,
+  ReportingBasis,
 } from '../../../services/domain.types';
+import { parseReportingBasis } from '../../../components/finance/financialRelease';
 
 /**
  * URL state for the single Reports route. `report` picks the group;
@@ -152,6 +154,14 @@ export function parseFinancialReportGroupBy(
 ): (typeof FINANCE_REPORT_GROUP_BY)[number] {
   return (pickEnum(sp, 'groupBy', FINANCE_REPORT_GROUP_BY) ||
     'month') as (typeof FINANCE_REPORT_GROUP_BY)[number];
+}
+
+/**
+ * FR.10 — financial report reporting basis (URL `basis`). Released is the
+ * default and is never written to the URL; only `delivered` is.
+ */
+export function parseFinancialReportBasis(sp: URLSearchParams): ReportingBasis {
+  return parseReportingBasis(sp.get('basis'));
 }
 
 /** Switch report group: keep `report` + shared date range, drop everything else. */

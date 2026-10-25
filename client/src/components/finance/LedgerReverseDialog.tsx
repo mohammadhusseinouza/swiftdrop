@@ -9,11 +9,17 @@ import { Button } from '../ui/Button';
 import { TextAreaField } from '../forms/Field';
 import { formatDateTime, formatMoney } from '../../lib/format';
 import {
+  getApiErrorDetails,
   getApiErrorMessage,
   getApiErrorStatus,
   isTransportError,
   type UnknownApiError,
 } from '../../services/apiError';
+import {
+  DEDICATED_WORKFLOW_LABEL,
+  classifyReverseRejection,
+  type DedicatedWorkflow,
+} from './ledgerCorrection';
 
 const schema = z.object({
   reason: z.string().trim().min(1, 'A reason is required').max(2000),
@@ -42,9 +48,15 @@ export interface LedgerReverseDialogProps {
   /** Refetch the ledger/source (after ambiguous failure or an already-reversed result). */
   onRefetch: () => void;
   onClose: () => void;
+  /**
+   * FR.10 closure — the backend refused a generic reversal because the row
+   * belongs to a dedicated correction workflow (409 USE_RELEASE_CORRECTION /
+   * USE_SETTLEMENT_CORRECTION). The page stops offering Reverse for it.
+   */
+  onDedicatedWorkflow?: (workflow: DedicatedWorkflow) => void;
 }
 
-type Step = 'form' | 'confirm' | 'done' | 'already';
+type Step = 'form' | 'confirm' | 'done' | 'already' | 'dedicated';
 
 /**
  * Reverse a finalized ledger transaction (Phase 8.8). Append-only: the
@@ -62,12 +74,14 @@ export function LedgerReverseDialog({
   submitting,
   onRefetch,
   onClose,
+  onDedicatedWorkflow,
 }: LedgerReverseDialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const [step, setStep] = useState<Step>('form');
   const [formError, setFormError] = useState<string | null>(null);
   const [ambiguous, setAmbiguous] = useState(false);
+  const [dedicated, setDedicated] = useState<{ workflow: DedicatedWorkflow; message: string } | null>(null);
 
   const {
     register,
@@ -88,6 +102,7 @@ export function LedgerReverseDialog({
       setStep('form');
       setFormError(null);
       setAmbiguous(false);
+      setDedicated(null);
     }
     wasOpen.current = open;
   }, [open, reset]);
@@ -118,6 +133,16 @@ export function LedgerReverseDialog({
       const status = getApiErrorStatus(err);
       const msg = getApiErrorMessage(err);
       if (status === 409) {
+        // A 409 is either 'already reversed' or a refusal because the row needs
+        // its dedicated correction workflow — told apart by the backend's
+        // explicit details.reason, never guessed. Nothing changed either way.
+        const rejection = classifyReverseRejection(status, getApiErrorDetails(err), msg);
+        if (rejection.kind === 'DEDICATED_WORKFLOW') {
+          setDedicated({ workflow: rejection.workflow, message: rejection.message });
+          onDedicatedWorkflow?.(rejection.workflow);
+          setStep('dedicated');
+          return;
+        }
         onRefetch();
         setStep('already');
         return;
@@ -158,6 +183,8 @@ export function LedgerReverseDialog({
             ? 'Reversal posted'
             : step === 'already'
               ? 'Already reversed'
+              : step === 'dedicated'
+                ? 'Generic reversal not available'
               : step === 'confirm'
                 ? 'Confirm reversal'
                 : 'Reverse transaction'}
@@ -286,6 +313,21 @@ export function LedgerReverseDialog({
             <div className="rounded-control border border-line bg-sunken px-4 py-3 text-sm text-ink-secondary">
               This transaction has already been reversed. The ledger has been
               refreshed — no second reversal was created.
+            </div>
+            <div className="flex justify-end">
+              <Button type="button" onClick={onClose}>
+                Close
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {step === 'dedicated' && dedicated && (
+          <div className="space-y-4">
+            <div role="status" className="rounded-control border border-warning-200 bg-warning-50 px-4 py-3 text-sm text-warning-700">
+              <p className="font-medium">{DEDICATED_WORKFLOW_LABEL[dedicated.workflow]}.</p>
+              <p className="mt-1">{dedicated.message}</p>
+              <p className="mt-1">Nothing was reversed — the transaction and its history are unchanged.</p>
             </div>
             <div className="flex justify-end">
               <Button type="button" onClick={onClose}>

@@ -9,6 +9,13 @@ import { creditDriverCollection } from "../driver-cash/driver-cash-ledger.servic
 import { creditWalletForOrder } from "../wallets/wallet-ledger.service";
 import { recordDeliveryFeeRevenue, recordCompanyOrderProductRevenue } from "../company-finance/company-finance-ledger.service";
 import { createAuditLog } from "../../shared/audit/audit.service";
+import {
+  createOrderFinancialRelease,
+  decideFinancialReleaseMode,
+  deriveExactPlannedAmounts,
+  readSettlementModeActivation,
+  type CollectionRoute,
+} from "../financial-release/financial-release.service";
 import type { ListDriverOrdersQuery } from "./driver-order.schema";
 import type { DriverOrderDetail, DriverOrderPackageSummary, DriverOrderSummary } from "./driver-order.types";
 
@@ -694,8 +701,18 @@ async function loadActivePaymentMethod(paymentMethodId: string): Promise<payment
 // as /fail, so exactly one of a concurrent /fail vs /deliver pair can ever
 // win — see failDriverOrder above for the full reasoning, unchanged here.
 // A losing /deliver never posts partial financial rows: the state claim is
-// the first thing attempted in the transaction, and everything financial
-// happens strictly after it succeeds.
+// the first write in the transaction, and everything financial happens
+// strictly after it succeeds.
+//
+// SETTLEMENT-BASED FINANCIAL RELEASE (FR.3, CLAUDE.md §74): the claim also
+// persists orders.financial_release_mode, decided from the activation flag
+// (read FOR SHARE in this transaction) and the collection route:
+//   activation off            -> NULL          everything above, unchanged
+//   activation on, bypass/zero -> IMMEDIATE    everything above, unchanged
+//   activation on, Driver Cash -> ON_SETTLEMENT Driver Cash COLLECTION + one
+//     order_financial_releases row; NO wallet / company posting (released
+//     later by financial-release.service releaseOrder via FR.4 / FR.5);
+//     financial_status AWAITING_SETTLEMENT (exact) or REVIEW_REQUIRED.
 // ============================================================
 export async function deliverDriverOrder(
   driverId: string,
@@ -789,9 +806,46 @@ export async function deliverDriverOrder(
   const isExactDeliveryOnlyFinance = existing.order_type === "DELIVERY_ONLY" && !difference.needsFinancialReview;
   const isExactCompanyOrderFinance = existing.order_type === "COMPANY_ORDER" && !difference.needsFinancialReview;
   const isExactFinance = isExactDeliveryOnlyFinance || isExactCompanyOrderFinance;
-  const financialStatus = difference.needsFinancialReview ? "REVIEW_REQUIRED" : isExactFinance ? "FINALIZED" : "PENDING";
 
-  return prisma.$transaction(async (tx) => {
+  await prisma.$transaction(async (tx) => {
+    // ------------------------------------------------------------
+    // Settlement-Based Financial Release (FR.3) — read the two routing
+    // inputs BEFORE the claim so the claim persists the decision in the same
+    // UPDATE. Both reads happen inside this transaction:
+    //   - the activation flag, FOR SHARE (serialized against activation /
+    //     deactivation, contract §6 lock step 2);
+    //   - the FINAL collection payment method's bypass_driver_cash (Direct
+    //     Payment Settlement; previously read just after the claim — same
+    //     transaction, same value).
+    // ------------------------------------------------------------
+    const settlementModeActive = await readSettlementModeActivation(tx);
+    const collectionMethod = effectiveCollectionPaymentMethodId
+      ? await tx.payment_methods.findUnique({
+          where: { id: effectiveCollectionPaymentMethodId },
+          select: { id: true, bypass_driver_cash: true },
+        })
+      : null;
+    const bypassesDriverCash = collectionMethod?.bypass_driver_cash === true;
+    const collectionRoute: CollectionRoute = !actualAmountCollected.greaterThan(0)
+      ? "NONE"
+      : bypassesDriverCash
+        ? "DIRECT_COMPANY"
+        : "DRIVER_CASH";
+    // NULL (activation off) / IMMEDIATE (bypass or zero cash) / ON_SETTLEMENT
+    // (Driver Cash). Persisted below and never re-derived after delivery.
+    const financialReleaseMode = decideFinancialReleaseMode(settlementModeActive, collectionRoute);
+    const isSettlementMode = financialReleaseMode === "ON_SETTLEMENT";
+    // NULL / IMMEDIATE keep the exact pre-FR.3 status rule. ON_SETTLEMENT:
+    // a difference is still REVIEW_REQUIRED; an exact collection awaits
+    // settlement instead of finalizing.
+    const financialStatus = difference.needsFinancialReview
+      ? "REVIEW_REQUIRED"
+      : isSettlementMode
+        ? "AWAITING_SETTLEMENT"
+        : isExactFinance
+          ? "FINALIZED"
+          : "PENDING";
+
     const claim = await tx.orders.updateMany({
       where: {
         id: orderId,
@@ -818,6 +872,7 @@ export async function deliverDriverOrder(
         collection_payment_method_id: effectiveCollectionPaymentMethodId,
         needs_financial_review: difference.needsFinancialReview,
         financial_status: financialStatus,
+        financial_release_mode: financialReleaseMode,
         updated_at: now,
       },
     });
@@ -914,20 +969,96 @@ export async function deliverDriverOrder(
     // re-derived later from the method's current Settings value, so toggling
     // the setting only ever affects future deliveries. Routing changes ONLY
     // custody (who holds the money); wallet/revenue ownership below is
-    // identical for both routes.
+    // identical for both routes. (collectionMethod / collectionRoute are
+    // resolved at the top of this transaction — FR.3.)
     // ------------------------------------------------------------
-    const collectionMethod = effectiveCollectionPaymentMethodId
-      ? await tx.payment_methods.findUnique({
-          where: { id: effectiveCollectionPaymentMethodId },
-          select: { id: true, bypass_driver_cash: true },
-        })
-      : null;
-    const bypassesDriverCash = collectionMethod?.bypass_driver_cash === true;
-    const collectionRoute = !actualAmountCollected.greaterThan(0)
-      ? "NONE"
-      : bypassesDriverCash
-        ? "DIRECT_COMPANY"
-        : "DRIVER_CASH";
+
+    if (isSettlementMode) {
+      // ------------------------------------------------------------
+      // ON_SETTLEMENT (FR.3, contract §5.1 step 8): the route is Driver Cash
+      // with a positive collection. Driver Cash records the REAL physical
+      // amount (same primitive, same deterministic key as every other
+      // route), then exactly one order_financial_releases row is created.
+      // NO wallet credit and NO company revenue are posted here — they are
+      // released only when the collection is fully settled (FR.4) and any
+      // difference is resolved (FR.5). A difference never gets an invented
+      // split: its planned amounts stay NULL (AWAITING_REVIEW).
+      // ------------------------------------------------------------
+      const driverCash = await creditDriverCollection(tx, {
+        driverId,
+        amount: actualAmountCollected,
+        orderId,
+        createdById: actorUserId,
+        idempotencyKey: `delivery:${orderId}:driver-collection`,
+      });
+      const planned = difference.needsFinancialReview
+        ? null
+        : deriveExactPlannedAmounts({
+            orderType: existing.order_type,
+            remainingOrderAmount: existing.remaining_order_amount,
+            remainingDeliveryFee: existing.remaining_delivery_fee,
+            collectionAmount: actualAmountCollected,
+          });
+      const release = await createOrderFinancialRelease(tx, {
+        orderId,
+        customerId: existing.customer_id,
+        driverId,
+        collectionTransactionId: driverCash.transaction.id,
+        orderType: existing.order_type,
+        deliveredAt: now,
+        collectionAmount: actualAmountCollected,
+        planned,
+      });
+      const settlementModeMetadata = {
+        financialReleaseMode,
+        releaseId: release.id,
+        reviewStatus: release.review_status,
+        driverCashTransactionId: driverCash.transaction.id,
+        collectionRoute,
+        directCompanyCollectionId: null,
+        ...paymentMethodChangeMetadata,
+      };
+
+      if (planned) {
+        await createAuditLog(tx, {
+          actorUserId,
+          action: "DELIVERY_FINANCE_AWAITING_SETTLEMENT",
+          entityType: "ORDER",
+          entityId: orderId,
+          previousValues: { status: existing.status, financialStatus: existing.financial_status },
+          newValues: { status: "DELIVERED", financialStatus: "AWAITING_SETTLEMENT" },
+          metadata: {
+            orderType: existing.order_type,
+            actualAmountCollected: actualAmountCollected.toString(),
+            plannedCustomerWalletAmount: planned.customerWalletAmount.toString(),
+            plannedCompanyProductAmount: planned.companyProductAmount.toString(),
+            plannedCompanyFeeAmount: planned.companyFeeAmount.toString(),
+            ...settlementModeMetadata,
+          },
+        });
+      } else {
+        // Same audit action as the immediate difference path (Phase 8.7) so
+        // review dashboards keep one vocabulary; the release fields mark it
+        // as settlement-mode.
+        await createAuditLog(tx, {
+          actorUserId,
+          action: "COLLECTION_DIFFERENCE_RECORDED",
+          entityType: "ORDER",
+          entityId: orderId,
+          previousValues: { status: existing.status, financialStatus: existing.financial_status },
+          newValues: { status: "DELIVERED", financialStatus: "REVIEW_REQUIRED" },
+          metadata: {
+            orderType: existing.order_type,
+            expectedAmount: expectedAmountToCollect.toString(),
+            actualAmount: actualAmountCollected.toString(),
+            difference: difference.collectionDifference.toString(),
+            collectionDifferenceReason,
+            ...settlementModeMetadata,
+          },
+        });
+      }
+      return;
+    }
 
     {
       let driverCashTransactionId: string | null = null;
@@ -959,7 +1090,13 @@ export async function deliverDriverOrder(
         });
         directCompanyCollectionId = direct.id;
       }
-      const collectionRoutingMetadata = { collectionRoute, directCompanyCollectionId };
+      // financialReleaseMode is recorded only when activation decided it
+      // (IMMEDIATE); with activation off the audit metadata is unchanged.
+      const collectionRoutingMetadata = {
+        collectionRoute,
+        directCompanyCollectionId,
+        ...(financialReleaseMode ? { financialReleaseMode } : {}),
+      };
 
       if (isExactDeliveryOnlyFinance) {
         let walletTransactionId: string | null = null;
@@ -1086,8 +1223,13 @@ export async function deliverDriverOrder(
         });
       }
     }
-
-    const updated = await tx.orders.findUniqueOrThrow({ where: { id: orderId }, select: driverOrderSelect });
-    return toDriverOrderSummary(updated);
   });
+
+  // Response DTO built AFTER commit (never inside the financial transaction).
+  // Ownership is re-asserted in the query, same as every read in this module.
+  const updated = await prisma.orders.findFirstOrThrow({
+    where: { id: orderId, current_driver_id: driverId },
+    select: driverOrderSelect,
+  });
+  return toDriverOrderSummary(updated);
 }

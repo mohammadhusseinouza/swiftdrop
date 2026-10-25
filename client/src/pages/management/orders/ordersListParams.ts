@@ -1,3 +1,4 @@
+import { FINANCIAL_STATUSES } from '../../../components/finance/financialRelease';
 import {
   ORDER_STATUSES,
   ORDER_TYPES,
@@ -53,12 +54,8 @@ const WORKFLOW_QUEUE_SET = new Set<string>([
   'AWAITING_COMPANY_RECEIPT',
   'READY_FOR_DELIVERY_ASSIGNMENT',
 ]);
-const FINANCIAL_STATUS_SET = new Set([
-  'PENDING',
-  'FINALIZED',
-  'REVIEW_REQUIRED',
-  'NOT_APPLICABLE',
-]);
+// FR.10 — every OrderFinancialStatus (the backend filter accepts all seven).
+const FINANCIAL_STATUS_SET = new Set<string>(FINANCIAL_STATUSES);
 const SORT_BY_SET = new Set<string>([
   'createdAt',
   'orderNumber',

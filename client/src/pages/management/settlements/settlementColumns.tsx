@@ -3,7 +3,9 @@ import { Link } from 'react-router-dom';
 import type { DataTableColumn } from '../../../components/data-display/DataTable';
 import { paths } from '../../../routes/paths';
 import { formatDateTime, formatMoney } from '../../../lib/format';
+import { Badge } from '../../../components/ui/Badge';
 import type { SettlementSummary } from '../../../services/domain.types';
+import { isLegacySettlement } from './settlementPresentation';
 
 const DASH = '—';
 
@@ -11,7 +13,8 @@ const DASH = '—';
  * Driver Settlements list columns. Everything comes from ONE
  * `GET /driver-settlements` response (safe Management DTO — no idempotency
  * key, no raw driver-cash-account internals, no customer wallet / company
- * finance data). `balanceBefore` / `balanceAfter` are the PERSISTED
+ * finance data). `allocatedTotal` / `unattributedAmount` are null on legacy
+ * settlements (shown as "Legacy"). `balanceBefore` / `balanceAfter` are the PERSISTED
  * authoritative snapshots — never recomputed in React. There is no server
  * sort contract, so headers are not sortable. Money is a backend string
  * rendered with `formatMoney` (never `Number` / `parseFloat`).
@@ -24,7 +27,15 @@ export function buildSettlementColumns(opts: {
       id: 'settlement',
       header: 'Settlement',
       cell: (s) => (
-        <span className="font-medium text-ink">{s.settlementNumber}</span>
+        <span className="flex flex-wrap items-center gap-1.5">
+          <Link
+            to={paths.management.driverSettlementDetail(s.id)}
+            className="font-medium text-brand-600 hover:underline"
+          >
+            {s.settlementNumber}
+          </Link>
+          {s.reversed && <Badge tone="danger">Reversed</Badge>}
+        </span>
       ),
     },
     {
@@ -61,6 +72,30 @@ export function buildSettlementColumns(opts: {
           {formatMoney(s.amountReceived)}
         </span>
       ),
+    },
+    {
+      id: 'allocated',
+      header: 'Allocated',
+      align: 'right',
+      hideBelow: 'lg',
+      cell: (s) =>
+        isLegacySettlement(s) ? (
+          <span className="text-ink-subtle">Legacy</span>
+        ) : (
+          <span className="tabular-nums text-ink-muted">{formatMoney(s.allocatedTotal)}</span>
+        ),
+    },
+    {
+      id: 'unattributed',
+      header: 'Unattributed',
+      align: 'right',
+      hideBelow: 'xl',
+      cell: (s) =>
+        isLegacySettlement(s) ? (
+          <span className="text-ink-subtle">{DASH}</span>
+        ) : (
+          <span className="tabular-nums text-ink-muted">{formatMoney(s.unattributedAmount)}</span>
+        ),
     },
     {
       id: 'method',

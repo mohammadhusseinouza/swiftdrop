@@ -1,5 +1,7 @@
 import { Prisma } from "../../generated/prisma/client";
 import { prisma } from "../../db/prisma";
+import { readSnapshot } from "../../db/read-snapshot";
+import { getReleaseActivity, getSettlementReleaseSnapshot } from "../financial-release/financial-release-reporting.service";
 import { getUtcDayBoundary } from "../../shared/date/day-boundary";
 import { buildWorkflowQueueWhere, WORKFLOW_QUEUE_VALUES } from "../orders/order-workflow-queue";
 import { ORDER_DELIVERY_ASSIGNABLE_STATUSES } from "../orders/order-lifecycle";
@@ -235,7 +237,8 @@ async function getNetDriverCollected(): Promise<Prisma.Decimal> {
 }
 
 async function getFinanceMetrics(): Promise<DashboardFinanceMetrics> {
-  const [deliveryFeeRevenue, companyOrderRevenue, driverCollected, directSum, walletSum, payoutSum, driverCashSum] = await Promise.all([
+  const today = getUtcDayBoundary();
+  const [deliveryFeeRevenue, companyOrderRevenue, driverCollected, directSum, walletSum, payoutSum, driverCashSum, release] = await Promise.all([
     getNetCompanyRevenue("DELIVERY_FEE_REVENUE"),
     getNetCompanyRevenue("COMPANY_ORDER_PRODUCT_REVENUE"),
     getNetDriverCollected(),
@@ -245,6 +248,14 @@ async function getFinanceMetrics(): Promise<DashboardFinanceMetrics> {
     prisma.customer_wallets.aggregate({ _sum: { available_balance: true } }),
     prisma.customer_payouts.aggregate({ _sum: { amount: true }, where: { status: "COMPLETED" } }),
     prisma.driver_cash_accounts.aggregate({ _sum: { current_balance: true } }),
+    // FR.8 — one snapshot; bounded aggregates over indexed release rows.
+    readSnapshot(async (tx) => {
+      const [snapshot, activity] = await Promise.all([
+        getSettlementReleaseSnapshot(tx),
+        getReleaseActivity(tx, { start: today.start, endExclusive: today.end }),
+      ]);
+      return { ...snapshot, releasesCompletedToday: activity.releasesCompleted };
+    }),
   ]);
 
   return {
@@ -256,6 +267,8 @@ async function getFinanceMetrics(): Promise<DashboardFinanceMetrics> {
     customerWalletLiability: decimalToString(walletSum._sum.available_balance),
     customerPayouts: decimalToString(payoutSum._sum.amount),
     driverCashOutstanding: decimalToString(driverCashSum._sum.current_balance),
+    revenueBasis: "RELEASED",
+    settlementRelease: release,
   };
 }
 
@@ -424,11 +437,16 @@ const ACTIVITY_LIMIT = 10;
 // orders.read, and the Phase 9.1 spec's own activity-content list places
 // "Order delivered"/"Collection difference recorded/resolved" in the
 // general bucket, not the "for authorized actors" bucket.
+// FR.8 — DELIVERY_FINANCE_AWAITING_SETTLEMENT (a settlement-mode delivery)
+// and FINANCIAL_RELEASE_COMPLETED (its later release) are the settlement-mode
+// counterparts of the *_FINANCE_FINALIZED events — same amount-free DTO.
 const OPERATIONAL_ACTIONS = [
   "DELIVERY_ONLY_FINANCE_FINALIZED",
   "COMPANY_ORDER_FINANCE_FINALIZED",
   "COLLECTION_DIFFERENCE_RECORDED",
   "COLLECTION_DIFFERENCE_RESOLVED",
+  "DELIVERY_FINANCE_AWAITING_SETTLEMENT",
+  "FINANCIAL_RELEASE_COMPLETED",
 ] as const;
 
 function buildAllowedActions(permissions: string[]): string[] {
@@ -437,7 +455,7 @@ function buildAllowedActions(permissions: string[]): string[] {
     allowed.push("CUSTOMER_PAYOUT_COMPLETED", "CUSTOMER_PAYOUT_REVERSED");
   }
   if (permissions.includes("settlements.read")) {
-    allowed.push("DRIVER_SETTLEMENT_COMPLETED", "DRIVER_SETTLEMENT_REVERSED");
+    allowed.push("DRIVER_SETTLEMENT_COMPLETED", "DRIVER_SETTLEMENT_REVERSED", "DRIVER_SETTLEMENT_SHORTFALL_RECORDED");
   }
   if (permissions.includes("wallets.read")) {
     allowed.push("WALLET_ADJUSTMENT_CREATED", "WALLET_TRANSACTION_REVERSED");
@@ -447,7 +465,10 @@ function buildAllowedActions(permissions: string[]): string[] {
       "DRIVER_CASH_ADJUSTMENT_CREATED",
       "DRIVER_CASH_TRANSACTION_REVERSED",
       "COMPANY_FINANCIAL_ADJUSTMENT_CREATED",
-      "COMPANY_FINANCIAL_TRANSACTION_REVERSED"
+      "COMPANY_FINANCIAL_TRANSACTION_REVERSED",
+      // FR.6 release corrections — finance-only.
+      "FINANCIAL_RELEASE_COLLECTION_VOIDED",
+      "FINANCIAL_RELEASE_REVERSED"
     );
   }
   return allowed;

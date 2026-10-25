@@ -38,6 +38,9 @@ export async function getCustomerWallet(userId: string): Promise<CustomerWalletS
     customer: { name: customerRow.name, customerNumber: customerRow.customer_number },
     availableBalance: figures.availableBalance,
     pendingAmount: figures.pendingAmount,
+    pendingDeliveryAmount: figures.pendingDeliveryAmount,
+    pendingSettlementAmount: figures.pendingSettlementAmount,
+    underReviewOrderCount: figures.underReviewOrderCount,
   };
 }
 

@@ -34,6 +34,10 @@ model audit_logs {
   created_at      DateTime @default(now()) @db.Timestamptz(3)
   users           users?   @relation(fields: [actor_user_id], references: [id], onUpdate: NoAction)
 
+
+  // FR.12A.3 — a surviving audit cited as historical reconciliation evidence.
+  historical_reconciliations driver_cash_historical_reconciliations[] @relation("dchr_source_audit_log")
+
   @@index([action, created_at])
   @@index([actor_user_id, created_at])
   @@index([entity_type, entity_id, created_at])
@@ -55,6 +59,12 @@ model company_financial_transactions {
   payment_methods                      payment_methods?                 @relation(fields: [payment_method_id], references: [id], onUpdate: NoAction)
   company_financial_transactions       company_financial_transactions?  @relation("company_financial_transactionsTocompany_financial_transactions", fields: [reversal_of_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
   other_company_financial_transactions company_financial_transactions[] @relation("company_financial_transactionsTocompany_financial_transactions")
+
+  // Settlement-Based Financial Release (FR.2) — inverse relations only.
+  financial_release_product_posting   order_financial_releases?            @relation("ofr_company_product_transaction")
+  financial_release_fee_posting       order_financial_releases?            @relation("ofr_company_fee_transaction")
+  release_correction_product_reversal order_financial_release_corrections? @relation("ofrc_company_product_reversal")
+  release_correction_fee_reversal     order_financial_release_corrections? @relation("ofrc_company_fee_reversal")
 
   @@index([created_at])
   @@index([order_id])
@@ -142,6 +152,7 @@ model customers {
   users_customers_portal_user_idTousers users?                @relation("customers_portal_user_idTousers", fields: [portal_user_id], references: [id], onUpdate: NoAction)
   orders                                orders[]
   wallet_transactions                   wallet_transactions[]
+  order_financial_releases              order_financial_releases[]
 
   @@index([default_area_id])
   @@index([is_active])
@@ -179,6 +190,12 @@ model driver_cash_accounts {
   updated_at               DateTime                   @default(now()) @db.Timestamptz(3)
   drivers                  drivers                    @relation(fields: [driver_id], references: [id], onUpdate: NoAction)
   driver_cash_transactions driver_cash_transactions[]
+
+  // FR.12A.3 — historical reconciliations of this account (evidence only).
+  historical_reconciliations driver_cash_historical_reconciliations[]
+
+  /// Composite-FK target: a historical reconciliation references (account_id, driver_id).
+  @@unique([id, driver_id])
 }
 
 model driver_cash_transactions {
@@ -204,6 +221,18 @@ model driver_cash_transactions {
   other_driver_cash_transactions driver_cash_transactions[] @relation("driver_cash_transactionsTodriver_cash_transactions")
   driver_settlements             driver_settlements?        @relation(fields: [settlement_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
+  // Settlement-Based Financial Release (FR.2) — inverse relations only.
+  financial_release_collection order_financial_releases?            @relation("ofr_collection_transaction")
+  settlement_correction        driver_settlement_corrections?       @relation("dsc_cash_transaction")
+  release_correction_reversal  order_financial_release_corrections? @relation("ofrc_driver_cash_reversal")
+
+  // FR.12A.3 — surviving rows anchoring a historical reconciliation gap.
+  historical_reconciliation_predecessors driver_cash_historical_reconciliations[] @relation("dchr_predecessor_transaction")
+  historical_reconciliation_anchors      driver_cash_historical_reconciliations[] @relation("dchr_anchor_transaction")
+
+  /// Composite-FK target: reconciliation anchors reference (id, account_id).
+  @@unique([id, account_id])
+
   @@index([account_id, created_at])
   @@index([driver_id, created_at])
   @@index([order_id])
@@ -221,11 +250,26 @@ model driver_settlements {
   received_by_id           String                    @db.Uuid
   notes                    String?
   created_at               DateTime                  @default(now()) @db.Timestamptz(3)
+  /// Settlement-Based Financial Release (FR.2). All three NULL on a legacy-format
+  /// settlement (every row created before FR.4, and any later request without
+  /// allocations). SQL-only CHECKs: both amounts NULL together; when set, both >= 0 and
+  /// amount_received = allocated_total + unattributed_amount; unattributed_amount > 0
+  /// requires a non-blank unattributed_reason of at least 10 characters.
+  allocated_total             Decimal?                        @db.Decimal(14, 2)
+  unattributed_amount         Decimal?                        @db.Decimal(14, 2)
+  unattributed_reason         String?
   driver_cash_transactions driver_cash_transactions?
   drivers                  drivers                   @relation(fields: [driver_id], references: [id], onUpdate: NoAction)
   payment_methods          payment_methods           @relation(fields: [payment_method_id], references: [id], onUpdate: NoAction)
   users                    users                     @relation(fields: [received_by_id], references: [id], onUpdate: NoAction)
+  allocations                 driver_settlement_allocations[]
+  corrections                 driver_settlement_corrections[]
+  released_financial_releases order_financial_releases[]      @relation("ofr_released_by_settlement")
+  historical_reconciliations  driver_cash_historical_reconciliations[] @relation("dchr_related_settlement")
 
+  /// Composite-FK target: allocations and corrections reference (id, driver_id) so the
+  /// database rejects a row whose driver differs from the settlement's driver.
+  @@unique([id, driver_id])
   @@index([driver_id, created_at])
 }
 
@@ -247,6 +291,7 @@ model drivers {
   users                    users                      @relation(fields: [user_id], references: [id], onUpdate: NoAction)
   order_assignments        order_assignments[]
   orders                   orders[]                       @relation("orders_current_driver")
+  order_financial_releases   order_financial_releases[]
 
   parcel_collection_current_orders orders[]                       @relation("orders_current_parcel_collection_driver")
   parcel_collection_assignments    parcel_collection_assignments[]
@@ -455,6 +500,14 @@ model orders {
   received_at_company_at                                               DateTime?                        @db.Timestamptz(3)
   received_at_company_by_id                                            String?                          @db.Uuid
 
+  // ---- Settlement-Based Financial Release (FR.2) ----
+  // Contract: docs/settlement-financial-release-contract.md §3.2. NULL = legacy
+  // immediate processing (every order delivered while the feature is inactive,
+  // and every historical order — never backfilled). Written only by /deliver.
+  // SQL-only CHECK orders_financial_release_mode_delivered_chk:
+  //   financial_release_mode IS NULL OR delivered_at IS NOT NULL.
+  financial_release_mode FinancialReleaseMode?
+
   created_at                                                           DateTime                         @default(now()) @db.Timestamptz(3)
   updated_at                                                           DateTime                         @default(now()) @db.Timestamptz(3)
   company_financial_transactions                                       company_financial_transactions[]
@@ -475,6 +528,7 @@ model orders {
   areas                                                                areas?                           @relation("orders_receiver_area", fields: [receiver_area_id], references: [id], onUpdate: NoAction)
   parcel_collection_area_ref                                           areas?                           @relation("orders_parcel_collection_area", fields: [parcel_collection_area_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
   wallet_transactions                                                  wallet_transactions[]
+  order_financial_release                                              order_financial_releases?
 
   @@index([created_at])
   @@index([customer_id, status])
@@ -487,6 +541,7 @@ model orders {
   @@index([parcel_collection_status])
   @@index([parcel_intake_method])
   @@index([current_parcel_collection_driver_id])
+  @@index([financial_release_mode, financial_status])
 }
 
 model payment_methods {
@@ -588,6 +643,13 @@ model users {
   system_settings                           system_settings[]
   roles                                     roles                            @relation(fields: [role_id], references: [id], onUpdate: NoAction)
   wallet_transactions                       wallet_transactions[]
+  released_financial_releases               order_financial_releases[]            @relation("ofr_released_by")
+  driver_settlement_allocations             driver_settlement_allocations[]
+  driver_settlement_corrections             driver_settlement_corrections[]
+  order_financial_release_corrections       order_financial_release_corrections[]
+  financial_ledger_incidents                financial_ledger_incidents[]                      @relation("fli_reported_by")
+  proposed_historical_reconciliations       driver_cash_historical_reconciliations[]          @relation("dchr_proposed_by")
+  historical_reconciliation_decisions       driver_cash_historical_reconciliation_decisions[] @relation("dchrd_decided_by")
 
   @@index([is_active])
   @@index([role_id])
@@ -618,6 +680,10 @@ model wallet_transactions {
   wallet_transactions       wallet_transactions?  @relation("wallet_transactionsTowallet_transactions", fields: [reversal_of_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
   other_wallet_transactions wallet_transactions[] @relation("wallet_transactionsTowallet_transactions")
   customer_wallets          customer_wallets      @relation(fields: [wallet_id], references: [id], onUpdate: NoAction)
+
+  // Settlement-Based Financial Release (FR.2) — inverse relations only.
+  financial_release_posting   order_financial_releases?            @relation("ofr_wallet_transaction")
+  release_correction_reversal order_financial_release_corrections? @relation("ofrc_wallet_reversal")
 
   @@index([customer_id, created_at])
   @@index([order_id])
@@ -663,6 +729,11 @@ enum OrderFinancialStatus {
   FINALIZED
   REVIEW_REQUIRED
   NOT_APPLICABLE
+  // Settlement-Based Financial Release (FR.2) — used only by ON_SETTLEMENT orders
+  // (operational status stays DELIVERED). Contract §4.5.
+  AWAITING_SETTLEMENT
+  COLLECTION_VOIDED
+  RELEASE_REVERSED
 }
 
 enum OrderStatus {
@@ -801,4 +872,396 @@ model driver_daily_expenses {
   @@unique([driver_id, expense_date])
   @@index([expense_date])
   @@index([fuel_settings_id])
+}
+
+// ============================================================================
+// SETTLEMENT-BASED FINANCIAL RELEASE (FR.2 — database only)
+//
+// Contract: docs/settlement-financial-release-contract.md (§3 schema, §4 state
+// machines, §11 invariants). Business rules: docs/requirements.md §55.
+// Migration: migrations/20261016000000_settlement_financial_release_foundation.
+//
+// Additive only: no existing row is modified or backfilled. Every historical
+// order keeps financial_release_mode = NULL (legacy immediate processing) and
+// every historical settlement keeps NULL allocation metadata. Every FK is
+// ON DELETE RESTRICT. CHECK constraints and partial indexes exist only in the
+// SQL migration (Prisma cannot express them) and are documented on each model.
+// ============================================================================
+
+enum FinancialReleaseMode {
+  IMMEDIATE // activation ON; collection did not enter Driver Cash (bypass or zero cash)
+  ON_SETTLEMENT // activation ON; collection entered Driver Cash
+}
+
+enum FinancialReleaseStatus {
+  PENDING // collection recorded; no ownership posting yet
+  RELEASED // wallet / company postings made
+  VOIDED // collection reversed before any allocation; nothing ever posted (terminal)
+  RELEASE_REVERSED // postings reversed by an explicit correction (terminal, no re-release)
+}
+
+enum FinancialReleaseReviewStatus {
+  NOT_REQUIRED
+  AWAITING_REVIEW
+  RESOLVED
+}
+
+enum DriverSettlementCorrectionType {
+  SETTLEMENT_REVERSAL // the settlement was recorded in error (at most one per settlement)
+  SETTLEMENT_SHORTFALL // the driver genuinely handed over less than recorded
+}
+
+enum OrderFinancialReleaseCorrectionType {
+  COLLECTION_VOID // the settlement-mode Driver Cash collection is reversed
+  RELEASE_REVERSAL // released postings are reversed (mis-attribution)
+}
+
+/// One row per ON_SETTLEMENT order (created by /deliver). Holds the planned
+/// ownership split and the settlement progress of that order's Driver Cash
+/// COLLECTION. customer_id / order_type / delivered_at / driver_id are
+/// deliberate immutable snapshots: pending-wallet aggregation by customer, the
+/// order-type CHECKs, delivery-date reporting and the composite-FK target.
+///
+/// SQL-only constraints (migration):
+///   ofr_collection_amount_positive_chk  collection_amount > 0
+///   ofr_allocated_amount_range_chk      0 <= allocated_amount <= collection_amount
+///   ofr_planned_presence_chk            planned amounts all NULL or all set; NULL <=> AWAITING_REVIEW
+///   ofr_planned_values_chk              each >= 0 and their sum = collection_amount
+///   ofr_order_type_buckets_chk          DELIVERY_ONLY: no product amount / posting;
+///                                       COMPANY_ORDER: no wallet amount / posting
+///   ofr_release_state_chk               per-status shape (§4.1): PENDING / VOIDED have no
+///                                       release metadata or postings; RELEASED is fully
+///                                       allocated; RELEASED / RELEASE_REVERSED are released
+///                                       and review-cleared; VOIDED is unallocated
+///   ofr_posted_transactions_chk         released rows carry exactly the postings of their
+///                                       non-zero planned amounts
+///   ofr_outstanding_idx (partial)       (driver_id, delivered_at, id)
+///                                       WHERE release_status = 'PENDING' AND allocated_amount < collection_amount
+model order_financial_releases {
+  id                             String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  order_id                       String                       @unique @db.Uuid
+  customer_id                    String                       @db.Uuid
+  driver_id                      String                       @db.Uuid
+  collection_transaction_id      String                       @unique @db.Uuid
+  order_type                     OrderType
+  delivered_at                   DateTime                     @db.Timestamptz(3)
+  collection_amount              Decimal                      @db.Decimal(14, 2)
+  allocated_amount               Decimal                      @default(0) @db.Decimal(14, 2)
+  review_status                  FinancialReleaseReviewStatus
+  release_status                 FinancialReleaseStatus       @default(PENDING)
+  planned_customer_wallet_amount Decimal?                     @db.Decimal(14, 2)
+  planned_company_product_amount Decimal?                     @db.Decimal(14, 2)
+  planned_company_fee_amount     Decimal?                     @db.Decimal(14, 2)
+  wallet_transaction_id          String?                      @unique @db.Uuid
+  company_product_transaction_id String?                      @unique @db.Uuid
+  company_fee_transaction_id     String?                      @unique @db.Uuid
+  released_at                    DateTime?                    @db.Timestamptz(3)
+  released_by_id                 String?                      @db.Uuid
+  /// NULL when the release was triggered by a collection-difference resolution.
+  released_by_settlement_id      String?                      @db.Uuid
+  created_at                     DateTime                     @default(now()) @db.Timestamptz(3)
+  updated_at                     DateTime                     @default(now()) @db.Timestamptz(3)
+
+  orders                      orders                               @relation(fields: [order_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  customers                   customers                            @relation(fields: [customer_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  drivers                     drivers                              @relation(fields: [driver_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  collection_transaction      driver_cash_transactions             @relation("ofr_collection_transaction", fields: [collection_transaction_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  wallet_transaction          wallet_transactions?                 @relation("ofr_wallet_transaction", fields: [wallet_transaction_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  company_product_transaction company_financial_transactions?      @relation("ofr_company_product_transaction", fields: [company_product_transaction_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  company_fee_transaction     company_financial_transactions?      @relation("ofr_company_fee_transaction", fields: [company_fee_transaction_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  released_by                 users?                               @relation("ofr_released_by", fields: [released_by_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  released_by_settlement      driver_settlements?                  @relation("ofr_released_by_settlement", fields: [released_by_settlement_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  allocations                 driver_settlement_allocations[]
+  correction                  order_financial_release_corrections?
+
+  /// Composite-FK target for driver_settlement_allocations (release_id, driver_id).
+  @@unique([id, driver_id])
+  @@index([driver_id, release_status, delivered_at], map: "ofr_driver_id_release_status_delivered_at_idx")
+  @@index([customer_id, release_status])
+  @@index([release_status, review_status])
+  @@index([delivered_at])
+  @@index([released_at])
+  @@index([released_by_settlement_id])
+}
+
+/// Explicit allocation of part of a settlement to one settlement-mode collection.
+/// Append-only except the one-way ACTIVE -> REVERSED marker
+/// (reversed_by_correction_id, set only by a SETTLEMENT_REVERSAL correction).
+/// driver_id exists solely for the two composite FKs, which make the database
+/// itself reject cross-driver allocation:
+///   (settlement_id, driver_id) -> driver_settlements(id, driver_id)
+///   (release_id,    driver_id) -> order_financial_releases(id, driver_id)
+/// The order and its COLLECTION row are reached through release_id (not duplicated).
+/// SQL-only CHECK: dsa_amount_positive_chk (amount > 0).
+model driver_settlement_allocations {
+  id                        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  settlement_id             String   @db.Uuid
+  release_id                String   @db.Uuid
+  driver_id                 String   @db.Uuid
+  amount                    Decimal  @db.Decimal(14, 2)
+  created_by_id             String   @db.Uuid
+  created_at                DateTime @default(now()) @db.Timestamptz(3)
+  reversed_by_correction_id String?  @db.Uuid
+
+  driver_settlements     driver_settlements             @relation(fields: [settlement_id, driver_id], references: [id, driver_id], onDelete: Restrict, onUpdate: NoAction)
+  release                order_financial_releases       @relation(fields: [release_id, driver_id], references: [id, driver_id], onDelete: Restrict, onUpdate: NoAction)
+  created_by             users                          @relation(fields: [created_by_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  reversed_by_correction driver_settlement_corrections? @relation(fields: [reversed_by_correction_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([settlement_id, release_id])
+  @@index([release_id])
+  @@index([driver_id, created_at])
+  @@index([reversed_by_correction_id])
+}
+
+/// Explicit, reasoned, idempotent correction of a settlement (legacy or
+/// allocation-format). cash_transaction_id is the corrective Driver Cash row:
+/// REVERSAL (SETTLEMENT_REVERSAL) or ADJUSTMENT credit (SETTLEMENT_SHORTFALL).
+/// The original settlement and its SETTLEMENT cash row are never modified.
+/// SQL-only constraints:
+///   dsc_amount_positive_chk         amount > 0
+///   dsc_reason_not_blank_chk        length(btrim(reason)) > 0 (the legacy generic reversal
+///                                   endpoint also writes here; the >= 10-character rule for
+///                                   the new correction endpoints lives in their schemas)
+///   dsc_idempotency_key_not_blank_chk
+///   dsc_one_reversal_per_settlement_uq (partial unique)
+///                                   (settlement_id) WHERE correction_type = 'SETTLEMENT_REVERSAL'
+model driver_settlement_corrections {
+  id                  String                         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  settlement_id       String                         @db.Uuid
+  driver_id           String                         @db.Uuid
+  correction_type     DriverSettlementCorrectionType
+  amount              Decimal                        @db.Decimal(14, 2)
+  reason              String
+  cash_transaction_id String                         @unique @db.Uuid
+  created_by_id       String                         @db.Uuid
+  idempotency_key     String                         @unique @db.VarChar(200)
+  created_at          DateTime                       @default(now()) @db.Timestamptz(3)
+
+  driver_settlements   driver_settlements              @relation(fields: [settlement_id, driver_id], references: [id, driver_id], onDelete: Restrict, onUpdate: NoAction)
+  cash_transaction     driver_cash_transactions        @relation("dsc_cash_transaction", fields: [cash_transaction_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  created_by           users                           @relation(fields: [created_by_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  reversed_allocations driver_settlement_allocations[]
+
+  @@index([settlement_id])
+  @@index([driver_id, created_at])
+}
+
+/// Explicit, reasoned, idempotent terminal correction of one release (at most one
+/// per release — release_id UNIQUE). The order is reached through release_id.
+/// Corrective rows reuse the existing reversal primitives / keys.
+/// SQL-only constraints:
+///   ofrc_reason_meaningful_chk  length(btrim(reason)) >= 10
+///   ofrc_idempotency_key_not_blank_chk
+///   ofrc_type_shape_chk        COLLECTION_VOID: Driver Cash reversal set, no wallet/company
+///                               reversal; RELEASE_REVERSAL: no Driver Cash reversal, at least
+///                               one wallet/company reversal
+model order_financial_release_corrections {
+  id                                      String                              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  release_id                              String                              @unique @db.Uuid
+  correction_type                         OrderFinancialReleaseCorrectionType
+  reason                                  String
+  driver_cash_reversal_transaction_id     String?                             @unique(map: "ofrc_driver_cash_reversal_transaction_id_key") @db.Uuid
+  wallet_reversal_transaction_id          String?                             @unique(map: "ofrc_wallet_reversal_transaction_id_key") @db.Uuid
+  company_product_reversal_transaction_id String?                             @unique(map: "ofrc_company_product_reversal_transaction_id_key") @db.Uuid
+  company_fee_reversal_transaction_id     String?                             @unique(map: "ofrc_company_fee_reversal_transaction_id_key") @db.Uuid
+  created_by_id                           String                              @db.Uuid
+  idempotency_key                         String                              @unique @db.VarChar(200)
+  created_at                              DateTime                            @default(now()) @db.Timestamptz(3)
+
+  release                              order_financial_releases        @relation(fields: [release_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  driver_cash_reversal_transaction     driver_cash_transactions?       @relation("ofrc_driver_cash_reversal", fields: [driver_cash_reversal_transaction_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "ofrc_driver_cash_reversal_transaction_id_fkey")
+  wallet_reversal_transaction          wallet_transactions?            @relation("ofrc_wallet_reversal", fields: [wallet_reversal_transaction_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "ofrc_wallet_reversal_transaction_id_fkey")
+  company_product_reversal_transaction company_financial_transactions? @relation("ofrc_company_product_reversal", fields: [company_product_reversal_transaction_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "ofrc_company_product_reversal_transaction_id_fkey")
+  company_fee_reversal_transaction     company_financial_transactions? @relation("ofrc_company_fee_reversal", fields: [company_fee_reversal_transaction_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "ofrc_company_fee_reversal_transaction_id_fkey")
+  created_by                           users                           @relation(fields: [created_by_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([correction_type, created_at], map: "ofrc_correction_type_created_at_idx")
+}
+
+// ============================================================================
+// FR.12A.3 — Driver cash historical reconciliation (evidence only)
+// Design: docs/fr12a2-historical-ledger-reconciliation-design.md, refined in
+// docs/fr12a3-historical-reconciliation-foundation.md.
+// Migration: migrations/20261025000000_driver_cash_historical_reconciliation_foundation.
+//
+// Additive only. A reconciliation explains one located gap in a driver cash
+// ledger; it never moves cash, never posts wallet credit or company revenue and
+// never decides who owns the money (ownership_status stays UNRESOLVED). G3 / R1
+// are NOT changed by these tables (FR.12A.4). No triggers: immutability comes
+// from the evidence-digest CHECK plus ON UPDATE RESTRICT composite FKs, and the
+// lifecycle is append-only decision rows (status is derived, never stored).
+// CHECK constraints and partial indexes exist only in the SQL migration.
+// ============================================================================
+
+enum FinancialLedgerIncidentCause {
+  MANUAL_DATABASE_DELETION
+}
+
+enum DriverCashHistoricalReconciliationKind {
+  MISSING_COLLECTION // a deleted driver cash COLLECTION named by a surviving COLLECTION_DIFFERENCE_RECORDED audit
+}
+
+enum HistoricalReconciliationAccountingTreatment {
+  EVIDENCE_ONLY_NO_CASH_EFFECT
+}
+
+enum HistoricalOwnershipStatus {
+  UNRESOLVED // only value; resolving ownership needs its own approved design (FR.12A.2 D4)
+}
+
+enum HistoricalReconciliationDecisionType {
+  APPROVED // independent reviewer accepts the evidence (not terminal: may be REVOKED)
+  REJECTED // independent reviewer refuses the evidence (terminal)
+  WITHDRAWN // proposal withdrawn before review (terminal)
+  REVOKED // a previous APPROVED decision is ended (terminal)
+}
+
+/// A documented ledger incident (cause, scope, missing records, uncertainties,
+/// query evidence). Immutable: never updated or deleted by the application.
+/// Free text must not contain customer / receiver personal data.
+/// SQL-only CHECKs: fli_incident_number_format_chk (LI-YYYY-NNNN),
+/// fli_summary_meaningful_chk (>= 20 chars), fli_uncertainties_not_blank_chk,
+/// fli_occurrence_window_chk, fli_missing_records_object_chk, fli_evidence_object_chk.
+model financial_ledger_incidents {
+  id                      String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  incident_number         String                       @unique @db.VarChar(30)
+  cause                   FinancialLedgerIncidentCause
+  summary                 String
+  discovered_at           DateTime                     @db.Timestamptz(3)
+  occurred_not_before     DateTime?                    @db.Timestamptz(3)
+  occurred_not_after      DateTime?                    @db.Timestamptz(3)
+  /// Per table: a count or "unknown", e.g. { "orders": 1, "delivery_attempts": "unknown" }.
+  missing_records         Json
+  remaining_uncertainties String
+  /// Query ids, run timestamps, result digests and reviewer of the investigation.
+  evidence                Json
+  reported_by_id          String                       @db.Uuid
+  created_at              DateTime                     @default(now()) @db.Timestamptz(3)
+
+  reported_by     users                                    @relation("fli_reported_by", fields: [reported_by_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  reconciliations driver_cash_historical_reconciliations[]
+}
+
+/// One immutable proposal explaining ONE located balance-chain gap of one driver
+/// cash account: the missing COLLECTION (missing_transaction_id, no FK - it was
+/// deleted) between predecessor (NULL = gap at the start) and anchor, evidenced by
+/// the surviving COLLECTION_DIFFERENCE_RECORDED audit. Status is derived from
+/// driver_cash_historical_reconciliation_decisions (no decision = PROPOSED).
+/// A re-proposal of the same evidence supersedes a record that has a terminal
+/// decision; each evidence chain is linear, so at most one record is live.
+/// The evidence time is the source audit's created_at (no stored copy: see the
+/// digest note in the migration).
+///
+/// SQL-only constraints (migration):
+///   dchr_amount_positive_chk, dchr_observed_jump_matches_chk (= amount),
+///   dchr_actual_amount_matches_chk (MISSING_COLLECTION: actual_amount = amount),
+///   dchr_expected_amount_chk (>= 0),
+///   dchr_collection_difference_chk (= actual - expected, <> 0),
+///   dchr_anchor_not_predecessor_chk, dchr_ownership_unresolved_chk,
+///   dchr_reason_meaningful_chk (>= 20 chars), dchr_idempotency_key_not_blank_chk,
+///   dchr_supersession_shape_chk (all three supersedes_* NULL, or all set with terminal = true),
+///   dchr_evidence_digest_chk   evidence_digest = sha256 of the canonical v1 evidence string
+///                              (buildEvidenceCanonicalString mirrors it exactly)
+///   dchr_root_anchor_uq / dchr_root_missing_transaction_uq / dchr_root_source_audit_uq (partial)
+///                              UNIQUE (...) WHERE supersedes_reconciliation_id IS NULL
+model driver_cash_historical_reconciliations {
+  id                              String                                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  incident_id                     String                                      @db.Uuid
+  account_id                      String                                      @db.Uuid
+  driver_id                       String                                      @db.Uuid
+  kind                            DriverCashHistoricalReconciliationKind
+  accounting_treatment            HistoricalReconciliationAccountingTreatment
+  ownership_status                HistoricalOwnershipStatus
+  /// Signed net movement of the missing rows (MISSING_COLLECTION: > 0).
+  amount                          Decimal                                     @db.Decimal(14, 2)
+  /// anchor.balance_before - coalesce(predecessor.balance_after, 0) at proposal.
+  observed_jump                   Decimal                                     @db.Decimal(14, 2)
+  predecessor_transaction_id      String?                                     @db.Uuid
+  anchor_transaction_id           String                                      @db.Uuid
+  missing_transaction_id          String                                      @db.Uuid
+  source_audit_log_id             String                                      @db.Uuid
+  /// The deleted order's id (audit entity_id). No FK: the order no longer exists.
+  deleted_order_reference         String                                      @db.Uuid
+  order_type                      OrderType
+  expected_amount                 Decimal                                     @db.Decimal(14, 2)
+  actual_amount                   Decimal                                     @db.Decimal(14, 2)
+  collection_difference           Decimal                                     @db.Decimal(14, 2)
+  related_settlement_id           String?                                     @db.Uuid
+  evidence_digest                 String                                      @db.Char(64)
+  reason                          String
+  proposed_by_id                  String                                      @db.Uuid
+  idempotency_key                 String                                      @unique(map: "dchr_idempotency_key_key") @db.VarChar(200)
+  supersedes_reconciliation_id    String?                                     @unique(map: "dchr_supersedes_reconciliation_id_key") @db.Uuid
+  supersedes_decision_id          String?                                     @db.Uuid
+  supersedes_decision_is_terminal Boolean?
+  created_at                      DateTime                                    @default(now()) @db.Timestamptz(3)
+
+  incident                financial_ledger_incidents                        @relation(fields: [incident_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "dchr_incident_id_fkey")
+  account                 driver_cash_accounts                              @relation(fields: [account_id, driver_id], references: [id, driver_id], onDelete: Restrict, onUpdate: NoAction, map: "dchr_account_id_driver_id_fkey")
+  predecessor_transaction driver_cash_transactions?                         @relation("dchr_predecessor_transaction", fields: [predecessor_transaction_id, account_id], references: [id, account_id], onDelete: Restrict, onUpdate: NoAction, map: "dchr_predecessor_transaction_fkey")
+  anchor_transaction      driver_cash_transactions                          @relation("dchr_anchor_transaction", fields: [anchor_transaction_id, account_id], references: [id, account_id], onDelete: Restrict, onUpdate: NoAction, map: "dchr_anchor_transaction_fkey")
+  source_audit_log        audit_logs                                        @relation("dchr_source_audit_log", fields: [source_audit_log_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "dchr_source_audit_log_id_fkey")
+  related_settlement      driver_settlements?                               @relation("dchr_related_settlement", fields: [related_settlement_id, driver_id], references: [id, driver_id], onDelete: Restrict, onUpdate: NoAction, map: "dchr_related_settlement_fkey")
+  proposed_by             users                                             @relation("dchr_proposed_by", fields: [proposed_by_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "dchr_proposed_by_id_fkey")
+  decisions               driver_cash_historical_reconciliation_decisions[]
+  /// A re-proposal explains exactly the same gap, missing row and audit
+  /// (composite FK on the evidence keys) ...
+  supersedes              driver_cash_historical_reconciliations?           @relation("dchr_supersedes", fields: [supersedes_reconciliation_id, account_id, anchor_transaction_id, missing_transaction_id, source_audit_log_id], references: [id, account_id, anchor_transaction_id, missing_transaction_id, source_audit_log_id], onDelete: Restrict, onUpdate: NoAction, map: "dchr_supersedes_reconciliation_fkey")
+  /// ... and cites a TERMINAL decision (REJECTED / WITHDRAWN / REVOKED) of the
+  /// record it supersedes, so a live record never gains a sibling.
+  supersedes_decision     driver_cash_historical_reconciliation_decisions?  @relation("dchr_supersedes_decision", fields: [supersedes_decision_id, supersedes_reconciliation_id, supersedes_decision_is_terminal], references: [id, reconciliation_id, is_terminal], onDelete: Restrict, onUpdate: Restrict, map: "dchr_supersedes_terminal_decision_fkey")
+  /// At most one element: supersedes_reconciliation_id is UNIQUE.
+  superseded_by           driver_cash_historical_reconciliations[]          @relation("dchr_supersedes")
+
+  /// FK target binding every decision to this proposer and evidence (ON UPDATE RESTRICT).
+  @@unique([id, proposed_by_id, evidence_digest], map: "dchr_id_proposed_by_id_evidence_digest_key")
+  /// FK target for supersession (a re-proposal keeps the same evidence keys).
+  @@unique([id, account_id, anchor_transaction_id, missing_transaction_id, source_audit_log_id], map: "dchr_id_evidence_keys_key")
+  @@index([account_id, created_at], map: "dchr_account_id_created_at_idx")
+  @@index([incident_id], map: "dchr_incident_id_idx")
+  @@index([supersedes_decision_id], map: "dchr_supersedes_decision_id_idx")
+}
+
+/// Append-only lifecycle of a reconciliation. Never updated or deleted by the
+/// application. proposed_by_id and evidence_digest are copies pinned by the
+/// composite FK (reconciliation_id, proposed_by_id, evidence_digest) ON UPDATE
+/// RESTRICT, so a decision always refers to the exact evidence it judged and the
+/// reconciliation's evidence is frozen once any decision exists.
+///
+/// SQL-only constraints (migration):
+///   dchrd_is_terminal_chk            is_terminal = (decision <> 'APPROVED')
+///   dchrd_independent_reviewer_chk   APPROVED / REJECTED: decided_by_id <> proposed_by_id
+///   dchrd_revocation_shape_chk       REVOKED <=> revokes_decision_id set; revokes_decision_type = 'APPROVED'
+///   dchrd_reason_chk                 APPROVED: optional note; otherwise reason >= 20 chars
+///   dchrd_idempotency_key_not_blank_chk
+///   dchrd_one_outcome_per_reconciliation_uq (partial)
+///                                    UNIQUE (reconciliation_id) WHERE decision IN (APPROVED, REJECTED, WITHDRAWN)
+model driver_cash_historical_reconciliation_decisions {
+  id                    String                                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reconciliation_id     String                                @db.Uuid
+  decision              HistoricalReconciliationDecisionType
+  is_terminal           Boolean
+  proposed_by_id        String                                @db.Uuid
+  evidence_digest       String                                @db.Char(64)
+  revokes_decision_id   String?                               @unique(map: "dchrd_revokes_decision_id_key") @db.Uuid
+  revokes_decision_type HistoricalReconciliationDecisionType?
+  decided_by_id         String                                @db.Uuid
+  reason                String?
+  idempotency_key       String                                @unique(map: "dchrd_idempotency_key_key") @db.VarChar(200)
+  created_at            DateTime                              @default(now()) @db.Timestamptz(3)
+
+  reconciliation              driver_cash_historical_reconciliations            @relation(fields: [reconciliation_id, proposed_by_id, evidence_digest], references: [id, proposed_by_id, evidence_digest], onDelete: Restrict, onUpdate: Restrict, map: "dchrd_reconciliation_evidence_fkey")
+  revokes                     driver_cash_historical_reconciliation_decisions?  @relation("dchrd_revokes", fields: [revokes_decision_id, reconciliation_id, revokes_decision_type], references: [id, reconciliation_id, decision], onDelete: Restrict, onUpdate: Restrict, map: "dchrd_revokes_decision_fkey")
+  /// At most one element: revokes_decision_id is UNIQUE.
+  revoked_by                  driver_cash_historical_reconciliation_decisions[] @relation("dchrd_revokes")
+  superseding_reconciliations driver_cash_historical_reconciliations[]          @relation("dchr_supersedes_decision")
+  decided_by                  users                                             @relation("dchrd_decided_by", fields: [decided_by_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "dchrd_decided_by_id_fkey")
+
+  /// FK targets: revocation (id, reconciliation_id, decision) and supersession
+  /// (id, reconciliation_id, is_terminal).
+  @@unique([id, reconciliation_id, decision], map: "dchrd_id_reconciliation_id_decision_key")
+  @@unique([id, reconciliation_id, is_terminal], map: "dchrd_id_reconciliation_id_is_terminal_key")
+  @@index([reconciliation_id, created_at], map: "dchrd_reconciliation_id_created_at_idx")
+  @@index([decided_by_id], map: "dchrd_decided_by_id_idx")
 }

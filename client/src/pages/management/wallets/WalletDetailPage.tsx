@@ -17,9 +17,11 @@ import { LedgerAdjustDialog } from '../../../components/finance/LedgerAdjustDial
 import { LedgerReverseDialog } from '../../../components/finance/LedgerReverseDialog';
 import {
   LEDGER_LABEL,
-  isReversibleType,
   ledgerTypeLabel,
+  reverseActionState,
+  type DedicatedWorkflow,
 } from '../../../components/finance/ledgerCorrection';
+import { ReverseRowAction } from '../../../components/finance/ReverseRowAction';
 import {
   getApiErrorCode,
   getApiErrorMessage,
@@ -39,6 +41,8 @@ import { LoadingState } from '../../../components/feedback/LoadingState';
 import { EmptyState } from '../../../components/feedback/EmptyState';
 import { ErrorState } from '../../../components/feedback/ErrorState';
 import { formatMoney, isZeroMoney } from '../../../lib/format';
+import { PendingBreakdownCard } from '../../../components/finance/PendingBreakdownCard';
+import { pendingBreakdown } from '../../../components/finance/financialRelease';
 
 import { buildWalletTransactionColumns } from './walletTransactionColumns';
 
@@ -69,6 +73,8 @@ export default function WalletDetailPage() {
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [reverseTarget, setReverseTarget] =
     useState<WalletTransactionEntry | null>(null);
+  // FR.10 closure — rows the backend refused as dedicated-workflow-only.
+  const [dedicated, setDedicated] = useState<ReadonlyMap<string, DedicatedWorkflow>>(() => new Map());
   const [adjustWallet, adjustWalletState] = useAdjustWalletMutation();
   const [reverseWallet, reverseWalletState] =
     useReverseWalletTransactionMutation();
@@ -116,19 +122,15 @@ export default function WalletDetailPage() {
       buildWalletTransactionColumns({
         canViewOrders,
         renderActions: canAdjustWallet
-          ? (t) =>
-              isReversibleType(t.type) ? (
-                <button
-                  type="button"
-                  onClick={() => setReverseTarget(t)}
-                  className="rounded-control px-2 py-1 text-xs font-medium text-danger-700 hover:bg-danger-50"
-                >
-                  Reverse
-                </button>
-              ) : null
+          ? (t) => (
+              <ReverseRowAction
+                state={reverseActionState(t, { canReverse: true, dedicated })}
+                onReverse={() => setReverseTarget(t)}
+              />
+            )
           : undefined,
       }),
-    [canViewOrders, canAdjustWallet],
+    [canViewOrders, canAdjustWallet, dedicated],
   );
 
   /* ------------------------------ error states --------------------------- */
@@ -259,21 +261,11 @@ export default function WalletDetailPage() {
           }
           supportingText="Finalized money the company owes this customer — withdrawable via payout."
         />
-        <Card className="flex flex-col justify-between gap-2 bg-sunken/40">
-          <div>
-            <p className="text-xs font-medium uppercase tracking-wide text-ink-muted">
-              Pending amount
-            </p>
-            <p className="mt-1.5 text-2xl font-semibold tracking-tight text-ink-secondary tabular-nums">
-              {formatMoney(wallet.wallet.pendingAmount)}
-            </p>
-          </div>
-          <p className="text-xs text-ink-muted">
-            Potential money from active delivery-only orders (order value only,
-            excludes delivery fee). Server-derived, <strong>not</strong>{' '}
-            withdrawable until an order is delivered and finalized.
-          </p>
-        </Card>
+        <PendingBreakdownCard
+          audience="management"
+          breakdown={pendingBreakdown(wallet.wallet)}
+          underReviewCollectionAmount={wallet.wallet.underReviewCollectionAmount}
+        />
       </div>
 
       {/* ledger */}
@@ -375,6 +367,9 @@ export default function WalletDetailPage() {
           submitting={reverseWalletState.isLoading}
           onRefetch={refetchWallet}
           onClose={() => setReverseTarget(null)}
+          onDedicatedWorkflow={(workflow) =>
+            setDedicated((m) => new Map(m).set(reverseTarget.id, workflow))
+          }
           onSubmit={(reason) =>
             reverseWallet({
               transactionId: reverseTarget.id,

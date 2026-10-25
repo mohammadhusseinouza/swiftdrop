@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto";
 
-export type RequestIdempotencyOperation = "payout" | "settlement";
+export type RequestIdempotencyOperation =
+  | "payout"
+  | "settlement"
+  | "settlement-shortfall"
+  // FR.12A.5 — historical reconciliation workflow
+  | "historical-reconciliation-proposal"
+  | "historical-reconciliation-decision";
 
 // Derives a bounded, non-reversible internal ledger idempotency_key from a
 // raw client-supplied Idempotency-Key header, scoped to the authenticated

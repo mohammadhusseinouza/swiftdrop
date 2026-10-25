@@ -3,6 +3,7 @@ import type { system_settings, users } from "../../generated/prisma/client";
 import { prisma } from "../../db/prisma";
 import { AppError } from "../../shared/errors/app-error";
 import { createAuditLog } from "../../shared/audit/audit.service";
+import { FINANCIAL_RELEASE_ACTIVATION_SETTING_KEY } from "../financial-release/financial-release.service";
 import type { UpdateSettingInput } from "./setting.schema";
 import type { SettingSummary } from "./setting.types";
 
@@ -82,6 +83,19 @@ export async function updateSettingByKey(
   input: UpdateSettingInput,
   actorUserId: string
 ): Promise<SettingSummary> {
+  // Settlement-Based Financial Release (CLAUDE.md §74): the activation key is
+  // Admin-only and may change only through its dedicated, gated workflow
+  // (FR.11). `settings.manage` can be granted to non-Admin roles, so the
+  // generic PATCH must never flip it — rejected before any DB access.
+  if (key === FINANCIAL_RELEASE_ACTIVATION_SETTING_KEY) {
+    throw new AppError({
+      statusCode: 400,
+      code: "VALIDATION_ERROR",
+      message: "This setting is managed by a dedicated administrative workflow and cannot be changed here",
+      details: { reason: "SETTING_MANAGED_ELSEWHERE" },
+    });
+  }
+
   try {
     const setting = await prisma.$transaction(async (tx) => {
       const existing = await tx.system_settings.findUnique({ where: { key } });

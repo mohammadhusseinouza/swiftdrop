@@ -1,3 +1,4 @@
+import type { CorrectionEligibility } from "./correction-eligibility.service";
 // ============================================================
 // Finance Summary + Transactions DTOs (Phase 9.2)
 //
@@ -7,6 +8,8 @@
 // there is no partial/nullable-finance-section case here — the entire module
 // is finance.read-gated at the route level.
 // ============================================================
+
+import type { DeliveryDateSummary, ReleaseActivity, SettlementReleaseSnapshot } from "../financial-release/financial-release-reporting.service";
 
 // DIRECT_COMPANY_COLLECTION is a READ-ONLY feed source (company_direct_
 // collections — money collected at delivery with a bypass_driver_cash payment
@@ -29,6 +32,9 @@ export interface FinanceDateRangeDto {
 // metrics (as-of the end of `to`, ignoring `from` entirely).
 export interface FinanceSummaryDto {
   range: FinanceDateRangeDto;
+  // FR.8 — basis of every pre-existing field above/below: ledger posting
+  // dates (for a settlement-mode order, the release time).
+  basis: "RELEASED";
   companyRevenue: string;
   deliveryFeeRevenue: string;
   companyOrderRevenue: string;
@@ -42,6 +48,29 @@ export interface FinanceSummaryDto {
   customerWalletLiability: string;
   customerPayouts: string;
   driverCashOutstanding: string;
+  // FR.12A.4 — explanatory components of driverCashOutstanding (whose value is
+  // unchanged). ledgerNet is the raw ledger sum; approvedHistoricalReconciliation
+  // is evidence-only (FR.12A.2 option B) — never a collection, revenue or
+  // posting; explainedLedgerTotal = ledgerNet + approvedHistoricalReconciliation.
+  driverCashOutstandingComponents: DriverCashOutstandingComponents;
+  // FR.8 — settlement-based release. `current` is a point-in-time snapshot
+  // (now; `from`/`to` ignored); `activity` is filtered by release /
+  // correction date within the range.
+  settlementRelease: {
+    current: SettlementReleaseSnapshot;
+    activity: ReleaseActivity;
+  };
+  // FR.8 — present only when basis=delivered (contract §12).
+  deliveryDate: DeliveryDateSummary | null;
+}
+
+export interface DriverCashOutstandingComponents {
+  // CURRENT_BALANCE: driverCashOutstanding = Σ stored balances (no range end).
+  // LEDGER_AS_OF: driverCashOutstanding = ledger sum before the range end.
+  basis: "CURRENT_BALANCE" | "LEDGER_AS_OF";
+  ledgerNet: string;
+  approvedHistoricalReconciliation: string;
+  explainedLedgerTotal: string;
 }
 
 export interface FinanceOrderRef {
@@ -91,7 +120,10 @@ export interface FinanceReversalRef {
 
 export type FinanceCollectionRoute = "DRIVER_CASH" | "DIRECT_COMPANY";
 
-export interface FinanceTransactionEntry {
+// FR.10.1 — every feed row carries its read-only correction eligibility
+// (correctionWorkflow / canReverseGenerically / reversed; see
+// correction-eligibility.service.ts). Additive fields only.
+export interface FinanceTransactionEntry extends CorrectionEligibility {
   id: string;
   ledger: LedgerName;
   type: string;

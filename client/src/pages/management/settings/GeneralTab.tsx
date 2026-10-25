@@ -20,6 +20,8 @@ import { ErrorState } from '../../../components/feedback/ErrorState';
 import { humanizeToken, formatDateTime } from '../../../lib/format';
 import { SystemSettingDialog } from './SystemSettingDialog';
 
+const FINANCIAL_RELEASE_SETTING_KEY = 'financial_release.settlement_mode_enabled';
+
 /**
  * General tab — surfaces whatever rows exist in `system_settings`. The V1
  * backend has NO approved General key catalog and NO create endpoint, so
@@ -102,13 +104,17 @@ function SettingRow({
   canManage: boolean;
   onEdit: () => void;
 }) {
-  const editable = canManage && !setting.isSensitive;
+  // FR.11B — the activation flag is changed only through the Admin
+  // Financial Release tab (the generic settings endpoint refuses it).
+  const managedElsewhere = setting.key === FINANCIAL_RELEASE_SETTING_KEY;
+  const editable = canManage && !setting.isSensitive && !managedElsewhere;
   return (
     <Card className="flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0 space-y-1">
         <div className="flex flex-wrap items-center gap-2">
           <code className="text-sm font-medium text-ink">{setting.key}</code>
           {setting.isSensitive && <Badge tone="warning">Protected value</Badge>}
+          {managedElsewhere && <Badge tone="info">Managed in Financial Release (Admin)</Badge>}
         </div>
         {setting.description && (
           <p className="text-xs text-ink-muted">{setting.description}</p>

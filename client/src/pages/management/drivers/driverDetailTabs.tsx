@@ -49,11 +49,14 @@ import {
 } from '../../../components/orders/parcelCollection';
 import { LedgerAdjustDialog } from '../../../components/finance/LedgerAdjustDialog';
 import { LedgerReverseDialog } from '../../../components/finance/LedgerReverseDialog';
+import { OutstandingCollectionsSection } from './OutstandingCollectionsSection';
 import {
   LEDGER_LABEL,
-  isReversibleType,
   ledgerTypeLabel,
+  reverseActionState,
+  type DedicatedWorkflow,
 } from '../../../components/finance/ledgerCorrection';
+import { ReverseRowAction } from '../../../components/finance/ReverseRowAction';
 
 const DASH = '—';
 const PAGE_SIZE = 20;
@@ -527,7 +530,10 @@ export function CashTab({
   driverLabel?: string;
 }) {
   const [page, setPage] = usePageParam('cashPage');
+  const [collectionsPage, setCollectionsPage] = usePageParam('collectionsPage');
   const canAdjustCash = useHasPermission(PERMISSIONS.FINANCE_ADJUST);
+  const canViewOrders = useHasPermission(PERMISSIONS.ORDERS_READ);
+  const canSettle = useHasPermission(PERMISSIONS.SETTLEMENTS_READ);
 
   const balance = useGetManagementDriverCashQuery(driverId);
   const txns = useGetManagementDriverCashTransactionsQuery({
@@ -541,6 +547,8 @@ export function CashTab({
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [reverseTarget, setReverseTarget] =
     useState<ManagementDriverCashTransactionEntry | null>(null);
+  // FR.10 closure — rows the backend refused as dedicated-workflow-only.
+  const [dedicated, setDedicated] = useState<ReadonlyMap<string, DedicatedWorkflow>>(() => new Map());
   const [adjustCash, adjustCashState] = useAdjustDriverCashMutation();
   const [reverseCash, reverseCashState] =
     useReverseDriverCashTransactionMutation();
@@ -552,16 +560,12 @@ export function CashTab({
 
   const columns = buildCashColumns(
     canAdjustCash
-      ? (t) =>
-          isReversibleType(t.type) ? (
-            <button
-              type="button"
-              onClick={() => setReverseTarget(t)}
-              className="rounded-control px-2 py-1 text-xs font-medium text-danger-700 hover:bg-danger-50"
-            >
-              Reverse
-            </button>
-          ) : null
+      ? (t) => (
+          <ReverseRowAction
+            state={reverseActionState(t, { canReverse: true, dedicated })}
+            onReverse={() => setReverseTarget(t)}
+          />
+        )
       : undefined,
   );
 
@@ -590,6 +594,14 @@ export function CashTab({
           </Button>
         )}
       </div>
+
+      <OutstandingCollectionsSection
+        driverId={driverId}
+        page={collectionsPage}
+        onPageChange={setCollectionsPage}
+        canViewOrders={canViewOrders}
+        canSettle={canSettle}
+      />
 
       <Section title="Cash transactions">
         {txns.isLoading ? (
@@ -652,6 +664,9 @@ export function CashTab({
           submitting={reverseCashState.isLoading}
           onRefetch={refetchCash}
           onClose={() => setReverseTarget(null)}
+          onDedicatedWorkflow={(workflow) =>
+            setDedicated((m) => new Map(m).set(reverseTarget.id, workflow))
+          }
           onSubmit={(reason) =>
             reverseCash({
               transactionId: reverseTarget.id,
@@ -687,7 +702,14 @@ const settlementColumns: DataTableColumn<SettlementSummary>[] = [
   {
     id: 'number',
     header: 'Settlement',
-    cell: (s) => s.settlementNumber,
+    cell: (s) => (
+      <Link
+        to={paths.management.driverSettlementDetail(s.id)}
+        className="font-medium text-brand-600 hover:underline"
+      >
+        {s.settlementNumber}
+      </Link>
+    ),
   },
   {
     id: 'date',

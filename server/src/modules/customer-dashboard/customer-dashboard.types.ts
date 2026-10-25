@@ -30,6 +30,15 @@ export interface CustomerDashboardSummary {
    * (it belongs to the company).
    */
   pendingAmount: string;
+  /** FR.7 — pendingAmount = pendingDeliveryAmount + pendingSettlementAmount. */
+  /** Potential money on active DELIVERY_ONLY orders (not yet delivered). */
+  pendingDeliveryAmount: string;
+  /** Delivered DELIVERY_ONLY orders whose cash the driver has not yet fully
+   *  handed to the company (approved amounts only). */
+  pendingSettlementAmount: string;
+  /** Delivered orders whose collected amount is under review — a count
+   *  only; no unapproved amount is shown. */
+  underReviewOrderCount: number;
   /** Count of this Customer's non-terminal orders. */
   activeOrders: number;
   /** Count of this Customer's orders whose status is DELIVERED. */

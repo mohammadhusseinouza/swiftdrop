@@ -28,7 +28,13 @@ export const paths = {
       `/management/wallets/${customerId}`,
     payouts: '/management/payouts',
     driverSettlements: '/management/driver-settlements',
+    driverSettlementDetail: (id = ':id') =>
+      `/management/driver-settlements/${id}`,
     finance: '/management/finance',
+    /** FR.12A.6 — ADMIN / FINANCE (by role). */
+    historicalReconciliations: '/management/finance/historical-reconciliations',
+    historicalReconciliationDetail: (id = ':id') =>
+      `/management/finance/historical-reconciliations/${id}`,
     reports: '/management/reports',
     employees: '/management/employees',
     employeeDetail: (id = ':id') => `/management/employees/${id}`,

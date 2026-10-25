@@ -73,6 +73,9 @@ export async function getCustomerDashboardSummary(userId: string): Promise<Custo
     customer: { name: customerRow.name, customerNumber: customerRow.customer_number },
     availableWalletBalance: figures.availableBalance,
     pendingAmount: figures.pendingAmount,
+    pendingDeliveryAmount: figures.pendingDeliveryAmount,
+    pendingSettlementAmount: figures.pendingSettlementAmount,
+    underReviewOrderCount: figures.underReviewOrderCount,
     activeOrders,
     deliveredOrders,
   };

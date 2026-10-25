@@ -642,13 +642,46 @@ Additional methods can be added later through system settings.
 
 The system should allow the pre-paid amount and the delivery-time payment to use different payment methods if necessary.
 
+## 9.1 Direct (bypass) payment methods
+
+Each payment method has a configurable **Bypass Driver Cash** setting (`bypass_driver_cash`,
+default off).
+
+- **Off:** money collected at delivery with this method is held by the delivering driver and
+  enters the driver's cash balance (the normal behavior).
+- **On:** money collected at delivery with this method (for example a card terminal or bank
+  transfer) is received **directly by the company**. It never enters driver cash, creates no
+  settlement obligation, and is recorded as a direct company collection.
+
+Rules:
+
+- Only the **final** collection payment method at delivery decides the route (the driver may
+  correct the method while confirming delivery).
+- The routing decision is persisted with the delivery. Changing the setting later affects
+  future deliveries only and never rewrites history.
+- A direct collection is not revenue and not customer money by itself; ownership (customer
+  wallet / company revenue) follows the normal Order Type rules.
+- Direct payments always use **immediate financial release** (§55), including when the
+  collection differs from the expected amount: the difference is reviewed and, once resolved,
+  posted immediately.
+
 ---
 
 # 10. Financial Rules
 
+The ownership rules below define **who** the collected money belongs to. **When** the
+customer wallet credit and company revenue are posted is defined by the order's financial
+release mode (§55):
+
+- **Immediate release** — legacy orders, direct (bypass) payments and zero-cash deliveries:
+  posted at successful delivery.
+- **Settlement-based release** — deliveries collected into driver cash while settlement-based
+  release is active: posted only after the driver's collection is fully settled with the
+  company (and any collection difference is resolved).
+
 ## 10.1 Company Order
 
-When successfully delivered:
+When successfully delivered and financially released:
 
 **Company receives:**
 
@@ -659,7 +692,7 @@ No customer wallet credit is created.
 
 ## 10.2 Delivery Only
 
-When successfully delivered:
+When successfully delivered and financially released:
 
 **Customer wallet receives:**
 
@@ -686,6 +719,9 @@ After delivery:
 
 The $40 already paid directly to the sender must not be credited again.
 
+Under settlement-based release, the $65 enters driver cash at delivery, while the $60 wallet
+credit and the $5 delivery revenue are pending until the $65 collection is fully settled.
+
 ---
 
 # 11. Customer Wallet
@@ -694,7 +730,8 @@ Every customer has a wallet.
 
 The wallet represents money that the delivery company currently owes that customer.
 
-Wallet money mainly comes from successfully completed **Delivery Only** orders.
+Wallet money mainly comes from successfully completed and financially released **Delivery
+Only** orders (§55).
 
 Example:
 
@@ -747,18 +784,37 @@ The customer portal should distinguish between:
 
 ### Available Balance
 
-Money from successfully delivered orders that is currently owed to the customer.
+Money from successfully delivered and financially released orders that is currently owed to
+the customer. Only the available balance is withdrawable.
 
 ### Pending Amount
 
-Potential money associated with active Delivery Only orders that have not yet been successfully delivered.
+Pending money is not withdrawable. It has two parts:
+
+- **Pending Delivery** — potential money on active Delivery Only orders that have not yet been
+  successfully delivered (the remaining unpaid order amount).
+- **Pending Settlement** — the customer amount of Delivery Only orders that were delivered
+  under settlement-based release but whose driver collection has not yet been fully settled
+  with the company (§55).
+
+The customer's Pending Amount is Pending Delivery + Pending Settlement.
+
+### Under Review
+
+A delivered settlement-mode order whose actual collection differed from the expected amount
+has an unknown customer/company split until Finance resolves it. Its money is **excluded**
+from the customer's monetary Pending Amount and shown separately as **Under Review** (an
+order count for the customer; Management also sees the collected amount).
 
 Example:
 
 - Available wallet: $300
-- Pending deliveries: $150
+- Pending delivery: $150
+- Pending settlement: $100
+- Under review: 1 order
 
-The $150 must **not** become withdrawable until successful delivery and collection.
+The $250 pending must **not** become withdrawable until delivery, collection and (where
+applicable) settlement and review are complete.
 
 ---
 
@@ -1133,6 +1189,15 @@ The system should show:
 
 The driver does not necessarily need to see the accounting breakdown, but management/finance should.
 
+Management/finance additionally distinguish:
+
+- **Attributed cash** — the unsettled part of each settlement-mode collection, per order.
+- **Unattributed cash** — driver cash not reserved for an open settlement-mode collection
+  (legacy collections, authorized adjustments, settlement corrections).
+
+Unattributed cash can never be negative: an adjustment or correction that would consume cash
+reserved for settlement-mode collections is rejected.
+
 ---
 
 # 25. Driver Settlement
@@ -1167,32 +1232,53 @@ Remaining driver balance:
 
 The settlement must be saved permanently in the driver's settlement history.
 
+## 25.1 Collection allocation (settlement-based release)
+
+When the driver holds settlement-mode collections, Finance must state which collections the
+handed-over money covers:
+
+- Finance **explicitly selects** the collections (orders) and the amount allocated to each.
+  The system may offer an "oldest first" preselection in the form, but never allocates money
+  silently on Finance's behalf.
+- One collection may be **partially** allocated and completed across several settlements.
+- Money that is not for a settlement-mode collection is recorded as a separately identified
+  **unattributed** amount with a meaningful written explanation. It can never exceed the
+  driver's unattributed cash and never releases any wallet credit or revenue.
+- The amount received must equal the allocated total plus the unattributed amount.
+- When a collection becomes **fully** allocated (and any collection difference is resolved),
+  its customer wallet credit and company revenue are released (§55).
+- Legacy-format settlements (no allocations) remain possible only while settlement-based
+  release is inactive and the driver holds no settlement-mode collections.
+
 ---
 
 # 26. Important Difference Between Driver Settlement and Customer Wallet
 
 When a driver hands money to the company, this reduces the driver's cash balance.
 
-It does **not** remove money from a customer wallet.
+It **never** debits or removes money from a customer wallet. A settlement and a customer
+payout are different operations.
 
-Example:
+**Immediate release (legacy / direct payment / zero cash):**
 
-Driver collected:
+Driver collected $100 belonging to Customer A plus a $5 delivery fee. Customer A's wallet was
+already credited $100 at delivery. The driver gives the company $105:
 
-- $100 belonging to Customer A
-- $5 delivery fee
+- Driver cash: $105 → **$0**
+- Customer A wallet: remains **$100** until the company pays Customer A.
 
-Driver gives company $105.
+**Settlement-based release:**
 
-Driver cash becomes:
+At delivery the driver's cash increases by $105; Customer A sees $100 as Pending Settlement.
+The driver gives the company $105, allocated to that collection:
 
-**$0**
+- Driver cash: $105 → **$0**
+- The collection is fully settled, so the release credits Customer A's wallet **$100** and
+  records **$5** delivery revenue.
+- Customer A wallet: **$100** available until the company pays Customer A.
 
-Customer A wallet remains:
-
-**$100**
-
-until the company later pays Customer A.
+The settlement still never reduces a wallet; it only allows already-earned customer money to
+become available.
 
 ---
 
@@ -1524,6 +1610,11 @@ Collection activity is reported separately and must not be merged into delivery 
 - Customer wallet liabilities
 - Customer payouts
 - Driver unsettled cash
+- Customer money pending settlement
+- Company revenue pending settlement
+- Collections under review
+
+Revenue figures default to the **released** basis (when the posting was made); see §38.
 
 Dashboard cards should link to already-filtered pages where useful.
 
@@ -1587,6 +1678,17 @@ Parcel collection metrics are reported as separate dimensions where needed for V
 - Total cash collected
 - Payout history
 - Settlement history
+- Settlement allocations and the releases they triggered
+- Amounts pending settlement and under review
+
+Financial reports support two date bases:
+
+- **Released basis (default)** — by the date each financial posting was made (for
+  settlement-based release, the release/settlement date). Reversals count in the period they
+  occurred.
+- **Delivery-date basis** — by the order's delivery date: posted amounts plus amounts still
+  pending settlement, with reversals attributed to the original order. No amount may be
+  counted twice, and amounts under review are reported separately.
 
 Reports should allow filtering by date range.
 
@@ -1703,6 +1805,11 @@ This applies to:
 - Driver settlements
 - Company revenue transactions
 - Collection corrections
+- Settlement allocations and financial releases
+
+Settlement-based release corrections (§55.8) are explicit, reasoned, audited records linked to
+the original settlement or release and to every corrective transaction. Ordinary reversals that
+would invalidate allocations or already-released funds are blocked.
 
 ---
 
@@ -1795,7 +1902,8 @@ Flow:
 6. Driver confirms $105 collected.
 7. Order becomes Delivered.
 8. Driver cash balance increases by $105.
-9. Company financial records receive the applicable $105.
+9. Company financial records receive the applicable $105 — immediately (immediate release), or
+   when the $105 collection is fully settled (settlement-based release, §55).
 10. Order timeline records all actions.
 
 No customer wallet credit occurs.
@@ -1823,6 +1931,9 @@ Flow:
 6. Receiver pays $105.
 7. Driver marks Delivered.
 8. Driver cash balance increases by $105.
+
+**Immediate release** (legacy, direct payment, zero cash):
+
 9. Customer wallet increases by $100.
 10. Company delivery revenue increases by $5.
 11. Timeline records all operations.
@@ -1834,6 +1945,16 @@ Later:
 14. Customer wallet remains $100.
 15. Company pays customer.
 16. Customer payout reduces wallet by $100.
+
+**Settlement-based release** (§55):
+
+9. Customer sees $100 as Pending Settlement; $5 revenue awaits release.
+10. Timeline records all operations.
+11. Driver gives the company $105; Finance allocates it to this collection.
+12. Driver settlement reduces driver cash balance to $0.
+13. The collection is fully settled: customer wallet increases by $100 (available) and company
+    delivery revenue increases by $5.
+14. Company pays customer; customer payout reduces wallet by $100.
 
 ---
 
@@ -1974,13 +2095,17 @@ For Delivery Only orders, the collected order value belongs to the sender/custom
 Delivery fees belong to the delivery company.
 
 ### Rule 6
-Wallet money becomes available only after successful delivery and actual applicable collection.
+Wallet money becomes available only after successful delivery, actual applicable collection,
+and financial release (immediately, or after full settlement of the driver collection under
+settlement-based release).
 
 ### Rule 7
 A driver's cash balance represents money collected but not yet settled with the company.
 
 ### Rule 8
-Driver settlement does not reduce customer wallet balances.
+Driver settlement never debits customer wallet balances. Under settlement-based release, a
+settlement that fully settles a collection releases the already-earned customer credit and
+company revenue for that collection.
 
 ### Rule 9
 Customer payouts reduce wallet balances.
@@ -2027,6 +2152,30 @@ collection does not cancel the order.
 ### Rule 21
 Customer collection contact/address is snapshotted onto the order and is not rewritten by
 later customer-profile edits.
+
+### Rule 22
+Each delivered order's financial release mode (immediate or settlement-based) is decided at
+delivery, stored permanently, and never re-derived from dates or the current setting.
+
+### Rule 23
+Direct (bypass) payments and zero-cash deliveries always release immediately.
+
+### Rule 24
+Under settlement-based release, customer credit and company revenue are released only after
+the collection is fully allocated through settlements and any collection difference is
+resolved.
+
+### Rule 25
+Finance explicitly allocates settlements to collections; partial allocation across several
+settlements is allowed; unattributed money is separately identified and explained.
+
+### Rule 26
+Historical orders, settlements, wallet transactions, payouts and company financial records are
+never replayed, re-credited, rewritten or deleted.
+
+### Rule 27
+Only an Admin can activate or deactivate settlement-based release, and activation requires a
+passing safety gate. Deactivation affects future deliveries only.
 
 ---
 
@@ -2129,3 +2278,133 @@ or use the module.
   recorded dates (up to 366 days).
 - All figures are sums of the stored entry values; nothing is recalculated with current
   prices.
+
+---
+
+# 55. Settlement-Based Financial Release
+
+Technical contract: `docs/settlement-financial-release-contract.md`. Implementation rules:
+`CLAUDE.md` §74. Roadmap: `docs/implementation_plan.md` §63 (FR.1–FR.11).
+
+## 55.1 Purpose
+
+Money a driver collects at delivery is physically held by the driver until it is handed over.
+Under settlement-based release, the customer's wallet credit and the company's revenue for a
+driver-cash collection become final only once the company has actually received that
+collection through settlement.
+
+## 55.2 Financial release modes
+
+Every delivered order has one financial release mode, decided **at delivery** and stored
+permanently:
+
+| Mode | When | Behavior |
+|---|---|---|
+| Legacy (not set) | Delivered before activation, or while settlement-based release is inactive | Immediate posting at delivery (unchanged historical behavior). |
+| Immediate | Delivered while active, but the money did **not** enter driver cash: direct (bypass) payment method, or nothing collected | Immediate posting at delivery. |
+| On settlement | Delivered while active and the collection entered driver cash | Driver cash increases at delivery; wallet credit and company revenue are released only after full settlement (and resolution of any difference). |
+
+The mode is never re-derived from dates or from the current setting. Turning the setting off
+affects future deliveries only; orders already in settlement mode keep their mode and continue
+to be processed by settlement.
+
+## 55.3 Delivery
+
+For an on-settlement delivery:
+
+1. The order becomes **Delivered** (operational status).
+2. The actual amount collected increases the driver's cash balance (a collection record per
+   order).
+3. The customer amount (Delivery Only) is shown as **Pending Settlement**; company amounts are
+   **awaiting release**. No wallet credit or revenue is posted.
+4. If the collection differs from the expected amount, the order requires financial review
+   exactly as before; the split is not guessed.
+
+## 55.4 Settlement allocation and release
+
+- Finance records a settlement and explicitly allocates the received money to specific
+  collections (§25.1). Oldest-first may only preselect in the form.
+- A collection may be settled partially across several settlements.
+- When a collection is **fully** allocated and has no unresolved difference, the system
+  releases it in the same transaction:
+  - Delivery Only: customer wallet credit of the customer portion; company delivery-fee revenue.
+  - Company Order: company order revenue and delivery-fee revenue; no wallet credit.
+- Released postings keep the order's original collection payment method.
+- A settlement never debits a customer wallet.
+
+## 55.5 Collection differences
+
+- An on-settlement order with a collection difference needs **both** full settlement and an
+  approved difference resolution before release, in either order.
+- Resolution records Finance's explicit split; release happens when the second condition is met.
+- Direct (bypass) payment differences keep their existing behavior: resolved and posted
+  immediately.
+
+## 55.6 Order financial states
+
+Operational status remains **Delivered** throughout. The financial status of an on-settlement
+order is:
+
+| Financial status | Meaning |
+|---|---|
+| Review Required | Collection difference awaiting Finance resolution. |
+| Awaiting Settlement | Collection not yet fully settled (difference, if any, resolved). |
+| Finalized | Released: wallet credit / revenue posted. |
+| Collection Voided | The recorded driver collection was reversed before any settlement; nothing was ever posted. |
+| Release Reversed | Released postings were reversed by an explicit correction. Terminal; no automatic re-release. |
+
+## 55.7 Customer view
+
+- **Available** — released, withdrawable.
+- **Pending** — Pending Delivery + Pending Settlement (not withdrawable).
+- **Under Review** — orders awaiting difference resolution, shown separately and excluded from
+  the monetary pending total.
+
+## 55.8 Corrections and reversals
+
+Corrections are explicit, reasoned, permanent records linked to the original settlement or
+release, the actor, and every corrective financial transaction. Originals are never edited or
+deleted.
+
+- **Void collection** — allowed only before any settlement allocation; reverses the driver
+  collection; nothing is posted.
+- **Settlement reversal** — allowed only if none of its allocations led to released funds;
+  restores driver cash and the collections' unsettled amounts.
+- **Settlement shortfall** — when the driver genuinely handed over less than recorded: the
+  driver's obligation is restored as unattributed driver cash; released customer credits stand
+  (the receiver paid; the company still owes the customer).
+- **Release reversal** — for mis-attributed released funds: reverses the released wallet credit
+  and revenue. Blocked when the customer funds were already paid out; the wallet is never forced
+  negative.
+- Ordinary reversals that would invalidate allocations or released funds are blocked.
+- Driver cash adjustments must represent genuine driver obligations only and can never consume
+  cash reserved for settlement-mode collections.
+
+## 55.9 Activation
+
+- Only an **Admin** can activate or deactivate settlement-based release. Both actions are audited.
+- The setting starts **disabled** and stays disabled until production cutover is explicitly
+  authorized.
+- Activation passes a hard safety gate: explicit cutover authorization, schema readiness, zero
+  legacy driver cash for every driver, driver-cash and wallet ledger integrity, no unresolved
+  legacy collection differences, zero reconciliation violations, and deployed client support.
+  The gate never changes any balance or record.
+- Deactivation is always possible and affects future deliveries only.
+
+## 55.10 Historical protection
+
+- Historical orders, settlements, wallet transactions, payouts and company financial records
+  are preserved unchanged.
+- No historical financial event is replayed or credited twice; this is enforced by the
+  existing unique per-order posting keys.
+- Legacy orders (mode not set), including legacy collection differences resolved later, keep
+  immediate behavior.
+
+## 55.11 Reporting and reconciliation
+
+- Finance reporting defaults to the released basis, with delivery-date reporting available
+  separately (§38).
+- Management can see amounts pending settlement, under review, attributed and unattributed
+  driver cash, and settlement allocations.
+- A read-only reconciliation verifies that driver cash, allocations, releases, wallet credits
+  and company revenue agree.

@@ -2,12 +2,15 @@ import { Router } from "express";
 import { authenticate } from "../../middleware/authenticate";
 import { authorize } from "../../middleware/authorize";
 import { validate } from "../../middleware/validate";
+import { requireIdempotencyKey } from "../../middleware/idempotency-key";
 import {
   AdjustCompanyBodySchema,
   AdjustDriverCashBodySchema,
   CompanyTransactionIdParamSchema,
   DriverCashTransactionIdParamSchema,
   DriverIdParamSchema,
+  ReleaseCorrectionBodySchema,
+  ReleaseIdParamSchema,
   ReverseCompanyTransactionBodySchema,
   ReverseDriverCashTransactionBodySchema,
 } from "./finance-correction.schema";
@@ -16,16 +19,20 @@ import {
   adjustDriverCashController,
   reverseCompanyTransactionController,
   reverseDriverCashTransactionController,
+  reverseReleaseController,
+  voidReleaseCollectionController,
 } from "./finance-correction.controller";
-import { FinanceDateRangeQuerySchema, FinanceTransactionsQuerySchema } from "./finance-read.schema";
-import { getFinanceSummaryController, getFinanceTransactionsController } from "./finance-read.controller";
+import { FinanceSummaryQuerySchema, FinanceTransactionsQuerySchema } from "./finance-read.schema";
+import { getFinanceSummaryController, getFinanceTransactionsController, getFinancialReleaseReconciliationController } from "./finance-read.controller";
 import {
   DriverCashDriverIdParamSchema,
   DriverCashSummariesQuerySchema,
   DriverCashTransactionsQuerySchema,
+  OutstandingCollectionsQuerySchema,
 } from "./driver-cash-read.schema";
 import {
   getDriverCashDetailController,
+  getDriverOutstandingCollectionsController,
   getDriverCashSummariesController,
   getDriverCashTotalsController,
   getDriverCashTransactionsController,
@@ -39,11 +46,15 @@ export const financeRouter = Router();
 
 // Phase 9.2 — read-only, finance.read (not dashboard.read/reports.read/
 // wallets.read — finance.read is the specific permission for this module).
+// FR.8 — read-only R1–R13 reconciliation of settlement-based release
+// (contract §11). finance.read only — never Dispatcher / Driver / Customer.
+financeRouter.get("/reconciliation/financial-release", authenticate, authorize("finance.read"), getFinancialReleaseReconciliationController);
+
 financeRouter.get(
   "/summary",
   authenticate,
   authorize("finance.read"),
-  validate({ query: FinanceDateRangeQuerySchema }),
+  validate({ query: FinanceSummaryQuerySchema }),
   getFinanceSummaryController
 );
 
@@ -79,6 +90,15 @@ financeRouter.get(
   authorize("finance.read"),
   validate({ params: DriverCashDriverIdParamSchema }),
   getDriverCashDetailController
+);
+
+// FR.7 — outstanding settlement-mode collections + attributed / unattributed cash.
+financeRouter.get(
+  "/driver-cash/:driverId/outstanding-collections",
+  authenticate,
+  authorize("finance.read"),
+  validate({ params: DriverCashDriverIdParamSchema, query: OutstandingCollectionsQuerySchema }),
+  getDriverOutstandingCollectionsController
 );
 
 financeRouter.get(
@@ -119,4 +139,27 @@ financeRouter.post(
   authorize("finance.adjust"),
   validate({ params: CompanyTransactionIdParamSchema, body: ReverseCompanyTransactionBodySchema }),
   reverseCompanyTransactionController
+);
+
+// FR.6 — dedicated corrections for settlement-mode financial releases
+// (contract §8). The generic reverse endpoints above refuse release-linked
+// rows (USE_RELEASE_CORRECTION). Idempotency-Key is required like every
+// correction endpoint; the deterministic keys release-void:<id> /
+// release-reversal:<id> are what make a retry safe.
+financeRouter.post(
+  "/order-releases/:releaseId/void-collection",
+  authenticate,
+  authorize("finance.adjust"),
+  requireIdempotencyKey,
+  validate({ params: ReleaseIdParamSchema, body: ReleaseCorrectionBodySchema }),
+  voidReleaseCollectionController
+);
+
+financeRouter.post(
+  "/order-releases/:releaseId/reverse-release",
+  authenticate,
+  authorize("finance.adjust"),
+  requireIdempotencyKey,
+  validate({ params: ReleaseIdParamSchema, body: ReleaseCorrectionBodySchema }),
+  reverseReleaseController
 );

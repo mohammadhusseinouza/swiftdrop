@@ -625,6 +625,21 @@ Display:
 
 Delivered financial information must not be silently editable.
 
+### Financial Release panel (settlement-based release, `requirements.md` §55)
+
+Shown for delivered orders. Displays:
+
+- Release mode: Legacy / Immediate / On Settlement
+- Financial status badge (Review Required, Awaiting Settlement, Finalized, Collection Voided,
+  Release Reversed)
+- For On Settlement: collection amount, settled (allocated) amount, outstanding amount,
+  progress bar, review status, planned customer / company amounts, released date, and the
+  list of settlements that allocated to this collection (links)
+- Correction actions (permission `finance.adjust`, each with a mandatory reason and
+  confirmation): Void Collection (only when nothing is settled), Reverse Release (only when
+  released; explains when blocked because funds were paid out)
+- Correction history (type, reason, actor, date, corrective transactions)
+
 ---
 
 ## 6.5 Parcel Intake / Collection Information
@@ -831,7 +846,8 @@ Display all orders belonging to the customer.
 Display:
 
 - Available Balance
-- Pending Amount
+- Pending Amount (Pending Delivery + Pending Settlement breakdown)
+- Under Review (order count and collected amount — Management only)
 - Recent Transactions
 
 ## 8.4 Customer Payouts
@@ -946,9 +962,17 @@ Display:
 
 Parcel collection never appears here.
 
+The Cash tab also shows (settlement-based release):
+
+- Attributed cash — outstanding settlement-mode collections (order, delivered date, customer,
+  type, collection, settled, outstanding, review status), oldest first
+- Unattributed cash (legacy collections, adjustments, settlement corrections)
+
 ## 10.6 Settlements
 
-Display the driver's complete settlement history.
+Display the driver's complete settlement history, including for each settlement the
+allocated total, unattributed amount (with reason) and the orders it released. Settlement
+corrections (reversal / shortfall) are listed with reason, actor and date.
 
 ---
 
@@ -1002,10 +1026,16 @@ Available Balance
 $500
 
 Pending
-$120
+$120   (Pending Delivery $70 · Pending Settlement $50)
+
+Under Review
+1 order · $65 collected
 
 [Process Payout]
 ```
+
+Only the Available Balance can be paid out. Pending Settlement lists the delivered orders
+awaiting driver settlement (link to each order).
 
 ## Wallet Transactions Table
 
@@ -1126,7 +1156,15 @@ Balance After
 Received By
 Date
 Method
+Allocated
+Unattributed
+Orders Released
 ```
+
+Each row opens a settlement detail (allocations per order with amount and resulting
+settlement state, unattributed amount and reason, released orders, corrections). Settlement
+corrections (Reverse Settlement, Record Shortfall) live in the settlement detail, require
+`finance.adjust`, a mandatory reason and confirmation, and explain when they are blocked.
 
 ---
 
@@ -1159,7 +1197,47 @@ Important rule:
 
 A driver settlement reduces the driver's cash balance.
 
-It does not reduce customer wallet balances.
+It never debits customer wallet balances.
+
+## 16.1 Settlement allocation (settlement-based release, `requirements.md` §25.1 / §55)
+
+When the selected driver holds settlement-mode collections, the form becomes:
+
+```text
+Driver                      [Ali Hassan ▼]
+Current Cash Held           $1,245
+  Attributed (collections)  $1,200
+  Unattributed              $45
+
+Outstanding collections            [Preselect oldest first up to: $____ ] [Clear]
+☐ ORD-…  12 Oct  ABC Store  Delivery Only  $105.00 outstanding  [105.00]  Will release
+☐ ORD-…  12 Oct  XYZ Shop   Company Order  $45.00 of $90.00     [45.00]   Partial
+☐ ORD-…  13 Oct  ABC Store  Delivery Only  $65.00  Under review [65.00]   Settles; awaits review
+
+Unattributed amount   [0.00]     Reason (required if > 0) [______________]
+
+Amount Received (calculated)     $150.00
+Payment Method  [Cash ▼]      Notes
+
+Summary: 2 orders released · customer credits $100.00 · company revenue $50.00
+[Cancel] [Record Settlement]
+```
+
+Rules:
+
+- Finance explicitly selects collections and amounts. "Preselect oldest first" only fills the
+  form; nothing is allocated until Finance submits.
+- Per-row amount defaults to the outstanding amount and may be lower (partial allocation).
+- Row badges: **Will release** (full outstanding, review not pending), **Partial**,
+  **Settles; awaits review**.
+- Amount Received = selected allocations + unattributed amount (read-only, exact cents).
+- Unattributed amount cannot exceed the unattributed balance; a meaningful reason is required.
+- The confirmation step shows the release preview. The backend re-validates everything; the
+  preview is not authoritative.
+- One idempotency key per dialog session. On success invalidate settlements, driver cash,
+  wallets, orders, finance, dashboard and reports.
+- If the driver holds no settlement-mode collections, the form shows only the unattributed
+  amount with its reason.
 
 ---
 
@@ -1184,14 +1262,20 @@ It should not duplicate wallet, payout, or settlement entry screens.
 - Company Order Revenue
 - Customer Wallet Liability
 - Total Customer Payouts
-- Driver Cash Outstanding
+- Driver Cash Outstanding (attributed / unattributed)
 - Total Cash Collected
+- Customer Money Pending Settlement
+- Company Revenue Pending Settlement
+- Collections Under Review
 
 ## Date Filter
 
 ```text
 Today | This Week | This Month | Custom
+Basis: Released (default) | Delivery date
 ```
+
+Revenue cards are labelled by basis ("Released revenue" by default).
 
 ## Recent Financial Activity
 
@@ -1318,6 +1402,10 @@ Financial
 - Total Cash Collected
 - Payout History
 - Settlement History
+- Settlement Allocations / Releases
+- Pending Settlement and Under Review
+
+Financial reports offer a basis switch: **Released** (default) or **Delivery date**.
 
 All reports should support date filtering.
 
@@ -1393,6 +1481,7 @@ Failed Delivery Reasons
 Failed Collection Reasons
 Areas
 Users & Permissions
+Financial Release        (Admin only)
 ```
 
 **Failed Collection Reasons** is a distinct tab from **Failed Delivery Reasons**; the two
@@ -1445,6 +1534,14 @@ Manage supported delivery areas.
 ## Users & Permissions
 
 Manage role-based access and permissions.
+
+## Financial Release (Admin only)
+
+Visible only to ADMIN (role-scoped; the backend is authoritative). Shows the current state of
+settlement-based release (Disabled / Active, last changed by / at), the readiness report (each
+safety-gate check with pass/fail and details), and Activate / Deactivate actions with explicit
+confirmation. Activation is impossible while any gate fails; the page never changes balances.
+Deactivation explains that it affects future deliveries only.
 
 ---
 
@@ -1804,6 +1901,9 @@ Available Wallet   Pending       Active Orders   Delivered
      $350            $150              4             28
 ```
 
+The Pending card may show its breakdown (Pending Delivery / Pending Settlement). Orders under
+financial review are shown as a count ("1 order under review"), never as money.
+
 Optional secondary information:
 
 - Failed / Rescheduled Orders
@@ -1913,8 +2013,12 @@ $150
 
 Also display a short explanation:
 
-- Available Balance = withdrawable money from completed Delivery Only orders
-- Pending Amount = potential money from active Delivery Only orders
+- Available Balance = withdrawable money from completed and released Delivery Only orders
+- Pending Amount = Pending Delivery (active Delivery Only orders) + Pending Settlement
+  (delivered orders whose collected money has not yet been settled with the company)
+- Under Review = delivered orders whose collected amount is being reviewed (count only)
+
+Delivered-but-unreleased orders are labelled **Pending Settlement**.
 
 ---
 
@@ -2142,6 +2246,20 @@ Handled inside:
 - Driver Cash Page
 - Driver Settlements
 
+## Settlement-Based Financial Release
+
+Handled inside:
+
+- New Driver Settlement (allocation)
+- Settlement detail (allocations, releases, settlement corrections)
+- Order Detail (Financial Release panel, collection void / release reversal)
+- Driver Detail Cash tab (attributed / unattributed cash)
+- Wallet Detail and Customer Wallet / Dashboard (Pending Settlement, Under Review)
+- Finance and Reports (basis switch, pending-settlement cards)
+- Settings → Financial Release (Admin only)
+
+No dedicated top-level page.
+
 ## Wallet Transactions
 
 Handled inside:
@@ -2270,6 +2388,22 @@ Delivered
 The frontend should map internal order statuses and the parcel collection status to the
 simplified customer/public stages. Keep the parcel collection status visually separate from
 the order status badge.
+
+Order financial statuses (Management only, separate from the order status badge; the order
+stays **Delivered**):
+
+```text
+Pending
+Review Required
+Awaiting Settlement
+Finalized
+Collection Voided
+Release Reversed
+Not Applicable
+```
+
+Customers never see internal financial statuses; they see Available / Pending Settlement /
+Under Review wording only. Public tracking never shows financial information.
 
 ---
 

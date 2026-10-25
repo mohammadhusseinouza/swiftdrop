@@ -27,6 +27,7 @@ import {
   reassignOrderController,
   readyOrderController,
   resolveCollectionDifferenceController,
+  getOrderFinancialReleaseController,
   rescheduleOrderController,
   unassignOrderController,
   updateOrderController,
@@ -144,6 +145,17 @@ orderRouter.get(
 // Phase 8.7 — a cross-ledger Finance adjustment/review action (can create
 // Customer Wallet liability and/or Company revenue), deliberately gated by
 // finance.adjust rather than any orders.* permission.
+// FR.7 — settlement-based financial release detail (allocations,
+// settlements, corrections). finance.read, not orders.read: Dispatcher can
+// read orders but not settlement / correction finance.
+orderRouter.get(
+  "/:id/financial-release",
+  authenticate,
+  authorize("finance.read"),
+  validate({ params: OrderIdParamSchema }),
+  getOrderFinancialReleaseController
+);
+
 orderRouter.post(
   "/:id/resolve-collection-difference",
   authenticate,

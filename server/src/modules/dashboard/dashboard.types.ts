@@ -1,3 +1,4 @@
+import type { SettlementReleaseSnapshot } from "../financial-release/financial-release-reporting.service";
 // ============================================================
 // Management Dashboard DTOs (Phase 9.1)
 //
@@ -69,6 +70,13 @@ export interface DashboardFinanceMetrics {
   customerWalletLiability: string;
   customerPayouts: string;
   driverCashOutstanding: string;
+  // FR.8 — the revenue / credit figures above are ledger-posted amounts
+  // (RELEASED basis): a settlement-mode order counts when released.
+  revenueBasis: "RELEASED";
+  // FR.8 — current settlement-based release position (not revenue): money
+  // delivered but awaiting settlement, under review, and how much of the
+  // driver cash held is reserved for those collections.
+  settlementRelease: SettlementReleaseSnapshot & { releasesCompletedToday: number };
 }
 
 export type DashboardAttentionItemType =

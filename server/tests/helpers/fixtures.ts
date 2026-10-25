@@ -140,6 +140,9 @@ export async function cleanupTestCustomerRecord(customerId: string): Promise<voi
   // Wrapped in one transaction so a CONCURRENT test file's `GET /wallets`
   // (which throws 500 if a customer on the page has no wallet row) can never
   // observe the intermediate "customer exists, wallet already deleted" state.
+  // FR.3 — a released settlement-mode release references this customer's
+  // wallet rows (RESTRICT), so it goes first.
+  await cleanupFinancialReleaseRows({ customerId });
   await prisma.$transaction([
     prisma.wallet_transactions.deleteMany({ where: { customer_id: customerId } }),
     // Phase 8.5 is the first suite to create real customer_payouts rows.
@@ -176,6 +179,53 @@ export async function seedDriverRecord(userId: string, overrides: SeededDriverOv
   return driver.id;
 }
 
+// Settlement-Based Financial Release (FR.3) — release / allocation /
+// correction rows reference orders, drivers, settlements and ledger rows
+// (all ON DELETE RESTRICT), so they must be cleared before any of those.
+// Scoped strictly to one order or one driver.
+export async function cleanupFinancialReleaseRows(scope: { orderId?: string; driverId?: string; customerId?: string }): Promise<void> {
+  const releaseWhere = scope.orderId
+    ? { order_id: scope.orderId }
+    : scope.driverId
+      ? { driver_id: scope.driverId }
+      : { customer_id: scope.customerId };
+  const releaseIds = (await prisma.order_financial_releases.findMany({ where: releaseWhere, select: { id: true } })).map((r) => r.id);
+  if (scope.driverId) {
+    await prisma.driver_settlement_allocations.deleteMany({ where: { driver_id: scope.driverId } });
+    await prisma.driver_settlement_corrections.deleteMany({ where: { driver_id: scope.driverId } });
+  }
+  if (releaseIds.length > 0) {
+    await prisma.driver_settlement_allocations.deleteMany({ where: { release_id: { in: releaseIds } } });
+    await prisma.order_financial_release_corrections.deleteMany({ where: { release_id: { in: releaseIds } } });
+    await prisma.order_financial_releases.deleteMany({ where: { id: { in: releaseIds } } });
+  }
+}
+
+// FR.12A.3 — historical reconciliations reference driver cash rows, audit
+// logs, settlements and users (all ON DELETE RESTRICT), and supersession /
+// revocation link their own rows into chains, so rows are removed leaf first.
+// Scoped strictly to one driver or to the given incidents. Test-only: the
+// application never deletes these rows.
+export async function cleanupHistoricalReconciliationRows(scope: { driverId?: string; incidentIds?: string[] }): Promise<void> {
+  const where = scope.driverId ? { driver_id: scope.driverId } : { incident_id: { in: scope.incidentIds ?? [] } };
+  for (;;) {
+    const ids = (await prisma.driver_cash_historical_reconciliations.findMany({ where, select: { id: true } })).map((r) => r.id);
+    if (ids.length === 0) break;
+    const decisions = await prisma.driver_cash_historical_reconciliation_decisions.deleteMany({
+      where: { reconciliation_id: { in: ids }, revoked_by: { none: {} }, superseding_reconciliations: { none: {} } },
+    });
+    const reconciliations = await prisma.driver_cash_historical_reconciliations.deleteMany({
+      where: { id: { in: ids }, decisions: { none: {} }, superseded_by: { none: {} } },
+    });
+    if (decisions.count + reconciliations.count === 0) {
+      throw new Error("historical reconciliation cleanup made no progress");
+    }
+  }
+  if (scope.incidentIds?.length) {
+    await prisma.financial_ledger_incidents.deleteMany({ where: { id: { in: scope.incidentIds } } });
+  }
+}
+
 // Removes a driver row and its dependent cash account/settlement rows only
 // (all ON DELETE RESTRICT) — never touches unrelated drivers/cash
 // accounts/settlements.
@@ -184,6 +234,8 @@ export async function cleanupTestDriverRecord(driverId: string): Promise<void> {
   // driver_cash_transactions.settlement_id -> driver_settlements.id, so
   // driver_cash_transactions must be cleared before driver_settlements;
   // both must be cleared before driver_cash_accounts/drivers themselves.
+  await cleanupFinancialReleaseRows({ driverId });
+  await cleanupHistoricalReconciliationRows({ driverId });
   await prisma.driver_cash_transactions.deleteMany({ where: { driver_id: driverId } });
   await prisma.company_direct_collections.deleteMany({ where: { driver_id: driverId } });
   // Phase 8.6 is the first suite to create real driver_settlements rows.
@@ -202,6 +254,8 @@ export async function cleanupTestUser(userId: string): Promise<void> {
   await prisma.customers.deleteMany({ where: { portal_user_id: userId } });
   const driver = await prisma.drivers.findUnique({ where: { user_id: userId } });
   if (driver) {
+    await cleanupFinancialReleaseRows({ driverId: driver.id });
+    await cleanupHistoricalReconciliationRows({ driverId: driver.id });
     await prisma.driver_cash_transactions.deleteMany({ where: { driver_id: driver.id } });
     await prisma.company_direct_collections.deleteMany({ where: { driver_id: driver.id } });
     await prisma.driver_settlements.deleteMany({ where: { driver_id: driver.id } });
@@ -305,6 +359,9 @@ export async function cleanupTestOrder(orderId: string): Promise<void> {
   // first test suite to seed one directly, for the RESCHEDULED-retry
   // fixture — no production code creates these rows yet).
   await prisma.delivery_attempts.deleteMany({ where: { order_id: orderId } });
+  // FR.3 — a settlement-mode release references this order and its ledger
+  // rows (RESTRICT), so it goes before them.
+  await cleanupFinancialReleaseRows({ orderId });
   // driver_cash_transactions.order_id is ON DELETE RESTRICT too (Phase 8.1
   // is the first suite to create real ledger rows linked to a test order).
   await prisma.driver_cash_transactions.deleteMany({ where: { order_id: orderId } });
@@ -324,6 +381,22 @@ export async function cleanupTestOrder(orderId: string): Promise<void> {
   // DELIVERY_ONLY_FINANCE_FINALIZED rows accumulate as orphans forever.
   await prisma.audit_logs.deleteMany({ where: { entity_type: "ORDER", entity_id: orderId } });
   await prisma.orders.deleteMany({ where: { id: orderId } });
+}
+
+// Order-less company rows (manual company adjustments, their reversals, and
+// rows a test inserts directly) are never reached by cleanupTestOrder, and
+// cleanupTestUser only NULLs their created_by_id (ON DELETE SET NULL) — so
+// without this they accumulate in company totals on every run. Must run
+// BEFORE the creating users are cleaned up. Only order-less rows created by
+// the given test users, or explicitly listed ids, are touched. Reversals go
+// first: reversal_of_id is ON DELETE RESTRICT.
+export async function cleanupTestCompanyTransactions(opts: { createdByIds?: string[]; ids?: string[] }): Promise<void> {
+  const where: Prisma.company_financial_transactionsWhereInput = {
+    order_id: null,
+    OR: [{ created_by_id: { in: opts.createdByIds ?? [] } }, { id: { in: opts.ids ?? [] } }],
+  };
+  await prisma.company_financial_transactions.deleteMany({ where: { ...where, reversal_of_id: { not: null } } });
+  await prisma.company_financial_transactions.deleteMany({ where });
 }
 
 export interface SeededOrderOverrides {
@@ -453,4 +526,21 @@ export async function seedTestOrder(
     },
   });
   return order.id;
+}
+
+// FR.11A — new settlement shortfalls are refused unless the server carries
+// SETTLEMENT_SHORTFALL_POLICY_APPROVED=true (fail-closed until the policy is
+// approved). Tests that need a shortfall as a fixture approve it in-process
+// for exactly that call; the counter keeps concurrent calls approved until
+// the last one finishes.
+let shortfallApprovals = 0;
+export async function withShortfallPolicyApproved<T>(fn: () => Promise<T>): Promise<T> {
+  shortfallApprovals++;
+  process.env.SETTLEMENT_SHORTFALL_POLICY_APPROVED = "true";
+  try {
+    return await fn();
+  } finally {
+    shortfallApprovals--;
+    if (shortfallApprovals === 0) delete process.env.SETTLEMENT_SHORTFALL_POLICY_APPROVED;
+  }
 }

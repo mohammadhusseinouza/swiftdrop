@@ -925,6 +925,145 @@ describe("Orders unassign driver (POST /orders/:id/unassign)", () => {
       });
       assert.equal(unassignRows, 1);
     });
+
+    // Deterministic interleavings. The losing request reads the order, then
+    // the competing request runs to completion BEFORE the loser's
+    // current-assignment pre-read — exactly the window behind the intermittent
+    // 500 above. Patches the base-client delegate the pre-read uses; the
+    // competing request's own pre-read passes straight through (one-shot).
+    async function runWithInterleavedCommit<T>(
+      orderId: string,
+      competing: () => Promise<request.Response>,
+      loser: () => Promise<T>
+    ): Promise<{ loserResult: T; competingRes: request.Response }> {
+      const originalFindMany = prisma.order_assignments.findMany.bind(prisma.order_assignments);
+      let competingRes: request.Response | null = null;
+      let fired = false;
+      (prisma.order_assignments as { findMany: typeof prisma.order_assignments.findMany }).findMany = (async (
+        args: Parameters<typeof originalFindMany>[0]
+      ) => {
+        const where = (args as { where?: { order_id?: string; is_current?: boolean } } | undefined)?.where;
+        if (!fired && where?.order_id === orderId && where?.is_current === true) {
+          fired = true;
+          competingRes = await competing();
+        }
+        return originalFindMany(args);
+      }) as typeof prisma.order_assignments.findMany;
+      try {
+        const loserResult = await loser();
+        assert.ok(fired && competingRes, "expected the competing request to run inside the loser's read window");
+        return { loserResult, competingRes: competingRes as request.Response };
+      } finally {
+        (prisma.order_assignments as { findMany: typeof prisma.order_assignments.findMany }).findMany = originalFindMany;
+      }
+    }
+
+    test("reassign commits between unassign's reads -> unassign 409 (not 500), driver B kept", async () => {
+      const driverA = await createDriverWithToken();
+      const driverB = await createDriverWithToken();
+      const orderId = await readyAssignedOrder(driverA.driverId);
+
+      const { loserResult: unassignRes, competingRes: reassignRes } = await runWithInterleavedCommit(
+        orderId,
+        () =>
+          request(app)
+            .post(`/api/v1/orders/${orderId}/reassign`)
+            .set(auth(tokens.admin))
+            .send({ driverId: driverB.driverId, reason: "interleaved" }),
+        () => request(app).post(unassignPath(orderId)).set(auth(tokens.dispatcher)).send({ driverId: driverA.driverId })
+      );
+
+      assert.equal(reassignRes.status, 200, JSON.stringify(reassignRes.body));
+      assert.equal(unassignRes.status, 409, JSON.stringify(unassignRes.body));
+      assert.equal(unassignRes.body.error.code, "CONFLICT");
+
+      const { order, assignments } = await orderSnapshot(orderId);
+      assert.equal(order.status, "ASSIGNED");
+      assert.equal(order.current_driver_id, driverB.driverId);
+      assert.deepEqual(
+        assignments.map((a) => [a.driver_id, a.is_current]),
+        [
+          [driverA.driverId, false],
+          [driverB.driverId, true],
+        ]
+      );
+    });
+
+    test("unassign commits between reassign's reads -> reassign 409 (not 500), order unassigned", async () => {
+      const driverA = await createDriverWithToken();
+      const driverB = await createDriverWithToken();
+      const orderId = await readyAssignedOrder(driverA.driverId);
+
+      const { loserResult: reassignRes, competingRes: unassignRes } = await runWithInterleavedCommit(
+        orderId,
+        () => request(app).post(unassignPath(orderId)).set(auth(tokens.dispatcher)).send({ driverId: driverA.driverId }),
+        () =>
+          request(app)
+            .post(`/api/v1/orders/${orderId}/reassign`)
+            .set(auth(tokens.admin))
+            .send({ driverId: driverB.driverId, reason: "interleaved" })
+      );
+
+      assert.equal(unassignRes.status, 200, JSON.stringify(unassignRes.body));
+      assert.equal(reassignRes.status, 409, JSON.stringify(reassignRes.body));
+      assert.equal(reassignRes.body.error.code, "CONFLICT");
+
+      const { order, assignments } = await orderSnapshot(orderId);
+      assert.equal(order.status, "READY_FOR_PICKUP");
+      assert.equal(order.current_driver_id, null);
+      assert.equal(assignments.length, 1);
+      assert.equal(assignments[0].driver_id, driverA.driverId);
+      assert.equal(assignments[0].is_current, false);
+    });
+
+    test("reassign commits between pickup's reads -> pickup 409 (not 500), driver B kept", async () => {
+      const driverA = await createDriverWithToken();
+      const driverB = await createDriverWithToken();
+      const orderId = await readyAssignedOrder(driverA.driverId);
+
+      const { loserResult: pickupRes, competingRes: reassignRes } = await runWithInterleavedCommit(
+        orderId,
+        () =>
+          request(app)
+            .post(`/api/v1/orders/${orderId}/reassign`)
+            .set(auth(tokens.admin))
+            .send({ driverId: driverB.driverId, reason: "interleaved" }),
+        () => request(app).post(`/api/v1/driver/orders/${orderId}/pickup`).set(auth(driverA.token)).send()
+      );
+
+      assert.equal(reassignRes.status, 200, JSON.stringify(reassignRes.body));
+      assert.equal(pickupRes.status, 409, JSON.stringify(pickupRes.body));
+
+      const { order } = await orderSnapshot(orderId);
+      assert.equal(order.status, "ASSIGNED");
+      assert.equal(order.current_driver_id, driverB.driverId);
+      assert.equal(order.picked_up_at, null);
+    });
+
+    test("genuine inconsistency with no concurrent change still fails closed with 500", async () => {
+      // ASSIGNED to A with no order_assignments row at all.
+      const driverA = await createDriverWithToken();
+      const missingRow = await seedOrderWithStatus("ASSIGNED", driverA.driverId);
+      const resMissing = await request(app).post(unassignPath(missingRow)).set(auth(tokens.admin)).send({ driverId: driverA.driverId });
+      assert.equal(resMissing.status, 500, JSON.stringify(resMissing.body));
+      assert.equal(resMissing.body.error.code, "INTERNAL_ERROR");
+
+      // ASSIGNED to A while the only current assignment row belongs to B.
+      const driverB = await createDriverWithToken();
+      const mismatched = await seedOrderWithStatus("ASSIGNED", driverA.driverId);
+      await prisma.order_assignments.create({
+        data: { order_id: mismatched, driver_id: driverB.driverId, assigned_by_id: admin.id, is_current: true },
+      });
+      const resMismatch = await request(app).post(unassignPath(mismatched)).set(auth(tokens.admin)).send({ driverId: driverA.driverId });
+      assert.equal(resMismatch.status, 500, JSON.stringify(resMismatch.body));
+      assert.equal(resMismatch.body.error.code, "INTERNAL_ERROR");
+
+      for (const id of [missingRow, mismatched]) {
+        const { order } = await orderSnapshot(id);
+        assert.equal(order.status, "ASSIGNED", "must not be silently repaired or transitioned");
+        assert.equal(order.current_driver_id, driverA.driverId);
+      }
+    });
   });
 
   // ===========================================================

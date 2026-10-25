@@ -117,7 +117,28 @@ export function DriversReport() {
       id: 'cash',
       header: 'Cash held now',
       align: 'right',
-      cell: (r) => <span className="tabular-nums">{formatMoney(r.currentCashHeld)}</span>,
+      // FR.10 — current split: reserved for outstanding settlement-mode
+      // collections vs unattributed (both are driver custody, not revenue).
+      cell: (r) => (
+        <span className="flex flex-col items-end gap-0.5">
+          <span className="tabular-nums">{formatMoney(r.currentCashHeld)}</span>
+          {/* Only when part of the cash is reserved for collections —
+              otherwise all of it is unattributed and the split adds noise. */}
+          {r.outstandingCollectionCount > 0 && (
+            <>
+              <span className="text-[11px] tabular-nums text-ink-subtle">
+                {formatMoney(r.attributedCashHeld)} attributed
+              </span>
+              <span className="text-[11px] tabular-nums text-ink-subtle">
+                {formatMoney(r.unattributedCashHeld)} unattributed
+              </span>
+              <span className="text-[11px] text-ink-subtle">
+                {num(r.outstandingCollectionCount)} outstanding
+              </span>
+            </>
+          )}
+        </span>
+      ),
     },
     {
       id: 'collectionAssignments',

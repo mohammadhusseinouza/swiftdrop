@@ -30,7 +30,17 @@ import {
 // financial/side-effect writes.
 // ============================================================
 
-const SAFE_KEYS = ["customer", "availableWalletBalance", "pendingAmount", "activeOrders", "deliveredOrders"].sort();
+// FR.7 adds the Customer-safe pending breakdown (contract §9).
+const SAFE_KEYS = [
+  "customer",
+  "availableWalletBalance",
+  "pendingAmount",
+  "pendingDeliveryAmount",
+  "pendingSettlementAmount",
+  "underReviewOrderCount",
+  "activeOrders",
+  "deliveredOrders",
+].sort();
 
 const FORBIDDEN_SUBSTRINGS = [
   "needsFinancialReview",

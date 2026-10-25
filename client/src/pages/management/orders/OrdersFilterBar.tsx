@@ -21,6 +21,10 @@ import {
   getParcelIntakeMethodLabel,
 } from '../../../components/orders/parcelCollection';
 import { ServerSearchSelect } from '../../../components/forms/ServerSearchSelect';
+import {
+  FINANCIAL_STATUSES,
+  getFinancialStatusPresentation,
+} from '../../../components/finance/financialRelease';
 import type { OrdersListState } from './ordersListParams';
 
 interface OrdersFilterBarProps {
@@ -112,6 +116,7 @@ export function OrdersFilterBar({
   // Secondary filters that live behind "More filters".
   const advancedActive = Boolean(
     state.paymentType ||
+      state.financialStatus ||
       state.paymentMethodId ||
       state.deliveryStatus ||
       state.assignmentStatus ||
@@ -268,6 +273,21 @@ export function OrdersFilterBar({
               {PAYMENT_TYPES.map((t) => (
                 <option key={t} value={t}>
                   {getPaymentTypePresentation(t).label}
+                </option>
+              ))}
+            </select>
+          </Labeled>
+
+          <Labeled label="Financial status">
+            <select
+              className={fieldCls(state.financialStatus !== '')}
+              value={state.financialStatus}
+              onChange={(e) => onPatch({ financialStatus: e.target.value })}
+            >
+              <option value="">Any financial status</option>
+              {FINANCIAL_STATUSES.map((f) => (
+                <option key={f} value={f}>
+                  {getFinancialStatusPresentation(f).label}
                 </option>
               ))}
             </select>

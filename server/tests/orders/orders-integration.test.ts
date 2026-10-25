@@ -999,15 +999,138 @@ describe("Order Engine integration (Phase 6.7)", () => {
       await assertAssignmentConsistency([order.id]);
     });
 
-    test("ready vs assign: exactly one winner, invariants hold", async () => {
+    // /assign accepts RECEIVED and READY_FOR_PICKUP, and each endpoint is a
+    // pre-read followed by a conditional claim on the status it read. "Exactly
+    // one winner" is therefore NOT an invariant: if /ready commits before
+    // /assign reads, /assign legitimately proceeds READY_FOR_PICKUP -> ASSIGNED
+    // and both return 200 (same rule as orders-workflow test 57). Every
+    // outcome must instead be one of the four serializations below, with the
+    // exact history it implies, one assignment row at most, no audit rows and
+    // no finance / delivery side effects.
+    async function assertReadyAssignOutcome(
+      orderId: string,
+      driverId: string,
+      readyStatus: number,
+      assignStatus: number,
+      auditBefore: number,
+    ) {
+      const ctx = JSON.stringify({ readyStatus, assignStatus });
+      assert.ok([200, 400, 409].includes(readyStatus), `ready must never 5xx ${ctx}`);
+      assert.ok([200, 409].includes(assignStatus), `assign must never 5xx or 400 ${ctx}`);
+      const order = await prisma.orders.findUniqueOrThrow({ where: { id: orderId } });
+      const assignments = await prisma.order_assignments.findMany({ where: { order_id: orderId } });
+      const history = (await prisma.order_status_history.findMany({ where: { order_id: orderId } }))
+        .map((h) => `${h.from_status ?? ""}>${h.to_status}`)
+        .sort();
+
+      if (assignStatus === 200) {
+        assert.equal(order.status, "ASSIGNED", ctx);
+        assert.equal(order.current_driver_id, driverId, ctx);
+        assert.equal(assignments.length, 1, `exactly one assignment row ${ctx}`);
+        assert.deepEqual([assignments[0].driver_id, assignments[0].is_current], [driverId, true], ctx);
+        const expected =
+          readyStatus === 200
+            ? // ready committed first, then assign from READY_FOR_PICKUP
+              [">RECEIVED", "READY_FOR_PICKUP>ASSIGNED", "RECEIVED>READY_FOR_PICKUP"]
+            : // assign won from RECEIVED; ready lost (400 after, 409 during)
+              [">RECEIVED", "RECEIVED>ASSIGNED"];
+        assert.deepEqual(history, expected, ctx);
+      } else {
+        assert.equal(readyStatus, 200, `if assign loses, ready must be the transition that landed ${ctx}`);
+        assert.equal(order.status, "READY_FOR_PICKUP", ctx);
+        assert.equal(order.current_driver_id, null, ctx);
+        assert.equal(assignments.length, 0, `a losing assign leaves no assignment row ${ctx}`);
+        assert.deepEqual(history, [">RECEIVED", "RECEIVED>READY_FOR_PICKUP"], ctx);
+      }
+      const auditAfter = await prisma.audit_logs.count({ where: { entity_type: "ORDER", entity_id: orderId } });
+      assert.equal(auditAfter, auditBefore, `ready / assign write no audit rows ${ctx}`);
+      await assertAssignmentConsistency([orderId]);
+      await assertNoFinanceOrDeliverySideEffects([orderId]);
+    }
+
+    const readyReq = (id: string) => request(app).post(readyPath(id)).set(auth(tokens.admin)).send();
+    const assignReq = (id: string, driverId: string) =>
+      request(app).post(assignPath(id)).set(auth(tokens.admin)).send({ driverId });
+    const auditCount = (id: string) => prisma.audit_logs.count({ where: { entity_type: "ORDER", entity_id: id } });
+
+    // Runs `loser` but lets `competitor` run to completion right after the
+    // loser's pre-read — i.e. when the loser opens its claim transaction.
+    // One-shot: the competitor's own transaction passes straight through.
+    async function withCompetitorBeforeClaim(
+      competitor: () => Promise<request.Response>,
+      loser: () => Promise<request.Response>,
+    ) {
+      const originalTransaction = prisma.$transaction.bind(prisma);
+      let competitorRes: request.Response | null = null;
+      let fired = false;
+      (prisma as { $transaction: typeof prisma.$transaction }).$transaction = (async (...args: Parameters<typeof originalTransaction>) => {
+        if (!fired) {
+          fired = true;
+          competitorRes = await competitor();
+        }
+        return (originalTransaction as (...a: typeof args) => Promise<unknown>)(...args);
+      }) as typeof prisma.$transaction;
+      try {
+        const loserRes = await loser();
+        assert.ok(fired && competitorRes, "competitor must run inside the loser's read-to-claim window");
+        return { loserRes, competitorRes: competitorRes as request.Response };
+      } finally {
+        (prisma as { $transaction: typeof prisma.$transaction }).$transaction = originalTransaction;
+      }
+    }
+
+    test("ready vs assign race: every outcome is a valid serialization, invariants hold", async () => {
+      for (let i = 0; i < 4; i++) {
+        const eligible = await createEligibleDriver();
+        const order = await createBaseOrder();
+        const auditBefore = await auditCount(order.id);
+        const [ready, assign] = await Promise.all([readyReq(order.id), assignReq(order.id, eligible.driverId)]);
+        await assertReadyAssignOutcome(order.id, eligible.driverId, ready.status, assign.status, auditBefore);
+      }
+    });
+
+    test("ready then assign (serial): both succeed, READY_FOR_PICKUP -> ASSIGNED", async () => {
       const eligible = await createEligibleDriver();
       const order = await createBaseOrder();
-      const [ready, assign] = await Promise.all([
-        request(app).post(readyPath(order.id)).set(auth(tokens.admin)).send(),
-        request(app).post(assignPath(order.id)).set(auth(tokens.admin)).send({ driverId: eligible.driverId }),
-      ]);
-      assert.deepEqual([ready.status, assign.status].sort(), [200, 409]);
-      await assertAssignmentConsistency([order.id]);
+      const auditBefore = await auditCount(order.id);
+      const ready = await readyReq(order.id);
+      const assign = await assignReq(order.id, eligible.driverId);
+      assert.deepEqual([ready.status, assign.status], [200, 200]);
+      await assertReadyAssignOutcome(order.id, eligible.driverId, ready.status, assign.status, auditBefore);
+    });
+
+    test("assign then ready (serial): ready is rejected 400, order stays ASSIGNED", async () => {
+      const eligible = await createEligibleDriver();
+      const order = await createBaseOrder();
+      const auditBefore = await auditCount(order.id);
+      const assign = await assignReq(order.id, eligible.driverId);
+      const ready = await readyReq(order.id);
+      assert.deepEqual([ready.status, assign.status], [400, 200]);
+      await assertReadyAssignOutcome(order.id, eligible.driverId, ready.status, assign.status, auditBefore);
+    });
+
+    test("assign commits inside ready's read-to-claim window: ready 409, assign wins from RECEIVED", async () => {
+      const eligible = await createEligibleDriver();
+      const order = await createBaseOrder();
+      const auditBefore = await auditCount(order.id);
+      const { loserRes: ready, competitorRes: assign } = await withCompetitorBeforeClaim(
+        () => assignReq(order.id, eligible.driverId),
+        () => readyReq(order.id),
+      );
+      assert.deepEqual([ready.status, assign.status], [409, 200], JSON.stringify({ ready: ready.body, assign: assign.body }));
+      await assertReadyAssignOutcome(order.id, eligible.driverId, ready.status, assign.status, auditBefore);
+    });
+
+    test("ready commits inside assign's read-to-claim window: assign 409, order READY_FOR_PICKUP", async () => {
+      const eligible = await createEligibleDriver();
+      const order = await createBaseOrder();
+      const auditBefore = await auditCount(order.id);
+      const { loserRes: assign, competitorRes: ready } = await withCompetitorBeforeClaim(
+        () => readyReq(order.id),
+        () => assignReq(order.id, eligible.driverId),
+      );
+      assert.deepEqual([ready.status, assign.status], [200, 409], JSON.stringify({ ready: ready.body, assign: assign.body }));
+      await assertReadyAssignOutcome(order.id, eligible.driverId, ready.status, assign.status, auditBefore);
     });
 
     test("reschedule vs cancel: exactly one winner, invariants hold", async () => {

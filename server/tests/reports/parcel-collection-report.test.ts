@@ -221,6 +221,10 @@ describe("Reports — Parcel Intake / Collection (Phase 11.17.6)", () => {
           "settlementCount",
           "successRate",
           "totalCollected",
+          // FR.8 — current split of currentCashHeld (settlement-based release).
+          "attributedCashHeld",
+          "unattributedCashHeld",
+          "outstandingCollectionCount",
         ].sort()
       );
     });

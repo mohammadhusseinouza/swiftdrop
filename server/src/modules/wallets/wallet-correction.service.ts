@@ -130,6 +130,21 @@ export async function reverseWalletTransaction(
   }
 
   return prisma.$transaction(async (tx) => {
+    // FR.6 (contract §8): a wallet credit posted by a settlement-mode
+    // financial release is corrected only through the release-reversal
+    // workflow, which keeps the release, order and correction record in step.
+    // The posting and its release linkage commit in the same transaction, so
+    // this read cannot miss a committed link.
+    const release = await tx.order_financial_releases.findUnique({ where: { wallet_transaction_id: original.id }, select: { id: true } });
+    if (release) {
+      throw new AppError({
+        statusCode: 409,
+        code: "CONFLICT",
+        message: "This wallet credit was posted by a financial release — use the release reversal workflow",
+        details: { reason: "USE_RELEASE_CORRECTION" },
+      });
+    }
+
     // Composable low-level primitive used directly (not the narrower
     // applyWalletReversal helper) because a reversal must copy order_id
     // from the original but explicitly NEVER copy payout_id — that UNIQUE

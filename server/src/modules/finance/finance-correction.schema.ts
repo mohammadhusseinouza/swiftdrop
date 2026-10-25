@@ -42,3 +42,22 @@ export const CompanyTransactionIdParamSchema = z.object({
 
 export const ReverseCompanyTransactionBodySchema = ReversalBodySchema;
 export type ReverseCompanyTransactionInput = z.infer<typeof ReverseCompanyTransactionBodySchema>;
+
+// FR.6 — settlement-mode financial release corrections (contract §8).
+export const RELEASE_CORRECTION_REASON_MIN_LENGTH = 10;
+
+export const ReleaseIdParamSchema = z.object({
+  releaseId: z.string().uuid(),
+});
+
+// POST /api/v1/finance/order-releases/:releaseId/void-collection
+// POST /api/v1/finance/order-releases/:releaseId/reverse-release
+// Mirrors ofrc_reason_meaningful_chk (length(btrim(reason)) >= 10).
+export const ReleaseCorrectionBodySchema = z.object({
+  reason: z
+    .string()
+    .trim()
+    .min(RELEASE_CORRECTION_REASON_MIN_LENGTH, `reason must be at least ${RELEASE_CORRECTION_REASON_MIN_LENGTH} characters`)
+    .max(2000),
+});
+export type ReleaseCorrectionInput = z.infer<typeof ReleaseCorrectionBodySchema>;

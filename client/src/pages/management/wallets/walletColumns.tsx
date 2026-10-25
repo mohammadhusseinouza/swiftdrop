@@ -5,6 +5,7 @@ import { paths } from '../../../routes/paths';
 import { formatDate, humanizeToken } from '../../../lib/format';
 import { formatMoney } from '../../../lib/format';
 import type { WalletSummary } from '../../../services/domain.types';
+import { pendingBreakdown, pendingSubline } from '../../../components/finance/financialRelease';
 
 const DASH = '—';
 
@@ -17,6 +18,20 @@ const DASH = '—';
  * Available balance is the strong figure; Pending is visually secondary and
  * labelled so it never reads as withdrawable cash.
  */
+function PendingCell({ wallet }: { wallet: WalletSummary }) {
+  const b = pendingBreakdown(wallet);
+  const sub = pendingSubline(b, formatMoney);
+  return (
+    <span className="flex flex-col items-end gap-0.5">
+      <span className="tabular-nums text-ink-muted">{formatMoney(b.totalPending)}</span>
+      {sub && <span className="text-[11px] tabular-nums text-ink-subtle">{sub}</span>}
+      {b.underReviewOrderCount > 0 && (
+        <Badge tone="warning">{b.underReviewOrderCount} under review</Badge>
+      )}
+    </span>
+  );
+}
+
 export const walletColumns: DataTableColumn<WalletSummary>[] = [
   {
     id: 'customer',
@@ -47,11 +62,8 @@ export const walletColumns: DataTableColumn<WalletSummary>[] = [
     id: 'pending',
     header: 'Pending',
     align: 'right',
-    cell: (w) => (
-      <span className="tabular-nums text-ink-muted">
-        {formatMoney(w.pendingAmount)}
-      </span>
-    ),
+    // FR.10 — total (backend) + delivery / settlement parts + a review count.
+    cell: (w) => <PendingCell wallet={w} />,
   },
   {
     id: 'lastTransaction',

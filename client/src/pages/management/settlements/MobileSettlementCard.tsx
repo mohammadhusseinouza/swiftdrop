@@ -3,10 +3,12 @@ import { Link } from 'react-router-dom';
 import { paths } from '../../../routes/paths';
 import { formatDateTime, formatMoney } from '../../../lib/format';
 import type { SettlementSummary } from '../../../services/domain.types';
+import { Badge } from '../../../components/ui/Badge';
+import { isLegacySettlement } from './settlementPresentation';
 
 /**
  * Compact Driver Settlement card for narrow screens — the finance table is
- * unusable at 375px. Informational only (there is no Settlement Detail route).
+ * unusable at 375px. The settlement number opens the Settlement Detail (FR.9).
  */
 export function MobileSettlementCard({
   settlement,
@@ -20,7 +22,15 @@ export function MobileSettlementCard({
     <div className="rounded-card border border-line bg-card p-3 shadow-card">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="font-semibold text-ink">{settlement.settlementNumber}</p>
+          <p className="flex flex-wrap items-center gap-1.5">
+            <Link
+              to={paths.management.driverSettlementDetail(settlement.id)}
+              className="font-semibold text-brand-600 hover:underline"
+            >
+              {settlement.settlementNumber}
+            </Link>
+            {settlement.reversed && <Badge tone="danger">Reversed</Badge>}
+          </p>
           {canViewDriver ? (
             <Link
               to={paths.management.driverDetail(settlement.driver.id)}
@@ -49,6 +59,18 @@ export function MobileSettlementCard({
           <dt>Payment method</dt>
           <dd>{settlement.paymentMethod.name}</dd>
         </div>
+        <div className="flex items-center justify-between gap-2">
+          <dt>Allocated</dt>
+          <dd className="tabular-nums">
+            {isLegacySettlement(settlement) ? 'Legacy' : formatMoney(settlement.allocatedTotal)}
+          </dd>
+        </div>
+        {!isLegacySettlement(settlement) && (
+          <div className="flex items-center justify-between gap-2">
+            <dt>Unattributed</dt>
+            <dd className="tabular-nums">{formatMoney(settlement.unattributedAmount)}</dd>
+          </div>
+        )}
         <div className="flex items-center justify-between gap-2">
           <dt>Balance after</dt>
           <dd className="tabular-nums">

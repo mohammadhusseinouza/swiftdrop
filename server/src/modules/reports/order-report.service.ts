@@ -102,7 +102,7 @@ function baseWhereSql(query: OrderReportQuery, range: ResolvedRange): Prisma.Sql
 // SUMMARY — always computed over the base population, regardless of groupBy.
 // ------------------------------------------------------------
 async function getSummary(where: Prisma.ordersWhereInput): Promise<OrderReportSummary> {
-  const [totals, delivered, failed, cancelled, companyOrders, deliveryOnlyOrders] = await Promise.all([
+  const [totals, delivered, failed, cancelled, companyOrders, deliveryOnlyOrders, releaseGroups] = await Promise.all([
     prisma.orders.aggregate({
       where,
       _count: true,
@@ -113,7 +113,34 @@ async function getSummary(where: Prisma.ordersWhereInput): Promise<OrderReportSu
     prisma.orders.count({ where: { ...where, status: CANCELLED } }),
     prisma.orders.count({ where: { ...where, order_type: "COMPANY_ORDER" } }),
     prisma.orders.count({ where: { ...where, order_type: "DELIVERY_ONLY" } }),
+    // FR.8 — one grouped query over the same population.
+    prisma.orders.groupBy({
+      by: ["financial_release_mode", "financial_status"],
+      where: { ...where, status: DELIVERED },
+      _count: true,
+    }),
   ]);
+
+  const financialRelease = {
+    legacyMode: 0,
+    immediateMode: 0,
+    onSettlementMode: 0,
+    awaitingSettlement: 0,
+    reviewRequired: 0,
+    finalized: 0,
+    collectionVoided: 0,
+    releaseReversed: 0,
+  };
+  for (const g of releaseGroups) {
+    if (g.financial_release_mode === null) financialRelease.legacyMode += g._count;
+    else if (g.financial_release_mode === "IMMEDIATE") financialRelease.immediateMode += g._count;
+    else financialRelease.onSettlementMode += g._count;
+    if (g.financial_status === "AWAITING_SETTLEMENT") financialRelease.awaitingSettlement += g._count;
+    if (g.financial_status === "REVIEW_REQUIRED") financialRelease.reviewRequired += g._count;
+    if (g.financial_status === "FINALIZED") financialRelease.finalized += g._count;
+    if (g.financial_status === "COLLECTION_VOIDED") financialRelease.collectionVoided += g._count;
+    if (g.financial_status === "RELEASE_REVERSED") financialRelease.releaseReversed += g._count;
+  }
 
   return {
     totalOrders: totals._count,
@@ -126,6 +153,7 @@ async function getSummary(where: Prisma.ordersWhereInput): Promise<OrderReportSu
     totalDeliveryFee: toAmount(totals._sum.delivery_fee),
     totalExpectedCollection: toAmount(totals._sum.amount_to_collect),
     totalActualCollection: toAmount(totals._sum.actual_amount_collected),
+    financialRelease,
   };
 }
 

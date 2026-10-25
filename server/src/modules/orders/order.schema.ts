@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { OrderTypeSchema, PaymentTypeSchema, moneySchema } from "./order-financial.schema";
 import { WORKFLOW_QUEUE_VALUES } from "./order-workflow-queue";
+import { OrderFinancialStatus } from "../../generated/prisma/enums";
 
 export const OrderIdParamSchema = z.object({
   id: z.string().uuid(),
@@ -21,8 +22,11 @@ export const OrderStatusSchema = z.enum([
   "CANCELLED",
 ]);
 
-// Real orders.financial_status enum values (prisma/schema.prisma OrderFinancialStatus).
-export const OrderFinancialStatusSchema = z.enum(["PENDING", "FINALIZED", "REVIEW_REQUIRED", "NOT_APPLICABLE"]);
+// Real orders.financial_status enum values — derived from the generated Prisma
+// enum (prisma/schema.prisma OrderFinancialStatus) so the list filter always
+// accepts every stored value, incl. the settlement-release statuses (FR.10).
+// Read-only: only used to validate the GET /orders filter.
+export const OrderFinancialStatusSchema = z.enum(OrderFinancialStatus);
 
 // Real orders.parcel_intake_method / parcel_collection_status enum values
 // (prisma/schema.prisma ParcelIntakeMethod / ParcelCollectionStatus) — Phase

@@ -374,7 +374,7 @@ DELIVERY_ONLY
 
 ## COMPANY_ORDER
 
-On successful delivery:
+On successful delivery and financial release:
 
 - collected unpaid order value belongs to the company
 - collected delivery fee belongs to the company
@@ -382,13 +382,17 @@ On successful delivery:
 
 ## DELIVERY_ONLY
 
-On successful delivery:
+On successful delivery and financial release:
 
 - unpaid order amount collected through the delivery belongs to the customer
 - delivery fee belongs to the company
 - the qualifying customer amount is credited to the customer wallet
 
 Do not mix these accounting rules.
+
+Ownership is decided by order type; **posting time** is decided by the order's persisted
+financial release mode (Section 74): immediately at delivery (legacy `NULL`, `IMMEDIATE`), or
+when the driver collection is fully settled (`ON_SETTLEMENT`).
 
 ---
 
@@ -584,7 +588,8 @@ Do not change this rule unless the project documentation is explicitly updated.
 
 A customer wallet represents money the company owes to the customer.
 
-Wallet money primarily comes from successfully delivered Delivery Only orders.
+Wallet money primarily comes from successfully delivered and financially released Delivery
+Only orders.
 
 The wallet must use a transaction ledger.
 
@@ -616,12 +621,17 @@ Available balance:
 - finalized customer money from completed/delivered transactions
 - withdrawable subject to business rules
 
-Pending amount:
+Pending amount (not withdrawable) = Pending Delivery + Pending Settlement:
 
-- potential customer money on active Delivery Only orders
-- not yet withdrawable
+- Pending Delivery: potential customer money on active Delivery Only orders
+- Pending Settlement: the planned customer amount of delivered `ON_SETTLEMENT` Delivery Only
+  orders whose release is still `PENDING` and whose review is not awaiting resolution
 
-Pending should normally be derived from qualifying active orders rather than treated as finalized wallet money.
+Unresolved collection differences are excluded from the customer's monetary pending total and
+exposed separately as Under Review.
+
+Pending is always derived (from qualifying active orders and pending release records), never
+treated as finalized wallet money. Full formula: `docs/settlement-financial-release-contract.md` §9.
 
 ---
 
@@ -677,10 +687,16 @@ Settlement:         $1,000
 Driver cash after:      $0
 ```
 
-A settlement reduces driver cash only.
-It must not reduce the customer wallet.
+A settlement reduces driver cash.
+It must never debit or reduce the customer wallet.
 
 This is a mandatory accounting invariant.
+
+Under settlement-based release (Section 74), a settlement carries explicit allocations to
+`ON_SETTLEMENT` collections. When an allocation makes a collection fully settled (and its
+review is not awaiting resolution), the same transaction **releases** that order's
+already-earned wallet credit and company revenue. That is a release of earned money, never a
+wallet debit, and never happens for legacy/immediate orders.
 
 ---
 
@@ -750,6 +766,25 @@ ROLLBACK
 
 Never implement these as unrelated requests from the frontend.
 
+`ON_SETTLEMENT` delivery posts only the driver cash COLLECTION and the pending release record
+(no wallet/company rows). Settlement with allocations is also a critical transaction:
+
+```text
+BEGIN
+advisory lock (request key) -> activation flag (FOR SHARE)
+driver cash account (FOR NO KEY UPDATE) -> releases by id (FOR NO KEY UPDATE)
+validate allocations + unattributed amount <= unattributed driver cash
+debit driver cash (SETTLEMENT) -> settlement row -> allocation rows -> allocated amounts
+for each fully settled, review-cleared release (by customer_id, id):
+  release -> wallet ORDER_CREDIT / company revenue (existing keys) -> order FINALIZED
+audit
+COMMIT
+```
+
+Critical transactional operations additionally include: Settlement with allocations,
+Difference Resolution, Collection Void, Settlement Reversal/Shortfall, Release Reversal and
+Activation.
+
 ---
 
 # 29. Idempotency and Duplicate Financial Protection
@@ -763,8 +798,17 @@ Protect against duplicate:
 - company revenue records
 - payouts
 - settlements
+- settlement allocations
+- financial releases
+- settlement and release corrections
 
 Use database uniqueness, business checks, transactional guards, or appropriate idempotency mechanisms.
+
+The existing deterministic keys (`delivery:<orderId>:driver-collection`,
+`:direct-company-collection`, `:wallet-order-credit`, `:delivery-fee-revenue`,
+`:company-product-revenue`, `reversal:<ledger>:<id>`) must be preserved verbatim. A release
+posts with the same `delivery:<orderId>:…` keys, so a historical order can never be credited
+twice.
 
 Do not depend only on disabling a frontend button.
 
@@ -1280,10 +1324,22 @@ Customer wallet has available balance
 ### Driver Settlement
 
 ```text
-Driver has collected cash
+Driver has collected cash (legacy / immediate orders)
 -> process settlement
 -> driver cash decreases
 -> customer wallet is unchanged
+```
+
+### Settlement-Based Release (Section 74)
+
+```text
+Activation ON -> Delivery Only delivered with cash
+-> driver cash increases, customer sees Pending Settlement, no wallet/revenue rows
+-> settlement allocates the full collection (possibly across several settlements)
+-> driver cash decreases
+-> on full allocation: wallet ORDER_CREDIT + delivery-fee revenue released (existing keys)
+-> customer available increases by the same amount pending settlement decreases
+-> payout reduces wallet; driver cash unchanged
 ```
 
 ---
@@ -1624,6 +1680,26 @@ Do not begin Phase 12 until Phase 11.17 is complete and approved.
 16.7 Production Deploy + Smoke Test
 ```
 
+## Financial Release Track — Settlement-Based Financial Release (FR)
+
+```text
+FR.1  Documentation + technical contract          (documentation only)
+FR.2  Database / Prisma + additive migration       (activation seeded OFF)
+FR.3  Release domain service + delivery integration
+FR.4  Settlement allocations + release on settlement
+FR.5  Collection-difference resolution integration
+FR.6  Corrections, reversal guards, adjustment guards
+FR.7  Read APIs: outstanding collections, pending, order release detail
+FR.8  Finance summary, reports (released / delivery-date), dashboard, reconciliation
+FR.9  Settlement allocation UI
+FR.10 Wallet / order / finance / customer UI
+FR.11 Activation endpoint + hard gate + full regression
+```
+
+Details, scope and review gates: `/docs/implementation-plan.md` §63. Each FR sub-phase is one
+session with a human review gate. FR.4, FR.6 and FR.11 are mandatory deep financial review
+gates. Activation stays disabled until production cutover is explicitly authorized.
+
 Do not renumber, merge, or skip sub-phases without explicit instruction.
 
 ---
@@ -1906,24 +1982,31 @@ A driver settlement:
 
 ```text
 changes driver cash
-does not change customer wallet
+never debits customer wallet
+legacy / immediate collections: no wallet or revenue change
+ON_SETTLEMENT collections: may RELEASE earned wallet credit + revenue
+  for collections it makes fully settled (Section 74)
 ```
 
 A COMPANY_ORDER successful delivery:
 
 ```text
 driver cash += actual qualifying collection
-company revenue += qualifying company amounts
-customer wallet += 0
+company revenue += qualifying company amounts   (at delivery, or at release)
+customer wallet += 0                             (always)
 ```
 
 A DELIVERY_ONLY exact successful delivery:
 
 ```text
 driver cash += actual qualifying collection
-customer wallet += qualifying unpaid order portion
-company revenue += qualifying delivery fee
+customer wallet += qualifying unpaid order portion   (at delivery, or at release)
+company revenue += qualifying delivery fee           (at delivery, or at release)
 ```
+
+An ON_SETTLEMENT release happens exactly once, only when
+`allocated_amount = collection_amount` and review is not awaiting resolution, and posts with
+the existing per-order idempotency keys.
 
 For ambiguous collection differences:
 
@@ -1954,6 +2037,8 @@ Protect against duplicate/concurrent:
 - payouts
 - settlements
 - reversals
+- settlement allocations and financial releases
+- settlement / release corrections
 
 Use appropriate:
 
@@ -2320,3 +2405,169 @@ Mandatory rules:
   expenses cannot be future-dated (`FUTURE_EXPENSE_DATE`).
 - **Reports** aggregate the STORED values only and classify by the vehicle SAVED on each
   record, never the driver's current default.
+
+---
+
+# 74. Settlement-Based Financial Release (FR track)
+
+Approved cross-cutting change to the financial lifecycle. Business rules:
+`docs/requirements.md` §55. Technical contract (schema, algorithms, locks, invariants, tests):
+`docs/settlement-financial-release-contract.md`. Roadmap: `docs/implementation_plan.md` §63.
+**Status: FR.1 (documentation) and FR.2 (database schema + additive migration
+`20261016000000_settlement_financial_release_foundation`, activation seeded `false`) are done.
+FR.3 is done (pending approval): `server/src/modules/financial-release/financial-release.service.ts`
+and `/deliver` persist the mode and create ON_SETTLEMENT releases; `releaseOrder()` exists but is
+not exposed (FR.4/FR.5 call it). Interim guard until FR.11: the generic settings PATCH
+rejects the activation key.
+FR.4 is done (pending approval): `POST /driver-settlements` accepts explicit allocations
+(`allocations`, `unattributedAmount`, `unattributedReason`), rejects legacy-format requests that
+could consume settlement-mode cash (`ALLOCATION_CONTRACT_REQUIRED`), and calls `releaseOrder()`
+for collections that become fully allocated with review cleared.
+FR.5 is done (pending approval): `resolve-collection-difference` branches on the persisted mode;
+ON_SETTLEMENT orders go through `resolveReleaseDifference()` (records the approved split on the
+release, `REVIEW_REQUIRED → AWAITING_SETTLEMENT`, releases via `releaseOrder()` only if already
+fully allocated — otherwise the completing settlement releases). NULL / IMMEDIATE resolution is
+unchanged.
+FR.6 is done (pending approval): dedicated corrections `POST /finance/order-releases/:releaseId/void-collection`,
+`POST /finance/order-releases/:releaseId/reverse-release`, `POST /driver-settlements/:id/reverse`,
+`POST /driver-settlements/:id/shortfall` (contract §8.1); generic driver-cash / wallet / company
+reverse endpoints refuse release-linked rows and allocation-format settlements; driver cash
+debits are capped at `U` (`lockDriverCashPosition`).
+FR.7 is done (pending approval): read APIs (contract §9.1) — outstanding collections, settlement
+detail, order financial release, pending delivery / settlement / under-review breakdown on wallet
+DTOs.
+FR.8 is done (pending approval): released (default) vs delivery-date reporting basis, settlement-
+release snapshot on finance summary / finance report / dashboard, driver / customer / order report
+splits, and the read-only R1–R13 reconciliation endpoint (contract §12.1).
+FR.9 is done (pending approval): the Process Settlement dialog sends the allocation format
+(explicit `allocations`, possibly empty) whenever the driver holds settlement-mode money or the
+server answers `ALLOCATION_CONTRACT_REQUIRED`, and keeps the legacy amount-only form otherwise;
+amount received is calculated; the release preview uses only the backend planned split
+(additive `planned*` fields on outstanding-collection items) and is rebuilt from fresh data
+before confirmation. Settlement detail: `/management/driver-settlements/:id`.
+FR.10 is done (pending approval): frontend only. Shared vocabulary in
+`client/src/components/finance/financialRelease.ts`; the Order Detail release panel fetches
+`GET /orders/:id/financial-release` only for finance.read users and ON_SETTLEMENT orders; customer
+screens show Pending Delivery + Pending Settlement and an under-review COUNT only. The orders list
+filters by all seven financial statuses (server `OrderFinancialStatusSchema` = `z.enum(OrderFinancialStatus)`).
+Generic Reverse never claims "already reversed" for a 409 `USE_RELEASE_CORRECTION` /
+`USE_SETTLEMENT_CORRECTION`; it explains the dedicated workflow (`classifyReverseRejection`).
+FR.10.1 is done (pending approval): Management ledger LIST rows (wallet ledger, driver cash ledger,
+finance feed) carry read-only `correctionWorkflow` / `canReverseGenerically` / `reversed` from
+`server/src/modules/finance/correction-eligibility.service.ts`, which mirrors the generic reversal
+guards in their check order — keep the two in step when a guard changes. Correction endpoint
+responses keep their original shape.
+FR.10.2 is done (pending approval): Void collection / Reverse release (Order Detail) and Reverse
+settlement (Settlement Detail) for finance.adjust users (`components/finance/correctionActions.ts`,
+`FinancialCorrectionDialog`). The settlement SHORTFALL action is deliberately NOT offered until its
+authorization / accounting review is approved.
+FR.11A is done (pending approval): batched release path `releaseOrders()` (`releaseOrder()` wraps
+it — still the single release path; settlement allocation writes are one statement each);
+Admin-only `/api/v1/admin/financial-release` state / readiness / activate / deactivate with hard
+gate G0–G7 (`financial-release-activation.service.ts`; G0 = `FINANCIAL_RELEASE_ACTIVATION_AUTHORIZED=true`,
+G7 = the deployed client's `/version.json` declaring contract `FR.11`); new settlement shortfalls
+fail closed (403 `SHORTFALL_POLICY_NOT_APPROVED`) unless `SETTLEMENT_SHORTFALL_POLICY_APPROVED=true`.
+Neither variable may be set in any environment without explicit authorization. Activation has
+not been performed anywhere. Readiness and cutover plan: `docs/fr11a-release-readiness.md`.
+FR.11B is done (pending approval): Admin-only Settings → Financial Release tab
+(`FinancialReleaseTab.tsx`, UX only — the server re-checks every gate), read-only latency probe
+`GET /api/v1/admin/financial-release/latency-probe`, `db-inspect.mjs` FR.2 migration checks, read-only
+`scripts/fr-production-preflight.mjs`, P2028 → 503 `TRANSACTION_TIMEOUT` (retry the same request; the
+settlement dialog treats 5xx / timeouts as ambiguous and never mints a new key for them). Final
+runbook: `docs/fr11b-release-readiness.md` §8.** Schema notes: allocations and release corrections reach the order through
+`release_id` (no duplicated `order_id`); `driver_settlement_corrections.reason` is only required
+non-blank in the database (legacy reversal compatibility) — new correction endpoints enforce
+≥ 10 characters in their request schemas.
+
+Mandatory rules:
+
+- **Persisted mode.** `orders.financial_release_mode` is written only by `/deliver`, inside its
+  transaction, and never changed: `NULL` (activation off — legacy immediate behavior),
+  `IMMEDIATE` (activation on, route not Driver Cash: bypass or zero cash), `ON_SETTLEMENT`
+  (activation on, route Driver Cash). Never derive the mode from dates or the current setting.
+  Settlement, resolution, release and corrections read the persisted mode, never the setting —
+  existing `ON_SETTLEMENT` orders stay processable after deactivation.
+- **`NULL` and `IMMEDIATE` orders use the existing delivery / resolution code unchanged.**
+  With activation off, the system must behave exactly as before (full existing suite passes).
+- **`ON_SETTLEMENT` delivery** posts the driver cash COLLECTION (existing key) and creates one
+  `order_financial_releases` row (planned amounts for exact deliveries; `AWAITING_REVIEW` with
+  NULL planned amounts for differences). It posts **no** wallet or company rows. Operational
+  status is `DELIVERED`; `financial_status` is `AWAITING_SETTLEMENT` (exact) or
+  `REVIEW_REQUIRED` (difference).
+- **Release** happens only in the single `releaseOrder()` path, exactly once, when
+  `allocated_amount = collection_amount` AND review is `NOT_REQUIRED`/`RESOLVED`, triggered by a
+  settlement allocation or a difference resolution. It uses the existing primitives and the
+  existing keys `delivery:<orderId>:wallet-order-credit` / `:delivery-fee-revenue` /
+  `:company-product-revenue`, and the order's original collection payment method. A P2002 on
+  those keys is an integrity failure that rolls the whole transaction back. COMPANY_ORDER never
+  touches the wallet.
+- **Allocations.** Finance explicitly selects collections; oldest-first may only preselect in
+  the UI; the server never auto-allocates. Partial allocation across settlements is allowed.
+  `amountReceived = Σ allocations + unattributedAmount`; unattributed money needs a meaningful
+  reason (≥ 10 chars, audited) and can never exceed the driver's unattributed cash
+  `U = current_balance − Σ outstanding(PENDING releases)`, which must stay `≥ 0`. Legacy-format
+  settlements (no allocations) are allowed only while activation is off AND the driver has no
+  PENDING release. Cross-driver allocation is blocked in the app and by composite FKs.
+  `MAX_ALLOCATIONS_PER_SETTLEMENT` starts at 20; the production value comes from measurement.
+- **Financial states.** `OrderFinancialStatus` gains `AWAITING_SETTLEMENT`,
+  `COLLECTION_VOIDED`, `RELEASE_REVERSED`. Never use `NOT_APPLICABLE` or `REVIEW_REQUIRED` to
+  represent voids or release reversals. Release status: `PENDING → RELEASED | VOIDED`,
+  `RELEASED → RELEASE_REVERSED`; terminal states never re-release automatically.
+- **Corrections** are explicit, reasoned, idempotent, audited records
+  (`driver_settlement_corrections`, `order_financial_release_corrections`) linking the original
+  settlement/release, the actor and every corrective transaction:
+  - Collection void only while unallocated; settlement reversal blocked if any allocation led to
+    released funds; release reversal blocked when the wallet cannot be debited (funds paid
+    out — never force a wallet negative).
+  - Settlement shortfall restores a **genuine** driver obligation as unattributed cash; released
+    customer credits stand.
+  - Generic reverse endpoints reject release-linked rows and allocation-format settlements
+    (`USE_RELEASE_CORRECTION` / `USE_SETTLEMENT_CORRECTION`).
+  - Driver cash debits (adjustment, reversal of a credit, reversal of a non-release collection)
+    are capped at `U`.
+- **Locking.** Existing primitives take implicit `FOR NO KEY UPDATE` (updates) and
+  `FOR KEY SHARE` (FK checks) only. New explicit locks use `FOR NO KEY UPDATE` and follow the
+  global order: advisory key → activation row → driver cash account → releases (by id) → orders
+  (by id) → wallets (by customer_id) → inserts. Anything that changes `allocated_amount`, voids a
+  release or debits driver cash holds the driver's account lock.
+- **Pending** = Pending Delivery (existing rule) + Pending Settlement (PENDING DELIVERY_ONLY
+  releases not awaiting review). Under-review differences are excluded from the customer's
+  monetary total and shown separately. Field `pendingAmount` keeps its name; breakdown fields
+  are additive.
+- **Reporting.** Default basis is released (ledger `created_at`); a delivery-date basis is
+  available separately. Reversals net correctly in both bases; nothing is double-counted.
+- **Activation.** Admin only (`requireRole("ADMIN")`), dedicated endpoints; the generic
+  settings PATCH must reject the key. Seeded `false`. Hard gate (cutover env authorization,
+  schema readiness, zero unattributed driver cash, ledger integrity, no unresolved legacy
+  differences, zero reconciliation violations, client readiness); the gate never modifies
+  balances. Deactivation is always allowed and affects future deliveries only. Do **not**
+  activate in any environment until production cutover is explicitly authorized.
+- **Historical protection.** Never alter, replay, backfill or delete historical orders,
+  settlements, wallet transactions, payouts or company financial records. The FR migration is
+  additive only.
+- **Rollback.** Setting rollback is always safe. Code rollback is safe only before the first
+  `ON_SETTLEMENT` delivery or once every release is terminal. Schema rollback: never.
+- Reconciliation invariants R1–R13 (contract §11) must hold after every financial operation and
+  are exposed read-only for monitoring.
+
+---
+
+# 75. Direct Payment Settlement (payment-method bypass)
+
+Existing, previously undocumented feature (migration `__0923__`). Business rules:
+`docs/requirements.md` §9.1.
+
+- `payment_methods.bypass_driver_cash` (default `false`). Read **inside** the delivery
+  transaction for the **final** collection payment method (the Driver may correct the method at
+  delivery confirmation).
+- `false`: collection enters Driver Cash (COLLECTION). `true`: collection is recorded in
+  `company_direct_collections` (key `delivery:<orderId>:direct-company-collection`), never Driver
+  Cash, no settlement obligation.
+- Routing changes **custody only**; wallet/revenue ownership is identical for both routes.
+- The routing decision is persisted by which ledger row is written; toggling the setting never
+  rewrites completed deliveries.
+- Direct collections are append-only, not revenue, not customer money, and not correctable as
+  Driver Cash or company-finance rows. Reports and the dashboard show them separately without
+  double counting.
+- Direct payments (and zero-cash deliveries) always use immediate financial release, including
+  collection differences (Section 74).

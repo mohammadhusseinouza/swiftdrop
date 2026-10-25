@@ -3,6 +3,7 @@ import { prisma } from "../../db/prisma";
 import { AppError } from "../../shared/errors/app-error";
 import { applyDriverCashAdjustment, applyDriverCashTransaction, type DriverCashDirection } from "../driver-cash/driver-cash-ledger.service";
 import { createAuditLog } from "../../shared/audit/audit.service";
+import { assertDebitWithinUnattributed, lockDriverCashPosition } from "../financial-release/financial-release.service";
 import type { AdjustDriverCashInput } from "./finance-correction.schema";
 import type { DriverCashCorrectionEntry } from "./finance-correction.types";
 
@@ -14,7 +15,17 @@ import type { DriverCashCorrectionEntry } from "./finance-correction.types";
 // row; a REVERSAL is a brand-new inverse row referencing the original via
 // reversal_of_id. Reuses the approved Phase 8.1 ledger primitives — no
 // second Driver Cash balance algorithm exists here.
+//
+// Settlement-Based Financial Release (FR.6, contract §7 / §8): every path
+// takes the driver's account lock first (lock step 3). A DEBIT may only
+// consume unattributed cash U; release-linked COLLECTION rows,
+// allocation-format settlements and settlement-shortfall credits are
+// corrected only through their dedicated workflows.
 // ============================================================
+
+function useDedicatedWorkflow(reason: "USE_RELEASE_CORRECTION" | "USE_SETTLEMENT_CORRECTION", message: string): AppError {
+  return new AppError({ statusCode: 409, code: "CONFLICT", message, details: { reason } });
+}
 
 const correctionSelect = {
   id: true,
@@ -67,6 +78,10 @@ export async function createDriverCashAdjustment(
   // applyDriverCashAdjustment itself (Phase 8.1) — not duplicated here.
 
   return prisma.$transaction(async (tx) => {
+    const position = await lockDriverCashPosition(tx, driverId);
+    if (input.direction === "DEBIT") {
+      assertDebitWithinUnattributed(position, input.amount);
+    }
     const result = await applyDriverCashAdjustment(tx, {
       driverId,
       direction: input.direction,
@@ -158,6 +173,56 @@ export async function reverseDriverCashTransaction(
   }
 
   return prisma.$transaction(async (tx) => {
+    const position = await lockDriverCashPosition(tx, original.driver_id);
+
+    // Re-checked under the account lock: the dedicated workflows take the
+    // same lock, so these guards cannot race a void / settlement correction.
+    if (original.type === "COLLECTION") {
+      const release = await tx.order_financial_releases.findUnique({
+        where: { collection_transaction_id: original.id },
+        select: { id: true },
+      });
+      if (release) {
+        throw useDedicatedWorkflow(
+          "USE_RELEASE_CORRECTION",
+          "This collection belongs to a settlement-mode order — use the collection void workflow"
+        );
+      }
+    }
+    let legacySettlementCorrection = false;
+    if (linkedSettlementId) {
+      const settlement = await tx.driver_settlements.findUniqueOrThrow({
+        where: { id: linkedSettlementId },
+        select: { allocated_total: true },
+      });
+      if (settlement.allocated_total !== null) {
+        throw useDedicatedWorkflow(
+          "USE_SETTLEMENT_CORRECTION",
+          "This settlement has collection allocations — use the settlement reversal workflow"
+        );
+      }
+      const shortfall = await tx.driver_settlement_corrections.findFirst({
+        where: { settlement_id: linkedSettlementId, correction_type: "SETTLEMENT_SHORTFALL" },
+        select: { id: true },
+      });
+      if (shortfall) {
+        throw useDedicatedWorkflow("USE_SETTLEMENT_CORRECTION", "A shortfall was recorded for this settlement — it cannot be reversed");
+      }
+      legacySettlementCorrection = true;
+    }
+    if (original.type === "ADJUSTMENT") {
+      const correction = await tx.driver_settlement_corrections.findUnique({
+        where: { cash_transaction_id: original.id },
+        select: { id: true },
+      });
+      if (correction) {
+        throw useDedicatedWorkflow("USE_SETTLEMENT_CORRECTION", "This adjustment records a settlement correction and cannot be reversed");
+      }
+    }
+    if (reversalDirection === "DEBIT") {
+      assertDebitWithinUnattributed(position, original.amount);
+    }
+
     // Composable low-level primitive used directly (not the narrower
     // applyDriverCashReversal helper) because a reversal must copy
     // order_id from the original but explicitly NEVER copy settlement_id —
@@ -173,6 +238,27 @@ export async function reverseDriverCashTransaction(
       reversalOfId: original.id,
       idempotencyKey: `reversal:driver-cash:${original.id}`,
     });
+
+    // FR.6 — a legacy-format settlement reversed here also gets the approved
+    // linked SETTLEMENT_REVERSAL correction row (deterministic key; the
+    // partial unique index allows one reversal per settlement).
+    let correctionId: string | null = null;
+    if (legacySettlementCorrection && linkedSettlementId) {
+      const correction = await tx.driver_settlement_corrections.create({
+        data: {
+          settlement_id: linkedSettlementId,
+          driver_id: original.driver_id,
+          correction_type: "SETTLEMENT_REVERSAL",
+          amount: original.amount,
+          reason,
+          cash_transaction_id: result.transaction.id,
+          created_by_id: actorUserId,
+          idempotency_key: `settlement-reversal:${linkedSettlementId}`,
+        },
+        select: { id: true },
+      });
+      correctionId = correction.id;
+    }
 
     await createAuditLog(tx, {
       actorUserId,
@@ -190,6 +276,7 @@ export async function reverseDriverCashTransaction(
         reason,
         settlementId: linkedSettlementId,
         driverId: original.driver_id,
+        ...(correctionId ? { settlementCorrectionId: correctionId } : {}),
       },
     });
 

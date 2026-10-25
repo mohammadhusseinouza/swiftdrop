@@ -1,13 +1,17 @@
 import { Prisma } from "../../generated/prisma/client";
+import { walletCorrectionEligibility, type CorrectionEligibility } from "../finance/correction-eligibility.service";
 import { prisma } from "../../db/prisma";
+import { readSnapshot } from "../../db/read-snapshot";
 import { AppError } from "../../shared/errors/app-error";
 import { ORDER_ACTIVE_STATUSES } from "../orders/order-lifecycle";
+import { PENDING_RELEASE_HOLDS_CASH } from "../financial-release/financial-release.service";
 import type { ListWalletsQuery, ListWalletTransactionsQuery } from "./wallet.schema";
 import type {
   WalletCustomerSummaryEntry,
   WalletDetail,
   WalletSummary,
   WalletTotals,
+  WalletLedgerEntry,
   WalletTransactionEntry,
 } from "./wallet.types";
 
@@ -46,29 +50,145 @@ function pendingOrdersWhere(customerScope?: Prisma.ordersWhereInput["customer_id
   };
 }
 
-export async function getPendingAmountForCustomer(customerId: string): Promise<Prisma.Decimal> {
-  const result = await prisma.orders.aggregate({
-    where: pendingOrdersWhere(customerId),
-    _sum: { remaining_order_amount: true },
-  });
-  return result._sum.remaining_order_amount ?? new Prisma.Decimal(0);
+// ============================================================
+// PENDING SETTLEMENT + UNDER REVIEW (FR.7, contract §9, requirements §13)
+//
+//   pendingDelivery    = the Phase 8.2 rule above (active DELIVERY_ONLY orders)
+//   pendingSettlement  = Σ planned_customer_wallet_amount of DELIVERY_ONLY
+//                        releases still PENDING (holding driver cash) whose
+//                        review is NOT_REQUIRED / RESOLVED
+//   underReview        = DELIVERY_ONLY PENDING releases AWAITING_REVIEW — a
+//                        count (and, for Management only, the collected cash);
+//                        never an unapproved monetary pending amount
+//   pendingAmount      = pendingDelivery + pendingSettlement (name unchanged)
+//
+// No double counting: DELIVERED is not an active status, and a release
+// exists only for a DELIVERED order. RELEASED / VOIDED / RELEASE_REVERSED
+// releases are excluded (released money is in available_balance; voided /
+// reversed money is nobody's pending money). Company product revenue and
+// delivery fees never enter these sums. With settlement-based release
+// disabled no release rows exist, so the figures equal the Phase 8.2 ones.
+// ============================================================
+
+export interface PendingBreakdown {
+  pendingDelivery: Prisma.Decimal;
+  pendingSettlement: Prisma.Decimal;
+  underReviewOrderCount: number;
+  underReviewCollectionAmount: Prisma.Decimal;
 }
 
-// Batched equivalent for a page of Customers — avoids one Order aggregate
-// query per row (N+1) on the wallet list.
-export async function getPendingAmountsForCustomers(customerIds: string[]): Promise<Map<string, Prisma.Decimal>> {
-  const map = new Map<string, Prisma.Decimal>();
+const zero = () => new Prisma.Decimal(0);
+const emptyBreakdown = (): PendingBreakdown => ({
+  pendingDelivery: zero(),
+  pendingSettlement: zero(),
+  underReviewOrderCount: 0,
+  underReviewCollectionAmount: zero(),
+});
+
+export function totalPending(b: PendingBreakdown): Prisma.Decimal {
+  return b.pendingDelivery.plus(b.pendingSettlement);
+}
+
+type ReleasePendingRow = {
+  customer_id: string;
+  pending_settlement: Prisma.Decimal | null;
+  under_review_count: number;
+  under_review_amount: Prisma.Decimal | null;
+};
+
+// One grouped statement for any set of customers (null = all customers,
+// collapsed into a single row keyed "*"). Uses the
+// (customer_id, release_status) index.
+async function loadReleasePending(db: Prisma.TransactionClient, customerIds: string[] | null): Promise<ReleasePendingRow[]> {
+  const scope = customerIds === null ? Prisma.empty : Prisma.sql`AND r.customer_id = ANY(${customerIds}::uuid[])`;
+  const key = customerIds === null ? Prisma.sql`'*'` : Prisma.sql`r.customer_id::text`;
+  return db.$queryRaw<ReleasePendingRow[]>`
+    SELECT ${key} AS customer_id,
+      SUM(r.planned_customer_wallet_amount) FILTER (WHERE r.review_status <> 'AWAITING_REVIEW') AS pending_settlement,
+      (COUNT(*) FILTER (WHERE r.review_status = 'AWAITING_REVIEW'))::int AS under_review_count,
+      SUM(r.collection_amount) FILTER (WHERE r.review_status = 'AWAITING_REVIEW') AS under_review_amount
+    FROM order_financial_releases r
+    WHERE r.order_type = 'DELIVERY_ONLY' AND ${PENDING_RELEASE_HOLDS_CASH} ${scope}
+    GROUP BY 1
+  `;
+}
+
+function applyReleaseRow(target: PendingBreakdown, row: ReleasePendingRow): void {
+  target.pendingSettlement = new Prisma.Decimal(row.pending_settlement ?? 0);
+  target.underReviewOrderCount = row.under_review_count;
+  target.underReviewCollectionAmount = new Prisma.Decimal(row.under_review_amount ?? 0);
+}
+
+// Batched breakdown for a page of Customers — two grouped queries, never one
+// per row. Every requested id gets an entry (zero when nothing is pending).
+export async function getPendingBreakdowns(
+  customerIds: string[],
+  db: Prisma.TransactionClient = prisma
+): Promise<Map<string, PendingBreakdown>> {
+  const map = new Map<string, PendingBreakdown>(customerIds.map((id) => [id, emptyBreakdown()]));
   if (customerIds.length === 0) return map;
 
-  const grouped = await prisma.orders.groupBy({
-    by: ["customer_id"],
-    where: pendingOrdersWhere({ in: customerIds }),
-    _sum: { remaining_order_amount: true },
-  });
-  for (const row of grouped) {
-    map.set(row.customer_id, row._sum.remaining_order_amount ?? new Prisma.Decimal(0));
+  const [delivery, releases] = await Promise.all([
+    db.orders.groupBy({
+      by: ["customer_id"],
+      where: pendingOrdersWhere({ in: customerIds }),
+      _sum: { remaining_order_amount: true },
+    }),
+    loadReleasePending(db, customerIds),
+  ]);
+  for (const row of delivery) {
+    const entry = map.get(row.customer_id);
+    if (entry) entry.pendingDelivery = row._sum.remaining_order_amount ?? zero();
+  }
+  for (const row of releases) {
+    const entry = map.get(row.customer_id);
+    if (entry) applyReleaseRow(entry, row);
   }
   return map;
+}
+
+export async function getPendingBreakdownForCustomer(customerId: string, db: Prisma.TransactionClient = prisma): Promise<PendingBreakdown> {
+  return (await getPendingBreakdowns([customerId], db)).get(customerId) ?? emptyBreakdown();
+}
+
+async function getPendingBreakdownTotals(db: Prisma.TransactionClient): Promise<PendingBreakdown> {
+  const [delivery, releases] = await Promise.all([
+    db.orders.aggregate({ where: pendingOrdersWhere(), _sum: { remaining_order_amount: true } }),
+    loadReleasePending(db, null),
+  ]);
+  const totals = emptyBreakdown();
+  totals.pendingDelivery = delivery._sum.remaining_order_amount ?? zero();
+  if (releases[0]) applyReleaseRow(totals, releases[0]);
+  return totals;
+}
+
+// Total pending (delivery + settlement) — the `pendingAmount` every existing
+// DTO carries. Kept for callers that only need the single figure.
+export async function getPendingAmountForCustomer(customerId: string): Promise<Prisma.Decimal> {
+  return totalPending(await getPendingBreakdownForCustomer(customerId));
+}
+
+export async function getPendingAmountsForCustomers(customerIds: string[]): Promise<Map<string, Prisma.Decimal>> {
+  const breakdowns = await getPendingBreakdowns(customerIds);
+  return new Map([...breakdowns].map(([id, b]) => [id, totalPending(b)]));
+}
+
+// Management DTO fields (additive). underReviewCollectionAmount is
+// Management-only — never on a Customer DTO.
+export interface PendingBreakdownFields {
+  pendingDeliveryAmount: string;
+  pendingSettlementAmount: string;
+  underReviewOrderCount: number;
+  underReviewCollectionAmount: string;
+}
+
+export function toPendingBreakdownFields(b: PendingBreakdown): PendingBreakdownFields {
+  return {
+    pendingDeliveryAmount: b.pendingDelivery.toString(),
+    pendingSettlementAmount: b.pendingSettlement.toString(),
+    underReviewOrderCount: b.underReviewOrderCount,
+    underReviewCollectionAmount: b.underReviewCollectionAmount.toString(),
+  };
 }
 
 // ============================================================
@@ -92,16 +212,24 @@ export async function getPendingAmountsForCustomers(customerIds: string[]): Prom
 export interface CustomerWalletFigures {
   availableBalance: string;
   pendingAmount: string;
+  // FR.7 — Customer-safe breakdown (no collected-cash amount for under review).
+  pendingDeliveryAmount: string;
+  pendingSettlementAmount: string;
+  underReviewOrderCount: number;
 }
 
 export async function getCustomerWalletFigures(customerId: string): Promise<CustomerWalletFigures> {
-  const [wallet, pending] = await Promise.all([
-    prisma.customer_wallets.findUnique({
-      where: { customer_id: customerId },
-      select: { available_balance: true },
-    }),
-    getPendingAmountForCustomer(customerId),
-  ]);
+  // One snapshot: a release moves money from pending settlement to the
+  // available balance atomically, so both are read from the same instant.
+  const [wallet, pending] = await readSnapshot((tx) =>
+    Promise.all([
+      tx.customer_wallets.findUnique({
+        where: { customer_id: customerId },
+        select: { available_balance: true },
+      }),
+      getPendingBreakdownForCustomer(customerId, tx),
+    ])
+  );
 
   if (!wallet) {
     console.error(`[wallet.service] data-integrity failure: customer ${customerId} has no linked customer_wallets row`);
@@ -110,7 +238,10 @@ export async function getCustomerWalletFigures(customerId: string): Promise<Cust
 
   return {
     availableBalance: wallet.available_balance.toString(),
-    pendingAmount: pending.toString(),
+    pendingAmount: totalPending(pending).toString(),
+    pendingDeliveryAmount: pending.pendingDelivery.toString(),
+    pendingSettlementAmount: pending.pendingSettlement.toString(),
+    underReviewOrderCount: pending.underReviewOrderCount,
   };
 }
 
@@ -124,13 +255,13 @@ export async function getCustomerWalletFigures(customerId: string): Promise<Cust
 // ============================================================
 
 export async function getWalletTotals(): Promise<WalletTotals> {
-  const [wallets, pending] = await Promise.all([
-    prisma.customer_wallets.aggregate({ _sum: { available_balance: true } }),
-    prisma.orders.aggregate({ where: pendingOrdersWhere(), _sum: { remaining_order_amount: true } }),
-  ]);
+  const [wallets, pending] = await readSnapshot((tx) =>
+    Promise.all([tx.customer_wallets.aggregate({ _sum: { available_balance: true } }), getPendingBreakdownTotals(tx)])
+  );
   return {
     availableBalance: (wallets._sum.available_balance ?? new Prisma.Decimal(0)).toString(),
-    pendingAmount: (pending._sum.remaining_order_amount ?? new Prisma.Decimal(0)).toString(),
+    pendingAmount: totalPending(pending).toString(),
+    ...toPendingBreakdownFields(pending),
   };
 }
 
@@ -168,7 +299,7 @@ export async function listWallets(query: ListWalletsQuery): Promise<ListWalletsR
 
   // Batched (not per-row) lookups — avoids N+1 queries across the page.
   const [pendingMap, lastTransactions, lastPayouts] = await Promise.all([
-    getPendingAmountsForCustomers(customerIds),
+    getPendingBreakdowns(customerIds),
     customerIds.length === 0
       ? Promise.resolve([])
       : prisma.wallet_transactions.findMany({
@@ -198,7 +329,7 @@ export async function listWallets(query: ListWalletsQuery): Promise<ListWalletsR
       throw new AppError({ statusCode: 500, code: "INTERNAL_ERROR", message: "Customer wallet is missing" });
     }
 
-    const pending = pendingMap.get(customer.id) ?? new Prisma.Decimal(0);
+    const pending = pendingMap.get(customer.id) ?? emptyBreakdown();
     const lastTransaction = lastTransactionByCustomer.get(customer.id);
     const lastPayout = lastPayoutByCustomer.get(customer.id);
 
@@ -212,7 +343,8 @@ export async function listWallets(query: ListWalletsQuery): Promise<ListWalletsR
         isActive: customer.is_active,
       },
       availableBalance: customer.customer_wallets.available_balance.toString(),
-      pendingAmount: pending.toString(),
+      pendingAmount: totalPending(pending).toString(),
+      ...toPendingBreakdownFields(pending),
       lastTransaction: lastTransaction
         ? { id: lastTransaction.id, type: lastTransaction.type, createdAt: lastTransaction.created_at.toISOString() }
         : null,
@@ -243,19 +375,25 @@ export async function listWallets(query: ListWalletsQuery): Promise<ListWalletsR
 export async function getWalletCustomerSummaries(customerIds: string[]): Promise<WalletCustomerSummaryEntry[]> {
   if (customerIds.length === 0) return [];
 
-  const [wallets, pendingMap] = await Promise.all([
-    prisma.customer_wallets.findMany({
-      where: { customer_id: { in: customerIds } },
-      select: { customer_id: true, available_balance: true },
-    }),
-    getPendingAmountsForCustomers(customerIds),
-  ]);
+  const [wallets, pendingMap] = await readSnapshot((tx) =>
+    Promise.all([
+      tx.customer_wallets.findMany({
+        where: { customer_id: { in: customerIds } },
+        select: { customer_id: true, available_balance: true },
+      }),
+      getPendingBreakdowns(customerIds, tx),
+    ])
+  );
 
-  return wallets.map((w) => ({
-    customerId: w.customer_id,
-    availableBalance: w.available_balance.toString(),
-    pendingAmount: (pendingMap.get(w.customer_id) ?? new Prisma.Decimal(0)).toString(),
-  }));
+  return wallets.map((w) => {
+    const pending = pendingMap.get(w.customer_id) ?? emptyBreakdown();
+    return {
+      customerId: w.customer_id,
+      availableBalance: w.available_balance.toString(),
+      pendingAmount: totalPending(pending).toString(),
+      ...toPendingBreakdownFields(pending),
+    };
+  });
 }
 
 // ============================================================
@@ -263,7 +401,12 @@ export async function getWalletCustomerSummaries(customerIds: string[]): Promise
 // ============================================================
 
 export async function getWalletDetail(customerId: string): Promise<WalletDetail> {
-  const customer = await prisma.customers.findUnique({ where: { id: customerId }, include: { customer_wallets: true } });
+  const [customer, pending] = await readSnapshot((tx) =>
+    Promise.all([
+      tx.customers.findUnique({ where: { id: customerId }, include: { customer_wallets: true } }),
+      getPendingBreakdownForCustomer(customerId, tx),
+    ])
+  );
   if (!customer) {
     throw new AppError({ statusCode: 404, code: "NOT_FOUND", message: "Customer not found" });
   }
@@ -273,8 +416,6 @@ export async function getWalletDetail(customerId: string): Promise<WalletDetail>
     console.error(`[wallet.service] data-integrity failure: customer ${customerId} has no linked customer_wallets row`);
     throw new AppError({ statusCode: 500, code: "INTERNAL_ERROR", message: "Customer wallet is missing" });
   }
-
-  const pending = await getPendingAmountForCustomer(customerId);
 
   return {
     customer: {
@@ -289,7 +430,8 @@ export async function getWalletDetail(customerId: string): Promise<WalletDetail>
     wallet: {
       id: customer.customer_wallets.id,
       availableBalance: customer.customer_wallets.available_balance.toString(),
-      pendingAmount: pending.toString(),
+      pendingAmount: totalPending(pending).toString(),
+      ...toPendingBreakdownFields(pending),
       createdAt: customer.customer_wallets.created_at.toISOString(),
       updatedAt: customer.customer_wallets.updated_at.toISOString(),
     },
@@ -343,7 +485,7 @@ export function toWalletTransactionEntry(row: TransactionRow): WalletTransaction
 }
 
 export interface ListWalletTransactionsResult {
-  items: WalletTransactionEntry[];
+  items: WalletLedgerEntry[];
   total: number;
 }
 
@@ -379,5 +521,12 @@ export async function listWalletTransactions(
     prisma.wallet_transactions.count({ where }),
   ]);
 
-  return { items: rows.map(toWalletTransactionEntry), total };
+  // FR.10.1 — correction eligibility for the page, batched.
+  const eligibility = await walletCorrectionEligibility(
+    rows.map((r) => ({ id: r.id, type: r.type, payoutStatus: r.customer_payouts?.status ?? null }))
+  );
+  return {
+    items: rows.map((r) => ({ ...toWalletTransactionEntry(r), ...(eligibility.get(r.id) as CorrectionEligibility) })),
+    total,
+  };
 }

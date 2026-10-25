@@ -3,6 +3,7 @@ import { Wallet, Hourglass, PackageOpen, PackageCheck } from 'lucide-react';
 import { useGetCustomerDashboardQuery } from '../../services/customerDashboardApi';
 import { getApiErrorMessage, type UnknownApiError } from '../../services/apiError';
 import { formatMoney } from '../../lib/format';
+import { customerPendingSupportingText, pendingBreakdown } from '../../components/finance/financialRelease';
 
 import { PageHeader } from '../../components/data-display/PageHeader';
 import { StatisticCard } from '../../components/data-display/StatisticCard';
@@ -15,6 +16,8 @@ import { ErrorState } from '../../components/feedback/ErrorState';
  *
  * READ-ONLY overview of the authenticated Customer's own money and order
  * activity, straight from GET /api/v1/customer/me/dashboard. Four cards, exact
+ * server values (FR.10: pending = delivery + settlement, and an under-review
+ * order COUNT — never an unapproved amount),
  * server values, no calculation in React (task §11/§39). Deliberately NOT
  * here (task §25/§29/§30): any Withdraw / Request Payout / adjust action,
  * Driver Cash, Company Revenue, financial-review status, Parcel Collection
@@ -65,7 +68,7 @@ export default function CustomerDashboardPage() {
             icon={Hourglass}
             label="Pending Amount"
             value={formatMoney(data.pendingAmount, { fallback: '$0.00' })}
-            supportingText="Potential Customer money from active Delivery Only orders. Not yet available."
+            supportingText={customerPendingSupportingText(pendingBreakdown(data), formatMoney)}
           />
           <StatisticCard
             icon={PackageOpen}
@@ -81,6 +84,15 @@ export default function CustomerDashboardPage() {
           />
         </section>
       ) : null}
+
+      {data && data.underReviewOrderCount > 0 && (
+        <p className="rounded-card border border-warning-200 bg-warning-50 px-4 py-2.5 text-sm text-warning-700">
+          {data.underReviewOrderCount} delivered{' '}
+          {data.underReviewOrderCount === 1 ? 'order is' : 'orders are'} being reviewed because the amount collected
+          differed from the expected amount. {data.underReviewOrderCount === 1 ? 'Its' : 'Their'} value is not included in
+          your pending amount until the review is complete.
+        </p>
+      )}
     </div>
   );
 }

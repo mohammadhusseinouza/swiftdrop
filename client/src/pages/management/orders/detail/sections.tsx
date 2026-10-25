@@ -16,6 +16,10 @@ import { useGetOrderTimelineQuery } from '../../../../services/ordersApi';
 import { getApiErrorMessage, type UnknownApiError } from '../../../../services/apiError';
 import type { OrderDetail } from '../../../../services/domain.types';
 import { buildOrderTimeline } from './buildTimeline';
+import {
+  getFinancialStatusPresentation,
+  getReleaseModePresentation,
+} from '../../../../components/finance/financialRelease';
 
 const DASH = '—';
 
@@ -85,15 +89,6 @@ function isSafeHttpUrl(value: string): boolean {
   }
 }
 
-const FINANCIAL_STATUS_TONE: Record<
-  string,
-  'neutral' | 'success' | 'danger' | 'warning'
-> = {
-  PENDING: 'neutral',
-  FINALIZED: 'success',
-  REVIEW_REQUIRED: 'danger',
-  NOT_APPLICABLE: 'neutral',
-};
 
 /* -------------------------------- 1. Summary ------------------------------- */
 
@@ -343,10 +338,15 @@ export function FinancialSection({ order }: { order: OrderDetail }) {
     {
       label: 'Financial status',
       value: (
-        <Badge tone={FINANCIAL_STATUS_TONE[order.financialStatus] ?? 'neutral'}>
-          {humanizeToken(order.financialStatus)}
+        <Badge tone={getFinancialStatusPresentation(order.financialStatus).tone}>
+          {getFinancialStatusPresentation(order.financialStatus).label}
         </Badge>
       ),
+    },
+    {
+      // FR.10 — persisted at delivery; independent of the operational status.
+      label: 'Release mode',
+      value: order.financialReleaseMode == null && !order.deliveredAt ? DASH : getReleaseModePresentation(order.financialReleaseMode).label,
     },
     {
       label: 'Needs financial review',

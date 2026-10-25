@@ -63,6 +63,12 @@ const ACTIVITY_LABELS: Record<string, string> = {
   CUSTOMER_PAYOUT_REVERSED: 'Customer payout reversed',
   DRIVER_SETTLEMENT_COMPLETED: 'Driver settlement recorded',
   DRIVER_SETTLEMENT_REVERSED: 'Driver settlement reversed',
+  DRIVER_SETTLEMENT_SHORTFALL_RECORDED: 'Settlement shortfall recorded',
+  // FR.8 settlement-based release
+  DELIVERY_FINANCE_AWAITING_SETTLEMENT: 'Delivery awaiting driver settlement',
+  FINANCIAL_RELEASE_COMPLETED: 'Financial release completed',
+  FINANCIAL_RELEASE_COLLECTION_VOIDED: 'Settlement-mode collection voided',
+  FINANCIAL_RELEASE_REVERSED: 'Financial release reversed',
   WALLET_ADJUSTMENT_CREATED: 'Wallet adjustment posted',
   WALLET_TRANSACTION_REVERSED: 'Wallet transaction reversed',
   DRIVER_CASH_ADJUSTMENT_CREATED: 'Driver cash adjustment posted',

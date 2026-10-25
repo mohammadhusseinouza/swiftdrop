@@ -646,8 +646,8 @@ export function WalletTab({ customerId }: { customerId: string }) {
           />
         ) : null}
         <p className="mt-3 text-xs text-ink-muted">
-          Pending is derived server-side from qualifying active delivery-only
-          orders and is not withdrawable. Read-only snapshot — wallet
+          Pending is derived server-side (active delivery-only orders plus
+          delivered orders awaiting driver settlement) and is not withdrawable. Read-only snapshot — wallet
           adjustments, reversals and payouts are handled in Finance / Payouts.
         </p>
       </Section>

@@ -1,3 +1,4 @@
+import type { CorrectionEligibility } from "./correction-eligibility.service";
 // Management-facing Driver Cash DTOs (Phase 11.7 correction). Deliberately
 // narrow — Management needs the authoritative balance + a readable ledger,
 // not internal mechanics. Excluded on purpose: idempotency_key, raw
@@ -19,7 +20,8 @@ export interface ManagementDriverCashDetail {
   currentBalance: string;
 }
 
-export interface ManagementDriverCashTransactionEntry {
+// FR.10.1 — carries its read-only correction eligibility (additive).
+export interface ManagementDriverCashTransactionEntry extends CorrectionEligibility {
   id: string;
   type: string;
   // Derived from the balance delta (balance_after - balance_before) — the

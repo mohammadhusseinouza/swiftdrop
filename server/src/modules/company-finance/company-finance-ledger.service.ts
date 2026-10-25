@@ -117,6 +117,54 @@ export async function recordDeliveryFeeRevenue(
   });
 }
 
+// FR.11A — the same append-only primitive for several rows in ONE INSERT
+// (a settlement releasing many collections). Identical validation and the
+// same P2002 -> CONFLICT mapping; any duplicate key rolls the whole caller
+// transaction back. Rows are returned in input order (matched by their
+// UNIQUE idempotency key, which every batch row must carry).
+export type CompanyFinancialTransactionBatchInput = CreateCompanyFinancialTransactionInput & { idempotencyKey: string };
+
+export async function createCompanyFinancialTransactions(
+  tx: Prisma.TransactionClient,
+  inputs: CompanyFinancialTransactionBatchInput[]
+): Promise<company_financial_transactions[]> {
+  if (inputs.length === 0) return [];
+  for (const input of inputs) assertValidLedgerAmount(input.amount);
+
+  let rows: company_financial_transactions[];
+  try {
+    rows = await tx.company_financial_transactions.createManyAndReturn({
+      data: inputs.map((input) => ({
+        type: input.type,
+        amount: input.amount,
+        order_id: input.orderId,
+        payment_method_id: input.paymentMethodId,
+        created_by_id: input.createdById,
+        notes: input.notes,
+        reversal_of_id: input.reversalOfId,
+        idempotency_key: input.idempotencyKey,
+      })),
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      throw new AppError({
+        statusCode: 409,
+        code: "CONFLICT",
+        message: "Company financial transaction already recorded for this request",
+      });
+    }
+    throw error;
+  }
+  const byKey = new Map(rows.map((row) => [row.idempotency_key, row]));
+  return inputs.map((input) => {
+    const row = byKey.get(input.idempotencyKey);
+    if (!row) {
+      throw new AppError({ statusCode: 500, code: "INTERNAL_ERROR", message: "Company financial transaction batch was not recorded" });
+    }
+    return row;
+  });
+}
+
 // Focused helper for Phase 8.4's exact Company Order product revenue — the
 // qualifying unpaid order value (remaining_order_amount) belongs to the
 // company for a COMPANY_ORDER, never the customer wallet.

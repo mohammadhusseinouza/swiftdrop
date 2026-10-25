@@ -144,6 +144,20 @@ describe("Error contract", () => {
     assert.doesNotMatch(serialized, /secret\/path/);
     assert.doesNotMatch(serialized, /at Object/); // stack-trace-shaped text
   });
+
+  test("503: a REAL interactive-transaction timeout (P2028) asks for the same request again and never claims an outcome (FR.11B)", async () => {
+    const errorApp = createErrorTestApp();
+    const res = await request(errorApp).get("/transaction-timeout");
+
+    assert.equal(res.status, 503, JSON.stringify(res.body));
+    assert.equal(res.body.success, false);
+    assert.equal(res.body.error.code, "SERVICE_UNAVAILABLE");
+    assert.deepEqual(res.body.error.details, { reason: "TRANSACTION_TIMEOUT", retrySameRequest: true });
+    assert.match(res.body.error.message, /same request/i);
+    // Never asserts that nothing was saved, and never leaks Prisma internals.
+    assert.doesNotMatch(res.body.error.message, /rolled back|not saved|nothing was/i);
+    assert.doesNotMatch(JSON.stringify(res.body), /P2028|prisma|Transaction API|expired/i);
+  });
 });
 
 describe("Health regression", () => {

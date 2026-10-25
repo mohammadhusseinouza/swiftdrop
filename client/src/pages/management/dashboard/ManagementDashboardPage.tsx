@@ -29,6 +29,7 @@ import {
 } from '../drivers/driversListParams';
 
 import { MetricTile } from './MetricTile';
+import { SettlementReleasePanel } from '../../../components/finance/SettlementReleasePanel';
 import { FinalizeDayDialog } from './FinalizeDayDialog';
 import { getUtcDay } from '../../../lib/dailyDeliverySummary';
 import {
@@ -604,9 +605,20 @@ export default function ManagementDashboardPage() {
             />
           </div>
           <p className="text-xs text-ink-muted">
-            Approved system-wide summary (all-time). Detailed date-ranged
-            figures, transactions and corrections live in Finance.
+            Approved system-wide summary (all-time). Revenue and credits are on
+            their ledger posting date (released basis) — a settlement-mode order
+            counts once released. Detailed date-ranged figures, transactions and
+            corrections live in Finance.
           </p>
+          {finance.settlementRelease && (
+            <Card flush className="p-4 sm:p-5">
+              <h3 className="mb-3 text-sm font-semibold text-ink">Settlement-based release</h3>
+              <SettlementReleasePanel
+                snapshot={finance.settlementRelease}
+                releasesCompletedToday={finance.settlementRelease.releasesCompletedToday}
+              />
+            </Card>
+          )}
         </section>
       ) : (
         <section aria-labelledby="finance-heading" className="space-y-3">

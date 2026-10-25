@@ -1,4 +1,5 @@
 import { NextFunction, Request, Response } from "express";
+import { Prisma } from "../generated/prisma/client";
 import { AppError } from "../shared/errors/app-error";
 import type { ApiErrorResponse } from "../shared/types/api-response";
 
@@ -35,6 +36,24 @@ export function errorHandler(
       error: {
         code: "VALIDATION_ERROR",
         message: "Malformed JSON in request body",
+      },
+    });
+    return;
+  }
+
+  // An interactive transaction that exceeded its timeout (P2028). The client
+  // cannot know whether it committed, so the response never claims an
+  // outcome: it asks for the SAME request (same Idempotency-Key) to be
+  // retried — every financial endpoint replays a committed result instead of
+  // applying it twice.
+  if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2028") {
+    console.error("[error] transaction timeout (P2028):", err.message);
+    res.status(503).json({
+      success: false,
+      error: {
+        code: "SERVICE_UNAVAILABLE",
+        message: "The operation timed out before it could be confirmed. Retry the same request unchanged — it will not be applied twice.",
+        details: { reason: "TRANSACTION_TIMEOUT", retrySameRequest: true },
       },
     });
     return;

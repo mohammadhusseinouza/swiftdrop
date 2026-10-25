@@ -1,4 +1,5 @@
 import { Prisma } from "../../generated/prisma/client";
+import { PENDING_RELEASE_HOLDS_CASH } from "../financial-release/financial-release.service";
 import { prisma } from "../../db/prisma";
 import { resolveRange, type ResolvedRange } from "../finance/finance-summary.service";
 import type { DriverReportQuery } from "./report.schema";
@@ -96,6 +97,7 @@ export async function getDriverReport(query: DriverReportQuery): Promise<DriverR
     collectionAssignedRows,
     collectionsCompletedRows,
     failedCollectionAttemptRows,
+    attributedRows,
   ] = await Promise.all([
     prisma.order_assignments.groupBy({
       by: ["driver_id"],
@@ -143,6 +145,15 @@ export async function getDriverReport(query: DriverReportQuery): Promise<DriverR
       WHERE driver_id = ANY(${driverIds}::uuid[]) AND outcome = 'FAILED' AND ${collectionAttemptDateClause}
       GROUP BY driver_id
     `,
+    // FR.8 — current attributed cash per driver (same predicate as the
+    // settlement lock path); one grouped query for the whole page.
+    prisma.$queryRaw<{ driver_id: string; attributed: Prisma.Decimal | null; outstanding: number }[]>`
+      SELECT r.driver_id, SUM(r.collection_amount - r.allocated_amount) AS attributed,
+             (COUNT(*) FILTER (WHERE r.allocated_amount < r.collection_amount))::int AS outstanding
+      FROM order_financial_releases r
+      WHERE r.driver_id = ANY(${driverIds}::uuid[]) AND ${PENDING_RELEASE_HOLDS_CASH}
+      GROUP BY r.driver_id
+    `,
   ]);
 
   const assignedById = new Map(assignedRows.map((r) => [r.driver_id, r._count]));
@@ -155,6 +166,7 @@ export async function getDriverReport(query: DriverReportQuery): Promise<DriverR
   const collectionAssignedById = new Map(collectionAssignedRows.map((r) => [r.driver_id, Number(r.count)]));
   const collectionsCompletedById = new Map(collectionsCompletedRows.map((r) => [r.driver_id, Number(r.count)]));
   const failedCollectionAttemptsById = new Map(failedCollectionAttemptRows.map((r) => [r.driver_id, Number(r.count)]));
+  const attributedById = new Map(attributedRows.map((r) => [r.driver_id, r]));
 
   const rows: DriverReportRow[] = drivers.map((driver) => {
     const delivered = deliveredById.get(driver.id) ?? 0;
@@ -189,6 +201,11 @@ export async function getDriverReport(query: DriverReportQuery): Promise<DriverR
       settlementCount: settlement?._count ?? 0,
       settlementAmount: toAmount(settlement?._sum.amount_received?.toString()),
       currentCashHeld: toAmount(cashById.get(driver.id)?.toString()),
+      attributedCashHeld: toAmount(attributedById.get(driver.id)?.attributed?.toString()),
+      unattributedCashHeld: new Prisma.Decimal(cashById.get(driver.id) ?? 0)
+        .minus(attributedById.get(driver.id)?.attributed ?? 0)
+        .toString(),
+      outstandingCollectionCount: attributedById.get(driver.id)?.outstanding ?? 0,
       collectionAssignments: collectionAssignedById.get(driver.id) ?? 0,
       collectionsCompleted: collectionsCompletedById.get(driver.id) ?? 0,
       failedCollectionAttempts: failedCollectionAttemptsById.get(driver.id) ?? 0,

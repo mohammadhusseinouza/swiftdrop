@@ -251,6 +251,12 @@ export interface OrderDetail {
   paymentType: string;
   status: string;
   financialStatus: string;
+  /**
+   * FR.7 — persisted at delivery: null (legacy) | IMMEDIATE | ON_SETTLEMENT.
+   * The release detail itself is the finance.read sub-resource
+   * GET /orders/:id/financial-release.
+   */
+  financialReleaseMode: string | null;
   /** Parcel Intake at-a-glance (Phase 11.17.4). Full domain: parcelCollectionApi. */
   parcelIntakeMethod: ParcelIntakeMethod;
   parcelCollectionStatus: ParcelCollectionStatus;
@@ -663,7 +669,20 @@ export interface CustomerDetail extends CustomerSummary {
   orderSummary: CustomerOrderSummary;
 }
 /** `GET /wallets/customer-summaries` (wallets.read) — one entry per requested id with a wallet. */
-export interface WalletCustomerSummary {
+/**
+ * FR.7 (contract §9) — additive pending breakdown on every Management wallet
+ * DTO. pendingAmount = pendingDeliveryAmount + pendingSettlementAmount.
+ * underReviewCollectionAmount (cash collected on differences awaiting review)
+ * is Management-only and NEVER part of pendingAmount or customer money.
+ */
+export interface WalletPendingBreakdown {
+  pendingDeliveryAmount: string;
+  pendingSettlementAmount: string;
+  underReviewOrderCount: number;
+  underReviewCollectionAmount: string;
+}
+
+export interface WalletCustomerSummary extends WalletPendingBreakdown {
   customerId: string;
   availableBalance: string;
   pendingAmount: string;
@@ -673,7 +692,7 @@ export interface WalletCustomerSummary {
  * GET /wallets/totals (wallets.read) — system-wide available + pending money
  * across ALL customers, same definitions as a single customer's wallet.
  */
-export interface WalletTotals {
+export interface WalletTotals extends WalletPendingBreakdown {
   availableBalance: string;
   pendingAmount: string;
 }
@@ -736,7 +755,20 @@ export interface ManagementDriverCashTotals {
   currentBalance: string;
 }
 /** One row of `GET /finance/driver-cash/:driverId/transactions` (finance.read). */
-export interface ManagementDriverCashTransactionEntry {
+/**
+ * FR.10.1 — read-only correction eligibility on Management ledger LIST rows
+ * (server correction-eligibility.service.ts). Mirrors the generic reversal
+ * guards; the backend stays the final authority.
+ */
+export type CorrectionWorkflow = 'GENERIC' | 'RELEASE_CORRECTION' | 'SETTLEMENT_CORRECTION';
+export interface CorrectionEligibility {
+  correctionWorkflow: CorrectionWorkflow;
+  canReverseGenerically: boolean;
+  /** A reversal (generic or dedicated correction) already references this row. */
+  reversed: boolean;
+}
+
+export interface ManagementDriverCashTransactionEntry extends CorrectionEligibility {
   id: string;
   type: string;
   direction: 'CREDIT' | 'DEBIT';
@@ -784,7 +816,7 @@ export interface DriverParcelCollectionHistoryRow {
 
 /* ============================ Wallets ============================ */
 
-export interface WalletSummary {
+export interface WalletSummary extends WalletPendingBreakdown {
   id: string;
   customer: {
     id: string;
@@ -813,7 +845,7 @@ export interface WalletDetail {
     email: string | null;
     isActive: boolean;
   };
-  wallet: {
+  wallet: WalletPendingBreakdown & {
     id: string;
     availableBalance: string;
     pendingAmount: string;
@@ -821,7 +853,7 @@ export interface WalletDetail {
     updatedAt: string;
   };
 }
-export interface WalletTransactionEntry {
+export interface WalletTransactionEntry extends CorrectionEligibility {
   id: string;
   type: string;
   credit: string;
@@ -872,6 +904,13 @@ export interface SettlementSummary {
   balanceBefore: string;
   amountReceived: string;
   balanceAfter: string;
+  /** FR.4 — all three null on a legacy-format settlement (no allocations). */
+  allocatedTotal: string | null;
+  unattributedAmount: string | null;
+  unattributedReason: string | null;
+  /** FR.7 — reversed by a SETTLEMENT_REVERSAL, and the total recorded shortfall. */
+  reversed: boolean;
+  shortfallTotal: string;
   paymentMethod: PaymentMethodRef;
   receivedBy: { id: string; firstName: string; lastName: string };
   notes: string | null;
@@ -911,8 +950,172 @@ export interface FinanceSummaryDto {
   customerWalletLiability: string;
   customerPayouts: string;
   driverCashOutstanding: string;
+  /** FR.8 — every field above is on ledger posting dates (released basis). */
+  basis: 'RELEASED';
+  /** FR.8 — `current` is a point-in-time snapshot; `activity` is in range. */
+  settlementRelease: { current: SettlementReleaseSnapshot; activity: ReleaseActivity };
+  /** FR.8 — present only when requested with basis=delivered. */
+  deliveryDate: DeliveryDateSummary | null;
 }
-export interface FinanceTransactionEntry {
+
+/* ============== Settlement-based financial release (FR.7 / FR.8) ============== */
+
+/** Reporting basis query value (FR.8): ledger posting dates vs delivery dates. */
+export type ReportingBasis = 'released' | 'delivered';
+
+/**
+ * Mirrors server financial-release-reporting.service.ts. A CURRENT position,
+ * never revenue: money delivered but awaiting settlement, under review, and
+ * how much of the driver cash held is reserved for those collections.
+ */
+export interface SettlementReleaseSnapshot {
+  customerFundsAwaitingSettlement: string;
+  companyDeliveryFeesAwaitingSettlement: string;
+  companyProductRevenueAwaitingSettlement: string;
+  awaitingSettlementOrderCount: number;
+  driverCashHeld: string;
+  attributedDriverCash: string;
+  unattributedDriverCash: string;
+  underReview: {
+    orderCount: number;
+    collectionAmount: string;
+    settlementModeOrderCount: number;
+    settlementModeCollectionAmount: string;
+  };
+}
+
+/** Releases completed (and corrected) within a date range. */
+export interface ReleaseActivity {
+  releasesCompleted: number;
+  releasedCustomerWalletCredits: string;
+  releasedDeliveryFeeRevenue: string;
+  releasedCompanyProductRevenue: string;
+  releasedCollectionAmount: string;
+  releaseReversals: number;
+  collectionVoids: number;
+}
+
+/** Figures keyed by delivery date (posted + still pending release). */
+export interface DeliveryDateFigures {
+  period: string;
+  deliveryFeeRevenue: string;
+  postedDeliveryFeeRevenue: string;
+  pendingDeliveryFeeRevenue: string;
+  companyOrderRevenue: string;
+  postedCompanyOrderRevenue: string;
+  pendingCompanyOrderRevenue: string;
+  customerWalletCredits: string;
+  postedCustomerWalletCredits: string;
+  pendingCustomerWalletCredits: string;
+  underReviewOrderCount: number;
+  underReviewCollectionAmount: string;
+}
+
+/** Category postings with no order (historical anomalies H1/H2) — shown apart. */
+export interface OrderlessCategoryPostings {
+  rowCount: number;
+  deliveryFeeRevenue: string;
+  companyOrderRevenue: string;
+  customerWalletCredits: string;
+}
+
+export interface DeliveryDateSummary {
+  basis: 'DELIVERY_DATE';
+  figures: DeliveryDateFigures;
+  orderlessCategoryPostings: OrderlessCategoryPostings;
+}
+
+export type CollectionSettlementState = 'UNSETTLED' | 'PARTIALLY_SETTLED' | 'FULLY_SETTLED';
+
+/** GET /orders/:id/financial-release (finance.read). */
+export interface OrderFinancialReleaseAllocation {
+  id: string;
+  settlement: { id: string; settlementNumber: string; createdAt: string };
+  amount: string;
+  status: 'ACTIVE' | 'REVERSED';
+  reversedByCorrectionId: string | null;
+  createdAt: string;
+}
+
+export interface OrderFinancialReleaseCorrection {
+  id: string;
+  correctionType: string;
+  reason: string;
+  driverCashReversalTransactionId: string | null;
+  walletReversalTransactionId: string | null;
+  companyProductReversalTransactionId: string | null;
+  companyFeeReversalTransactionId: string | null;
+  createdBy: { id: string; firstName: string; lastName: string };
+  createdAt: string;
+}
+
+export interface OrderFinancialReleaseDetail {
+  id: string;
+  releaseStatus: string;
+  reviewStatus: string;
+  orderType: string;
+  deliveredAt: string;
+  collectionAmount: string;
+  allocatedAmount: string;
+  outstandingAmount: string;
+  settlementState: CollectionSettlementState;
+  plannedCustomerWalletAmount: string | null;
+  plannedCompanyProductAmount: string | null;
+  plannedCompanyFeeAmount: string | null;
+  postedTransactions: {
+    walletTransactionId: string | null;
+    companyProductTransactionId: string | null;
+    companyFeeTransactionId: string | null;
+  };
+  releasedAt: string | null;
+  releasedBy: { id: string; firstName: string; lastName: string } | null;
+  releaseTrigger: 'SETTLEMENT' | 'RESOLUTION' | null;
+  releasedBySettlement: { id: string; settlementNumber: string } | null;
+  collectionReversed: boolean;
+  allocations: OrderFinancialReleaseAllocation[];
+  correction: OrderFinancialReleaseCorrection | null;
+}
+
+/** FR.6 response of void-collection / reverse-release (server ReleaseCorrectionEntry). */
+export interface ReleaseCorrectionEntry {
+  id: string;
+  releaseId: string;
+  orderId: string;
+  correctionType: string;
+  reason: string;
+  driverCashReversalTransactionId: string | null;
+  walletReversalTransactionId: string | null;
+  companyProductReversalTransactionId: string | null;
+  companyFeeReversalTransactionId: string | null;
+  releaseStatus: string;
+  orderFinancialStatus: string;
+  createdBy: { id: string; firstName: string; lastName: string };
+  createdAt: string;
+}
+
+/** FR.6 response of POST /driver-settlements/:id/reverse (server SettlementCorrectionEntry). */
+export interface SettlementCorrectionEntry {
+  id: string;
+  settlementId: string;
+  driverId: string;
+  correctionType: string;
+  amount: string;
+  reason: string;
+  cashTransactionId: string;
+  reversedAllocations: { id: string; releaseId: string; amount: string }[];
+  createdBy: { id: string; firstName: string; lastName: string };
+  createdAt: string;
+}
+
+export interface OrderFinancialReleaseView {
+  orderId: string;
+  financialReleaseMode: string | null;
+  financialStatus: string;
+  /** null for legacy (NULL mode) and IMMEDIATE orders. */
+  release: OrderFinancialReleaseDetail | null;
+}
+
+export interface FinanceTransactionEntry extends CorrectionEligibility {
   id: string;
   ledger: FinanceFeedLedger;
   type: string;
@@ -971,6 +1174,10 @@ export interface DashboardSummary {
     customerWalletLiability: string;
     customerPayouts: string;
     driverCashOutstanding: string;
+    /** FR.8 — the revenue / credit figures above are ledger-posted (released basis). */
+    revenueBasis: 'RELEASED';
+    /** FR.8 — current settlement-based release position (not revenue). */
+    settlementRelease: SettlementReleaseSnapshot & { releasesCompletedToday: number };
   } | null;
   attention: {
     counts: {
@@ -1069,6 +1276,18 @@ export interface OrderReportSummary {
   totalDeliveryFee: string;
   totalExpectedCollection: string;
   totalActualCollection: string;
+  /** FR.8 — delivered orders of this population by release mode / financial status (counts). */
+  financialRelease: OrderReportFinancialReleaseSummary;
+}
+export interface OrderReportFinancialReleaseSummary {
+  legacyMode: number;
+  immediateMode: number;
+  onSettlementMode: number;
+  awaitingSettlement: number;
+  reviewRequired: number;
+  finalized: number;
+  collectionVoided: number;
+  releaseReversed: number;
 }
 export interface OrderReportDateRow {
   period: string;
@@ -1162,6 +1381,10 @@ export interface DriverReportRow {
   settlementCount: number;
   settlementAmount: string;
   currentCashHeld: string;
+  /** FR.8 — current split of currentCashHeld: reserved for outstanding collections vs unattributed. */
+  attributedCashHeld: string;
+  unattributedCashHeld: string;
+  outstandingCollectionCount: number;
   /** Separate Parcel Collection dimensions (Phase 11.17.6) — never merged into the Delivery fields above. */
   collectionAssignments: number;
   collectionsCompleted: number;
@@ -1180,7 +1403,12 @@ export interface CustomerReportRow {
   walletCredits: string;
   walletPayouts: string;
   currentWalletBalance: string;
+  /** pendingDeliveryAmount + pendingSettlementAmount (current snapshot). */
   pendingOrderValue: string;
+  /** FR.8 — current pending breakdown (contract §9). */
+  pendingDeliveryAmount: string;
+  pendingSettlementAmount: string;
+  underReviewOrderCount: number;
 }
 export interface CustomerReportDto {
   report: 'CUSTOMERS';
@@ -1203,6 +1431,11 @@ export interface FinanceReportSummary {
   currentDriverCashOutstanding: string;
   settlementCount: number;
   settlementAmount: string;
+  /** FR.8 — basis of the fields above (ledger posting dates). */
+  basis: 'RELEASED';
+  settlementRelease: { current: SettlementReleaseSnapshot; activity: ReleaseActivity };
+  /** FR.8 — present only when requested with basis=delivered. */
+  deliveryDate: DeliveryDateSummary | null;
 }
 export interface FinanceReportPeriodRow {
   period: string;
@@ -1234,6 +1467,8 @@ export interface FinanceReportDto {
   groupBy: FinanceReportGroupBy;
   summary: FinanceReportSummary;
   rows: FinanceReportPeriodRow[] | FinanceReportCategoryRow[];
+  /** FR.8 — delivery-date rows; null unless basis=delivered with day/week/month. */
+  deliveryDateRows: DeliveryDateFigures[] | null;
 }
 
 /* ============================ Employees ============================ */
@@ -1366,7 +1601,12 @@ export interface RoleConfigResponse {
 export interface CustomerDashboardSummary {
   customer: { name: string; customerNumber: string };
   availableWalletBalance: string;
+  /** pendingDeliveryAmount + pendingSettlementAmount (FR.7). */
   pendingAmount: string;
+  pendingDeliveryAmount: string;
+  pendingSettlementAmount: string;
+  /** A count only — no unapproved amount is ever shown to the customer. */
+  underReviewOrderCount: number;
   activeOrders: number;
   deliveredOrders: number;
 }
@@ -1514,7 +1754,12 @@ export interface CustomerOrderDetail {
 export interface CustomerWalletSummary {
   customer: { name: string; customerNumber: string };
   availableBalance: string;
+  /** pendingDeliveryAmount + pendingSettlementAmount (FR.7). */
   pendingAmount: string;
+  pendingDeliveryAmount: string;
+  pendingSettlementAmount: string;
+  /** A count only — no unapproved amount is ever shown to the customer. */
+  underReviewOrderCount: number;
 }
 
 /**

@@ -9,6 +9,9 @@ import pg from "pg";
 export const BASELINE_MIGRATION = "0_init";
 export const NUMBERING_MIGRATION = "20260922000000_customer_driver_sequential_numbers";
 export const DIRECT_COLLECTIONS_MIGRATION = "20260923000000_payment_method_bypass_driver_cash";
+export const FINANCIAL_RELEASE_MIGRATION = "20261016000000_settlement_financial_release_foundation";
+export const FINANCIAL_RELEASE_SETTING_KEY = "financial_release.settlement_mode_enabled";
+export const HISTORICAL_RECONCILIATION_MIGRATION = "20261025000000_driver_cash_historical_reconciliation_foundation";
 
 /** Hostname / database only — never user, password or query parameters. */
 export function describeTarget(url) {
@@ -92,6 +95,42 @@ const CDC_INDEXES = [
   "company_direct_collections_driver_id_created_at_idx",
 ];
 
+// FR.2 settlement-based financial release (additive). The runtime gate G1 checks the
+// full 48-object list; this is the build-time presence check per migration state.
+const FR_TYPES = ["FinancialReleaseMode", "FinancialReleaseStatus", "FinancialReleaseReviewStatus", "DriverSettlementCorrectionType", "OrderFinancialReleaseCorrectionType"];
+const FR_STATUS_LABELS = ["AWAITING_SETTLEMENT", "COLLECTION_VOIDED", "RELEASE_REVERSED"];
+const FR_TABLES = ["order_financial_releases", "driver_settlement_allocations", "driver_settlement_corrections", "order_financial_release_corrections"];
+const FR_COLUMNS = ["orders.financial_release_mode", "driver_settlements.allocated_total", "driver_settlements.unattributed_amount", "driver_settlements.unattributed_reason"];
+const FR_UNIQUE_INDEXES = [
+  "order_financial_releases_order_id_key",
+  "order_financial_releases_collection_transaction_id_key",
+  "driver_settlement_allocations_settlement_id_release_id_key",
+  "dsc_one_reversal_per_settlement_uq",
+  "order_financial_release_corrections_release_id_key",
+  "driver_settlements_id_driver_id_key",
+];
+
+// FR.12A.3 driver cash historical reconciliation (additive, evidence only).
+const HR_TYPES = [
+  "FinancialLedgerIncidentCause",
+  "DriverCashHistoricalReconciliationKind",
+  "HistoricalReconciliationAccountingTreatment",
+  "HistoricalOwnershipStatus",
+  "HistoricalReconciliationDecisionType",
+];
+const HR_TABLES = ["financial_ledger_incidents", "driver_cash_historical_reconciliations", "driver_cash_historical_reconciliation_decisions"];
+const HR_UNIQUE_INDEXES = [
+  "driver_cash_accounts_id_driver_id_key",
+  "driver_cash_transactions_id_account_id_key",
+  "dchr_root_anchor_uq",
+  "dchr_root_missing_transaction_uq",
+  "dchr_root_source_audit_uq",
+  "dchr_supersedes_reconciliation_id_key",
+  "dchrd_one_outcome_per_reconciliation_uq",
+  "dchrd_revokes_decision_id_key",
+];
+const HR_CONSTRAINTS = ["dchr_evidence_digest_chk", "dchr_ownership_unresolved_chk", "dchrd_independent_reviewer_chk", "dchrd_reconciliation_evidence_fkey"];
+
 /**
  * State-aware checks for the migrations that follow the 0_init baseline.
  *
@@ -109,6 +148,8 @@ export async function migrationStateChecks(client, history) {
   const state = {
     [NUMBERING_MIGRATION]: applied.has(NUMBERING_MIGRATION) ? "applied" : "pending",
     [DIRECT_COLLECTIONS_MIGRATION]: applied.has(DIRECT_COLLECTIONS_MIGRATION) ? "applied" : "pending",
+    [FINANCIAL_RELEASE_MIGRATION]: applied.has(FINANCIAL_RELEASE_MIGRATION) ? "applied" : "pending",
+    [HISTORICAL_RECONCILIATION_MIGRATION]: applied.has(HISTORICAL_RECONCILIATION_MIGRATION) ? "applied" : "pending",
   };
 
   const cdcTable = !!(await val("select to_regclass('public.company_direct_collections')::text"));
@@ -153,6 +194,19 @@ export async function migrationStateChecks(client, history) {
           "select data_type, is_nullable, column_default from information_schema.columns where table_schema='public' and table_name='payment_methods' and column_name='bypass_driver_cash'",
         )
       )[0] ?? null,
+    // settlement-based financial release (FR.2)
+    fr_types: (await rows(`select typname from pg_type where typnamespace='public'::regnamespace and typname in (${FR_TYPES.map((t) => "'" + t + "'").join(",")}) order by 1`)).map((r) => r.typname),
+    fr_status_labels: (await rows(`select e.enumlabel from pg_enum e join pg_type t on t.oid=e.enumtypid where t.typname='OrderFinancialStatus' and e.enumlabel in (${FR_STATUS_LABELS.map((t) => "'" + t + "'").join(",")}) order by 1`)).map((r) => r.enumlabel),
+    fr_tables: (await rows(`select t from unnest(array[${FR_TABLES.map((t) => "'" + t + "'").join(",")}]) t where to_regclass('public.'||t) is not null order by 1`)).map((r) => r.t),
+    fr_columns: (await rows(`select table_name||'.'||column_name c from information_schema.columns where table_schema='public' and table_name||'.'||column_name in (${FR_COLUMNS.map((t) => "'" + t + "'").join(",")}) order by 1`)).map((r) => r.c),
+    fr_unique_indexes: (await rows(`select c.relname from pg_index i join pg_class c on c.oid=i.indexrelid where c.relnamespace='public'::regnamespace and i.indisunique and c.relname in (${FR_UNIQUE_INDEXES.map((t) => "'" + t + "'").join(",")}) order by 1`)).map((r) => r.relname),
+    fr_setting: (await rows(`select jsonb_typeof(value::jsonb) type, value::text value from system_settings where key='${FINANCIAL_RELEASE_SETTING_KEY}'`))[0] ?? null,
+    // driver cash historical reconciliation (FR.12A.3)
+    hr_types: (await rows(`select typname from pg_type where typnamespace='public'::regnamespace and typname in (${HR_TYPES.map((t) => "'" + t + "'").join(",")}) order by 1`)).map((r) => r.typname),
+    hr_tables: (await rows(`select t from unnest(array[${HR_TABLES.map((t) => "'" + t + "'").join(",")}]) t where to_regclass('public.'||t) is not null order by 1`)).map((r) => r.t),
+    hr_unique_indexes: (await rows(`select c.relname from pg_index i join pg_class c on c.oid=i.indexrelid where c.relnamespace='public'::regnamespace and i.indisunique and c.relname in (${HR_UNIQUE_INDEXES.map((t) => "'" + t + "'").join(",")}) order by 1`)).map((r) => r.relname),
+    hr_constraints: (await rows(`select conname from pg_constraint where connamespace='public'::regnamespace and conname in (${HR_CONSTRAINTS.map((t) => "'" + t + "'").join(",")}) order by 1`)).map((r) => r.conname),
+    hr_triggers: await val(`select count(*)::int from pg_trigger t join pg_class c on c.oid=t.tgrelid where not t.tgisinternal and c.relname in (${HR_TABLES.map((t) => "'" + t + "'").join(",")})`),
   };
 
   const problems = [];
@@ -199,6 +253,30 @@ export async function migrationStateChecks(client, history) {
       problems.push("payment_methods.bypass_driver_cash missing or not BOOLEAN NOT NULL DEFAULT false");
   }
 
+  const frPresent = facts.fr_types.length + facts.fr_status_labels.length + facts.fr_tables.length + facts.fr_columns.length + facts.fr_unique_indexes.length + (facts.fr_setting ? 1 : 0);
+  if (state[FINANCIAL_RELEASE_MIGRATION] === "pending") {
+    if (frPresent) problems.push(`financial-release migration pending but ${frPresent} of its objects already exist (partial application — investigate before deploy)`);
+  } else {
+    for (const t of FR_TYPES) if (!facts.fr_types.includes(t)) problems.push(`financial-release migration applied but enum ${t} is missing`);
+    for (const l of FR_STATUS_LABELS) if (!facts.fr_status_labels.includes(l)) problems.push(`financial-release migration applied but OrderFinancialStatus.${l} is missing`);
+    for (const t of FR_TABLES) if (!facts.fr_tables.includes(t)) problems.push(`financial-release migration applied but table ${t} is missing`);
+    for (const c of FR_COLUMNS) if (!facts.fr_columns.includes(c)) problems.push(`financial-release migration applied but column ${c} is missing`);
+    for (const i of FR_UNIQUE_INDEXES) if (!facts.fr_unique_indexes.includes(i)) problems.push(`financial-release migration applied but unique index ${i} is missing`);
+    if (!facts.fr_setting) problems.push(`financial-release migration applied but the ${FINANCIAL_RELEASE_SETTING_KEY} setting row is missing`);
+    else if (facts.fr_setting.type !== "boolean") problems.push(`${FINANCIAL_RELEASE_SETTING_KEY} is not a JSON boolean`);
+  }
+
+  const hrPresent = facts.hr_types.length + facts.hr_tables.length + facts.hr_unique_indexes.length + facts.hr_constraints.length;
+  if (state[HISTORICAL_RECONCILIATION_MIGRATION] === "pending") {
+    if (hrPresent) problems.push(`historical-reconciliation migration pending but ${hrPresent} of its objects already exist (partial application — investigate before deploy)`);
+  } else {
+    for (const t of HR_TYPES) if (!facts.hr_types.includes(t)) problems.push(`historical-reconciliation migration applied but enum ${t} is missing`);
+    for (const t of HR_TABLES) if (!facts.hr_tables.includes(t)) problems.push(`historical-reconciliation migration applied but table ${t} is missing`);
+    for (const i of HR_UNIQUE_INDEXES) if (!facts.hr_unique_indexes.includes(i)) problems.push(`historical-reconciliation migration applied but unique index ${i} is missing`);
+    for (const c of HR_CONSTRAINTS) if (!facts.hr_constraints.includes(c)) problems.push(`historical-reconciliation migration applied but constraint ${c} is missing`);
+    if (facts.hr_triggers) problems.push(`historical-reconciliation tables carry ${facts.hr_triggers} trigger(s); none are expected`);
+  }
+
   return { state, facts, problems };
 }
 
@@ -215,6 +293,9 @@ export function summarizeFacts(f) {
     cdc_constraints: f.cdc_constraints.length,
     cdc_indexes: f.cdc_indexes.length,
     bypass_driver_cash: f.bypass_driver_cash_column ? "present" : "absent",
+    fr_objects: `${f.fr_types.length}/${FR_TYPES.length} enums, ${f.fr_status_labels.length}/${FR_STATUS_LABELS.length} labels, ${f.fr_tables.length}/${FR_TABLES.length} tables, ${f.fr_columns.length}/${FR_COLUMNS.length} columns, ${f.fr_unique_indexes.length}/${FR_UNIQUE_INDEXES.length} unique indexes`,
+    fr_activation: f.fr_setting ? f.fr_setting.value : "absent",
+    hr_objects: `${f.hr_types.length}/${HR_TYPES.length} enums, ${f.hr_tables.length}/${HR_TABLES.length} tables, ${f.hr_unique_indexes.length}/${HR_UNIQUE_INDEXES.length} unique indexes, ${f.hr_constraints.length}/${HR_CONSTRAINTS.length} constraints`,
   };
 }
 

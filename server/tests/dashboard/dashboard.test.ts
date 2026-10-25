@@ -14,6 +14,7 @@ import {
   cleanupTestCustomerRecord,
   cleanupTestDriverRecord,
   cleanupTestOrder,
+  cleanupTestCompanyTransactions,
   cleanupTestUser,
   createTestArea,
   createTestUser,
@@ -103,6 +104,9 @@ describe("Management Dashboard API (Phase 9.1)", () => {
     for (const id of createdDriverIds) await cleanupTestDriverRecord(id);
     for (const id of createdCustomerIds) await cleanupTestCustomerRecord(id);
     for (const id of createdAreaIds) await cleanupTestArea(id);
+    await cleanupTestCompanyTransactions({
+      createdByIds: [...createdUserIds, ...[admin, dispatcher, finance, driverActor, customerActor].map((u) => u.id)],
+    });
     for (const id of createdUserIds) await cleanupTestUser(id);
     await Promise.all([admin, dispatcher, finance, driverActor, customerActor].map((u) => cleanupTestUser(u.id)));
   });

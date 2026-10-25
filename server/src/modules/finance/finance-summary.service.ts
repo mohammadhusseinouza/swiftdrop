@@ -1,8 +1,11 @@
 import { Prisma } from "../../generated/prisma/client";
 import { prisma } from "../../db/prisma";
+import { readSnapshot } from "../../db/read-snapshot";
+import { getDeliveryDateSummary, getReleaseActivity, getSettlementReleaseSnapshot } from "../financial-release/financial-release-reporting.service";
 import { nextUtcDay, parseUtcCalendarDate } from "../../shared/date/day-boundary";
-import type { FinanceDateRangeQuery } from "./finance-read.schema";
-import type { FinanceSummaryDto } from "./finance-read.types";
+import type { FinanceSummaryQuery } from "./finance-read.schema";
+import type { DriverCashOutstandingComponents, FinanceSummaryDto } from "./finance-read.types";
+import { getApprovedHistoricalReconciliationAsOf } from "../historical-reconciliation/historical-reconciliation.service";
 
 // ============================================================
 // GET /api/v1/finance/summary (Phase 9.2)
@@ -232,7 +235,46 @@ export async function getDriverCashOutstandingSnapshot(endExclusive?: Date): Pro
   return toDecimalString(rows[0]?.total);
 }
 
-export async function getFinanceSummary(query: FinanceDateRangeQuery): Promise<FinanceSummaryDto> {
+// FR.12A.4 — the labelled components behind driverCashOutstanding. The
+// approved historical reconciliation counts only APPROVED, currently valid
+// records whose evidence time (the cited audit's stored created_at) is before
+// the range end; it explains a deleted ledger row and is never a collection.
+async function getDriverCashOutstandingComponents(endExclusive?: Date): Promise<DriverCashOutstandingComponents> {
+  const [ledger, approved] = await Promise.all([
+    endExclusive
+      ? prisma.$queryRaw<NetSumRow[]>`
+          SELECT COALESCE(SUM(balance_after - balance_before), 0)::text AS total
+          FROM driver_cash_transactions
+          WHERE created_at < ${endExclusive}
+        `
+      : prisma.$queryRaw<NetSumRow[]>`
+          SELECT COALESCE(SUM(balance_after - balance_before), 0)::text AS total FROM driver_cash_transactions
+        `,
+    getApprovedHistoricalReconciliationAsOf(prisma, endExclusive),
+  ]);
+  const ledgerNet = new Prisma.Decimal(ledger[0]?.total ?? "0");
+  return {
+    basis: endExclusive ? "LEDGER_AS_OF" : "CURRENT_BALANCE",
+    ledgerNet: toDecimalString(ledgerNet.toString()),
+    approvedHistoricalReconciliation: toDecimalString(approved.toString()),
+    explainedLedgerTotal: toDecimalString(ledgerNet.plus(approved).toString()),
+  };
+}
+
+// FR.8 — the settlement-release figures (and, on request, the delivery-
+// date basis) are read together in one snapshot so they agree.
+async function getSettlementReleaseFigures(range: ResolvedRange, withDeliveryDate: boolean) {
+  return readSnapshot(async (tx) => {
+    const [current, activity, deliveryDate] = await Promise.all([
+      getSettlementReleaseSnapshot(tx),
+      getReleaseActivity(tx, range),
+      withDeliveryDate ? getDeliveryDateSummary(tx, range) : Promise.resolve(null),
+    ]);
+    return { current, activity, deliveryDate };
+  });
+}
+
+export async function getFinanceSummary(query: FinanceSummaryQuery): Promise<FinanceSummaryDto> {
   const range = resolveRange(query);
 
   const [
@@ -243,6 +285,8 @@ export async function getFinanceSummary(query: FinanceDateRangeQuery): Promise<F
     customerPayouts,
     customerWalletLiability,
     driverCashOutstanding,
+    driverCashOutstandingComponents,
+    releaseFigures,
   ] = await Promise.all([
     getCompanyRevenueFlow(range),
     getNetCompanyCategoryFlow("DELIVERY_FEE_REVENUE", range),
@@ -251,10 +295,13 @@ export async function getFinanceSummary(query: FinanceDateRangeQuery): Promise<F
     getNetPayoutFlow(range),
     getWalletLiabilitySnapshot(range.endExclusive),
     getDriverCashOutstandingSnapshot(range.endExclusive),
+    getDriverCashOutstandingComponents(range.endExclusive),
+    getSettlementReleaseFigures(range, query.basis === "delivered"),
   ]);
 
   return {
     range: { from: query.from ?? null, to: query.to ?? null },
+    basis: "RELEASED",
     companyRevenue,
     deliveryFeeRevenue,
     companyOrderRevenue,
@@ -264,5 +311,8 @@ export async function getFinanceSummary(query: FinanceDateRangeQuery): Promise<F
     customerWalletLiability,
     customerPayouts,
     driverCashOutstanding,
+    driverCashOutstandingComponents,
+    settlementRelease: { current: releaseFigures.current, activity: releaseFigures.activity },
+    deliveryDate: releaseFigures.deliveryDate,
   };
 }

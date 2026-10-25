@@ -12,6 +12,7 @@ import {
   cleanupTestCustomerRecord,
   cleanupTestDriverRecord,
   cleanupTestOrder,
+  cleanupTestCompanyTransactions,
   cleanupTestUser,
   createTestArea,
   createTestUser,
@@ -98,6 +99,9 @@ describe("Financial Engine Integration (Phase 8.10)", () => {
     for (const id of createdDriverIds) await cleanupTestDriverRecord(id);
     for (const id of createdCustomerIds) await cleanupTestCustomerRecord(id);
     for (const id of createdAreaIds) await cleanupTestArea(id);
+    await cleanupTestCompanyTransactions({
+      createdByIds: [...createdUserIds, ...[admin, finance, dispatcher, driverActor, customerActor].map((u) => u.id)],
+    });
     for (const id of createdUserIds) await cleanupTestUser(id);
     await Promise.all([admin, finance, dispatcher, driverActor, customerActor].map((u) => cleanupTestUser(u.id)));
   });

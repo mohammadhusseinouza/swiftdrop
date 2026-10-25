@@ -341,6 +341,84 @@ describe("Orders list backend (Phase 6.3 — List / Search / Filters / Paginatio
       assert.ok(res.body.data.every((o: { financialStatus: string }) => o.financialStatus === "REVIEW_REQUIRED"));
     });
 
+    // FR.10 closure — the filter accepts every stored OrderFinancialStatus,
+    // including the three settlement-release statuses.
+    const ALL_FINANCIAL_STATUSES = [
+      "PENDING",
+      "FINALIZED",
+      "REVIEW_REQUIRED",
+      "NOT_APPLICABLE",
+      "AWAITING_SETTLEMENT",
+      "COLLECTION_VOIDED",
+      "RELEASE_REVERSED",
+    ] as const;
+
+    test("28a. every financial status filters exactly (incl. AWAITING_SETTLEMENT / COLLECTION_VOIDED / RELEASE_REVERSED)", async () => {
+      const marker = `fr10fin${uniqueSuffix()}`;
+      const ids: Record<string, string> = {};
+      for (const s of ALL_FINANCIAL_STATUSES) ids[s] = await seedOrder({ financialStatus: s, receiverName: marker });
+
+      for (const s of ALL_FINANCIAL_STATUSES) {
+        const res = await request(app).get(`/api/v1/orders?search=${marker}&financialStatus=${s}`).set(auth(tokens.admin));
+        assert.equal(res.status, 200, `${s}: ${JSON.stringify(res.body)}`);
+        assert.deepEqual(res.body.data.map((o: { id: string }) => o.id), [ids[s]], `${s} returns only its order`);
+        assert.equal(res.body.data[0].financialStatus, s);
+        assert.equal(res.body.meta.total, 1);
+      }
+      // Without the filter every seeded order is returned.
+      const all = await request(app).get(`/api/v1/orders?search=${marker}&limit=100`).set(auth(tokens.admin));
+      assert.equal(all.body.meta.total, ALL_FINANCIAL_STATUSES.length);
+    });
+
+    test("28b. new statuses compose with pagination, sorting and other filters; reads change nothing", async () => {
+      const marker = `fr10pg${uniqueSuffix()}`;
+      const base = Date.now();
+      const awaiting: string[] = [];
+      for (let i = 0; i < 3; i++) {
+        awaiting.push(await seedOrder({ financialStatus: "AWAITING_SETTLEMENT", receiverName: marker, createdAt: new Date(base - (3 - i) * 1000) }));
+      }
+      await seedOrder({ financialStatus: "FINALIZED", receiverName: marker });
+      const companyAwaiting = await seedOrder({ financialStatus: "AWAITING_SETTLEMENT", orderType: "COMPANY_ORDER", receiverName: marker });
+      const before = await prisma.orders.findMany({ where: { receiver_name: marker }, select: { id: true, financial_status: true, updated_at: true } });
+
+      // Pagination (default newest-first) over the filtered set.
+      const p1 = await request(app).get(`/api/v1/orders?search=${marker}&financialStatus=AWAITING_SETTLEMENT&orderType=DELIVERY_ONLY&limit=2&page=1`).set(auth(tokens.admin));
+      const p2 = await request(app).get(`/api/v1/orders?search=${marker}&financialStatus=AWAITING_SETTLEMENT&orderType=DELIVERY_ONLY&limit=2&page=2`).set(auth(tokens.admin));
+      assert.equal(p1.status, 200);
+      assert.equal(p1.body.meta.total, 3);
+      assert.equal(p1.body.meta.totalPages, 2);
+      const paged = [...p1.body.data, ...p2.body.data].map((o: { id: string }) => o.id);
+      assert.deepEqual(paged, [...awaiting].reverse(), "newest first across pages, no duplicates, no gaps");
+
+      // Explicit sort.
+      const asc = await request(app).get(`/api/v1/orders?search=${marker}&financialStatus=AWAITING_SETTLEMENT&orderType=DELIVERY_ONLY&sortBy=createdAt&sortOrder=asc`).set(auth(tokens.admin));
+      assert.equal(asc.status, 200, JSON.stringify(asc.body));
+      assert.deepEqual(asc.body.data.map((o: { id: string }) => o.id), awaiting);
+
+      // Combined with orderType and customerId.
+      const company = await request(app).get(`/api/v1/orders?search=${marker}&financialStatus=AWAITING_SETTLEMENT&orderType=COMPANY_ORDER&customerId=${customerA}`).set(auth(tokens.admin));
+      assert.deepEqual(company.body.data.map((o: { id: string }) => o.id), [companyAwaiting]);
+      const otherCustomer = await request(app).get(`/api/v1/orders?search=${marker}&financialStatus=AWAITING_SETTLEMENT&customerId=${customerB}`).set(auth(tokens.admin));
+      assert.equal(otherCustomer.body.meta.total, 0);
+
+      const after = await prisma.orders.findMany({ where: { receiver_name: marker }, select: { id: true, financial_status: true, updated_at: true } });
+      const key = (rows: typeof before) => JSON.stringify([...rows].sort((a, b) => a.id.localeCompare(b.id)));
+      assert.equal(key(after), key(before), "a filtered read never modifies orders");
+    });
+
+    test("28c. authorization unchanged for the new statuses", async () => {
+      const res = await request(app).get("/api/v1/orders?financialStatus=AWAITING_SETTLEMENT");
+      assert.equal(res.status, 401);
+      for (const role of ["driver", "customer"] as const) {
+        const r = await request(app).get("/api/v1/orders?financialStatus=RELEASE_REVERSED").set(auth(tokens[role]));
+        assert.equal(r.status, 403, role);
+      }
+      for (const role of ["admin", "dispatcher", "finance"] as const) {
+        const r = await request(app).get("/api/v1/orders?financialStatus=COLLECTION_VOIDED").set(auth(tokens[role]));
+        assert.equal(r.status, 200, role);
+      }
+    });
+
     test("29. customerId filter", async () => {
       const marker = `ph63cust${uniqueSuffix()}`;
       const id = await seedTestOrder(customerB, admin.id, { areaId: areaA.id, areaName: areaA.name, receiverName: marker });
@@ -579,6 +657,10 @@ describe("Orders list backend (Phase 6.3 — List / Search / Filters / Paginatio
         "orderType=NOT_A_TYPE",
         "paymentType=NOT_A_PAYMENT_TYPE",
         "financialStatus=NOT_A_FINANCIAL_STATUS",
+        // Near-misses of real values stay rejected (case-sensitive, exact).
+        "financialStatus=awaiting_settlement",
+        "financialStatus=DELIVERED",
+        "financialStatus=",
       ]) {
         const res = await request(app).get(`/api/v1/orders?${qs}`).set(auth(tokens.admin));
         assert.equal(res.status, 400, `expected ${qs} to be rejected`);

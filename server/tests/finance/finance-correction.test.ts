@@ -14,6 +14,7 @@ import {
   cleanupTestCustomerRecord,
   cleanupTestDriverRecord,
   cleanupTestOrder,
+  cleanupTestCompanyTransactions,
   cleanupTestUser,
   createTestArea,
   createTestUser,
@@ -44,6 +45,8 @@ describe("Driver Cash + Company Finance Corrections (Phase 8.8)", () => {
 
   const createdDriverIds: string[] = [];
   const createdUserIds: string[] = [];
+  // Company rows inserted directly with no creator (test 44's corrupt row).
+  const createdCompanyTransactionIds: string[] = [];
   const createdCustomerIds: string[] = [];
   const createdOrderIds: string[] = [];
   const createdAreaIds: string[] = [];
@@ -82,6 +85,10 @@ describe("Driver Cash + Company Finance Corrections (Phase 8.8)", () => {
     for (const id of createdDriverIds) await cleanupTestDriverRecord(id);
     for (const id of createdCustomerIds) await cleanupTestCustomerRecord(id);
     for (const id of createdAreaIds) await cleanupTestArea(id);
+    await cleanupTestCompanyTransactions({
+      createdByIds: [...createdUserIds, ...[admin, dispatcher, finance, customerActor].map((u) => u.id)],
+      ids: createdCompanyTransactionIds,
+    });
     for (const id of createdUserIds) await cleanupTestUser(id);
     await Promise.all([admin, dispatcher, finance, customerActor].map((u) => cleanupTestUser(u.id)));
   });
@@ -528,6 +535,7 @@ describe("Driver Cash + Company Finance Corrections (Phase 8.8)", () => {
       const corrupt = await prisma.company_financial_transactions.create({
         data: { type: "DELIVERY_FEE_REVENUE", amount: new Prisma.Decimal("-5.00") },
       });
+      createdCompanyTransactionIds.push(corrupt.id);
       const res = await postReverseCompany(tokens.admin, corrupt.id, { reason: "attempt on corrupt revenue row" });
       assert.equal(res.status, 500, JSON.stringify(res.body));
       const reversalCount = await prisma.company_financial_transactions.count({ where: { reversal_of_id: corrupt.id } });

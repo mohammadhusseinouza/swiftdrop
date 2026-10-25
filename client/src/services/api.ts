@@ -167,6 +167,8 @@ export const API_TAG_TYPES = [
   'FuelSettings',
   'ExpenseDriver',
   'DailyExpense',
+  // Driver cash historical reconciliation (FR.12A.6, ADMIN / FINANCE by role).
+  'HistoricalReconciliation',
   'DriverExpenseReport',
 ] as const;
 

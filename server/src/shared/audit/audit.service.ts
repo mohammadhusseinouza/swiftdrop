@@ -44,3 +44,20 @@ export async function createAuditLog(tx: Prisma.TransactionClient, input: Create
     },
   });
 }
+
+// Several audit rows in ONE INSERT (FR.11A — a settlement releasing many
+// collections). Same rows, same transaction semantics as createAuditLog.
+export async function createAuditLogs(tx: Prisma.TransactionClient, inputs: CreateAuditLogInput[]): Promise<void> {
+  if (inputs.length === 0) return;
+  await tx.audit_logs.createMany({
+    data: inputs.map((input) => ({
+      actor_user_id: input.actorUserId,
+      action: input.action,
+      entity_type: input.entityType,
+      entity_id: input.entityId,
+      previous_values: input.previousValues,
+      new_values: input.newValues,
+      metadata: input.metadata,
+    })),
+  });
+}

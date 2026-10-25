@@ -1,3 +1,5 @@
+import { getOrderFinancialRelease } from "../financial-release/financial-release-read.service";
+import type { OrderFinancialReleaseView } from "../financial-release/financial-release.types";
 import { RequestHandler } from "express";
 import { AppError } from "../../shared/errors/app-error";
 import {
@@ -264,6 +266,21 @@ export const listOrdersController: RequestHandler<
       data: items,
       meta: { page: query.page, limit: query.limit, total, totalPages },
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// FR.7 — GET /orders/:id/financial-release (finance.read). Settlement-based
+// release detail; `release` is null for legacy / immediate orders.
+export const getOrderFinancialReleaseController: RequestHandler<{ id: string }, ApiSuccessResponse<OrderFinancialReleaseView>> = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const data = await getOrderFinancialRelease(req.params.id);
+    res.json({ success: true, data });
   } catch (error) {
     next(error);
   }

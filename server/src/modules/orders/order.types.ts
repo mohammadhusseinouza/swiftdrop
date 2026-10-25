@@ -154,6 +154,9 @@ export interface OrderDetail {
   paymentType: string;
   status: string;
   financialStatus: string;
+  // FR.7 — persisted at delivery: null (legacy) | IMMEDIATE | ON_SETTLEMENT.
+  // The release detail itself is GET /orders/:id/financial-release.
+  financialReleaseMode: string | null;
 
   // Parcel Intake (Phase 11.17.4) — a coherent-at-a-glance summary. The full
   // Parcel Collection domain (snapshot, assignment/attempt history, receipt

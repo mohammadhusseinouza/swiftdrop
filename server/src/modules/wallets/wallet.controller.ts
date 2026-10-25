@@ -16,7 +16,7 @@ import type {
   WalletDetail,
   WalletSummary,
   WalletTotals,
-  WalletTransactionEntry,
+  WalletLedgerEntry,
 } from "./wallet.types";
 import type { ApiListResponse, ApiSuccessResponse } from "../../shared/types/api-response";
 
@@ -82,7 +82,7 @@ export const getWalletDetailController: RequestHandler<{ customerId: string }, A
 
 export const listWalletTransactionsController: RequestHandler<
   { customerId: string },
-  ApiListResponse<WalletTransactionEntry>
+  ApiListResponse<WalletLedgerEntry>
 > = async (req, res, next) => {
   try {
     const query = req.query as unknown as ListWalletTransactionsQuery;

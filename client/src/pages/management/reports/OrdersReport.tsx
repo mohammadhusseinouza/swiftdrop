@@ -261,6 +261,23 @@ export function OrdersReport() {
         )}
       </ReportSection>
 
+      {/* FR.10 — delivered orders of this population by release mode and
+          financial status (counts only, from the backend). */}
+      {data?.summary.financialRelease && (
+        <ReportSection title="Financial release (delivered orders)">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <MetricTile label="Legacy (immediate)" value={num(data.summary.financialRelease.legacyMode)} />
+            <MetricTile label="Immediate" value={num(data.summary.financialRelease.immediateMode)} />
+            <MetricTile label="On settlement" value={num(data.summary.financialRelease.onSettlementMode)} />
+            <MetricTile label="Awaiting settlement" value={num(data.summary.financialRelease.awaitingSettlement)} />
+            <MetricTile label="Review required" value={num(data.summary.financialRelease.reviewRequired)} />
+            <MetricTile label="Finalized" value={num(data.summary.financialRelease.finalized)} />
+            <MetricTile label="Collection voided" value={num(data.summary.financialRelease.collectionVoided)} />
+            <MetricTile label="Release reversed" value={num(data.summary.financialRelease.releaseReversed)} />
+          </div>
+        </ReportSection>
+      )}
+
       {/* grouped results */}
       <ReportSection title={GROUP_BY_LABEL[state.groupBy]}>
         <ReportResult

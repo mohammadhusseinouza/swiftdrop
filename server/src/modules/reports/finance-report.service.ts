@@ -1,5 +1,12 @@
 import { Prisma } from "../../generated/prisma/client";
 import { prisma } from "../../db/prisma";
+import { readSnapshot } from "../../db/read-snapshot";
+import {
+  getDeliveryDateFigures,
+  getDeliveryDateSummary,
+  getReleaseActivity,
+  getSettlementReleaseSnapshot,
+} from "../financial-release/financial-release-reporting.service";
 import { parseUtcCalendarDate } from "../../shared/date/day-boundary";
 import {
   getCompanyRevenueFlow,
@@ -46,7 +53,7 @@ async function getSettlementAggregate(range: ResolvedRange): Promise<{ count: nu
   return { count: agg._count, amount: toAmount(agg._sum.amount_received) };
 }
 
-async function getSummary(range: ResolvedRange): Promise<FinanceReportSummary> {
+async function getSummary(range: ResolvedRange, withDeliveryDate: boolean): Promise<FinanceReportSummary> {
   const [companyRevenue, deliveryFeeRevenue, companyOrderRevenue, collected, customerPayouts, walletLiability, driverCashOutstanding, settlement] =
     await Promise.all([
       getCompanyRevenueFlow(range),
@@ -61,6 +68,15 @@ async function getSummary(range: ResolvedRange): Promise<FinanceReportSummary> {
       getDriverCashOutstandingSnapshot(undefined),
       getSettlementAggregate(range),
     ]);
+  // FR.8 — read together in one snapshot so they agree.
+  const release = await readSnapshot(async (tx) => {
+    const [current, activity, deliveryDate] = await Promise.all([
+      getSettlementReleaseSnapshot(tx),
+      getReleaseActivity(tx, range),
+      withDeliveryDate ? getDeliveryDateSummary(tx, range) : Promise.resolve(null),
+    ]);
+    return { current, activity, deliveryDate };
+  });
 
   return {
     companyRevenue,
@@ -74,6 +90,9 @@ async function getSummary(range: ResolvedRange): Promise<FinanceReportSummary> {
     currentDriverCashOutstanding: driverCashOutstanding,
     settlementCount: settlement.count,
     settlementAmount: settlement.amount,
+    basis: "RELEASED",
+    settlementRelease: { current: release.current, activity: release.activity },
+    deliveryDate: release.deliveryDate,
   };
 }
 
@@ -185,9 +204,12 @@ async function getCategoryRows(range: ResolvedRange): Promise<FinanceReportCateg
 export async function getFinanceReport(query: FinanceReportQuery): Promise<FinanceReportDto> {
   const range = resolveRange(query);
 
-  const [summary, rows] = await Promise.all([
-    getSummary(range),
+  const delivered = query.basis === "delivered";
+  const bucket = query.groupBy === "category" ? null : query.groupBy;
+  const [summary, rows, deliveryDateRows] = await Promise.all([
+    getSummary(range, delivered),
     query.groupBy === "category" ? getCategoryRows(range) : getPeriodRows(query.groupBy, range),
+    delivered && bucket ? readSnapshot((tx) => getDeliveryDateFigures(tx, range, bucket)) : Promise.resolve(null),
   ]);
 
   return {
@@ -196,5 +218,6 @@ export async function getFinanceReport(query: FinanceReportQuery): Promise<Finan
     groupBy: query.groupBy,
     summary,
     rows,
+    deliveryDateRows,
   };
 }

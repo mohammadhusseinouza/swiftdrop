@@ -13,6 +13,23 @@ export const FinanceDateRangeQuerySchema = z
 
 export type FinanceDateRangeQuery = z.infer<typeof FinanceDateRangeQuerySchema>;
 
+// FR.8 — reporting basis. "released" (default) = ledger posting dates, the
+// existing meaning of every summary field; "delivered" ADDS a delivery-date
+// block (contract §12). Never changes an existing field's meaning.
+export const ReportingBasisSchema = z.enum(["released", "delivered"]);
+export type ReportingBasis = z.infer<typeof ReportingBasisSchema>;
+
+// GET /api/v1/finance/summary
+export const FinanceSummaryQuerySchema = z
+  .object({
+    from: dateOnlySchema.optional(),
+    to: dateOnlySchema.optional(),
+    basis: ReportingBasisSchema.optional().default("released"),
+  })
+  .refine(fromNotAfterTo, { message: "from must be on or before to", path: ["to"] });
+
+export type FinanceSummaryQuery = z.infer<typeof FinanceSummaryQuerySchema>;
+
 // The real transaction-type strings that exist across the three ledger
 // enums (prisma/schema.prisma: WalletTransactionType, DriverCashTransactionType,
 // CompanyFinancialTransactionType) — kept here as plain string literals

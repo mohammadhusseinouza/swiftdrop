@@ -1,4 +1,10 @@
 import { Prisma } from "../../generated/prisma/client";
+import {
+  companyCorrectionEligibility,
+  driverCashCorrectionEligibility,
+  walletCorrectionEligibility,
+  type CorrectionEligibility,
+} from "./correction-eligibility.service";
 import { prisma } from "../../db/prisma";
 import { AppError } from "../../shared/errors/app-error";
 import { nextUtcDay, parseUtcCalendarDate } from "../../shared/date/day-boundary";
@@ -157,7 +163,7 @@ function integrityError(ledger: LedgerName, id: string, detail: string): AppErro
 }
 
 // Wallet direction: separate credit/debit columns, exactly one positive.
-function toWalletEntry(row: WalletRow): FinanceTransactionEntry {
+function toWalletEntry(row: WalletRow): FeedEntryBase {
   const creditPositive = row.credit.greaterThan(0);
   const debitPositive = row.debit.greaterThan(0);
   if (creditPositive === debitPositive) {
@@ -194,7 +200,7 @@ function toWalletEntry(row: WalletRow): FinanceTransactionEntry {
 // Driver Cash direction: derived from balance_after - balance_before (the
 // stored `amount` is always a positive magnitude — never trust an enum-type
 // assumption for direction, per the approved Phase 8.1 convention).
-function toDriverCashEntry(row: DriverCashRow): FinanceTransactionEntry {
+function toDriverCashEntry(row: DriverCashRow): FeedEntryBase {
   const delta = row.balance_after.minus(row.balance_before);
   if (delta.isZero()) {
     throw integrityError("DRIVER_CASH", row.id, "zero balance delta");
@@ -233,7 +239,7 @@ function toDriverCashEntry(row: DriverCashRow): FinanceTransactionEntry {
 // Company Finance direction: amount is SIGNED (positive = CREDIT/revenue,
 // negative = DEBIT) — the DTO's `amount` field is the absolute magnitude,
 // `signedAmount` preserves the sign.
-function toCompanyEntry(row: CompanyRow): FinanceTransactionEntry {
+function toCompanyEntry(row: CompanyRow): FeedEntryBase {
   if (row.amount.isZero()) {
     throw integrityError("COMPANY_FINANCE", row.id, "zero amount");
   }
@@ -266,7 +272,7 @@ function toCompanyEntry(row: CompanyRow): FinanceTransactionEntry {
 // received directly by the company. It is a COLLECTION record, not revenue
 // (the delivery's revenue rows are separate COMPANY_FINANCE entries) and not
 // Driver Cash (no running balance -> balanceBefore/After null).
-function toDirectCollectionEntry(row: DirectCollectionRow): FinanceTransactionEntry {
+function toDirectCollectionEntry(row: DirectCollectionRow): FeedEntryBase {
   if (!row.amount.greaterThan(0)) {
     throw integrityError("DIRECT_COMPANY_COLLECTION", row.id, "non-positive amount");
   }
@@ -295,6 +301,11 @@ function toDirectCollectionEntry(row: DirectCollectionRow): FinanceTransactionEn
   };
 }
 
+// A feed row before its correction eligibility is attached (FR.10.1).
+type FeedEntryBase = Omit<FinanceTransactionEntry, keyof CorrectionEligibility>;
+
+const NOT_REVERSIBLE: CorrectionEligibility = { correctionWorkflow: "GENERIC", canReverseGenerically: false, reversed: false };
+
 async function hydrateTransactionRows(db: Prisma.TransactionClient, rows: UnifiedRow[]): Promise<FinanceTransactionEntry[]> {
   const walletIds = rows.filter((r) => r.ledger === "WALLET").map((r) => r.id);
   const driverCashIds = rows.filter((r) => r.ledger === "DRIVER_CASH").map((r) => r.id);
@@ -319,27 +330,41 @@ async function hydrateTransactionRows(db: Prisma.TransactionClient, rows: Unifie
   const companyById = new Map(companyRows.map((r) => [r.id, r]));
   const directById = new Map(directRows.map((r) => [r.id, r]));
 
+  // FR.10.1 — correction eligibility, batched per ledger in the same snapshot.
+  const [walletElig, driverCashElig, companyElig] = await Promise.all([
+    walletCorrectionEligibility(
+      walletRows.map((r) => ({ id: r.id, type: r.type, payoutStatus: r.customer_payouts?.status ?? null })),
+      db
+    ),
+    driverCashCorrectionEligibility(
+      driverCashRows.map((r) => ({ id: r.id, type: r.type, settlementId: r.driver_settlements?.id ?? null })),
+      db
+    ),
+    companyCorrectionEligibility(companyRows.map((r) => ({ id: r.id, type: r.type })), db),
+  ]);
+
   // Re-zip into the Phase-1 global order — the ONLY correct order (never
   // re-sorted by anything else here).
   return rows.map((row) => {
     if (row.ledger === "WALLET") {
       const full = walletById.get(row.id);
       if (!full) throw integrityError(row.ledger, row.id, "missing on hydration");
-      return toWalletEntry(full);
+      return { ...toWalletEntry(full), ...(walletElig.get(row.id) as CorrectionEligibility) };
     }
     if (row.ledger === "DRIVER_CASH") {
       const full = driverCashById.get(row.id);
       if (!full) throw integrityError(row.ledger, row.id, "missing on hydration");
-      return toDriverCashEntry(full);
+      return { ...toDriverCashEntry(full), ...(driverCashElig.get(row.id) as CorrectionEligibility) };
     }
     if (row.ledger === "DIRECT_COMPANY_COLLECTION") {
       const full = directById.get(row.id);
       if (!full) throw integrityError(row.ledger, row.id, "missing on hydration");
-      return toDirectCollectionEntry(full);
+      // Direct company collections have no reversal endpoint at all.
+      return { ...toDirectCollectionEntry(full), ...NOT_REVERSIBLE };
     }
     const full = companyById.get(row.id);
     if (!full) throw integrityError(row.ledger, row.id, "missing on hydration");
-    return toCompanyEntry(full);
+    return { ...toCompanyEntry(full), ...(companyElig.get(row.id) as CorrectionEligibility) };
   });
 }
 

@@ -13,12 +13,14 @@ import type {
   users,
 } from "../../generated/prisma/client";
 import { prisma } from "../../db/prisma";
+import { readSnapshot } from "../../db/read-snapshot";
 import { AppError } from "../../shared/errors/app-error";
 import { nextUtcDay, parseUtcCalendarDate } from "../../shared/date/day-boundary";
 import { calculateCollectionDifference, calculateOrderFinancials, validatePaymentTypeConsistency } from "./order-financial.service";
 import { creditWalletForOrder } from "../wallets/wallet-ledger.service";
 import { recordCompanyOrderProductRevenue, recordDeliveryFeeRevenue } from "../company-finance/company-finance-ledger.service";
 import { createAuditLog } from "../../shared/audit/audit.service";
+import { resolveReleaseDifference } from "../financial-release/financial-release.service";
 import { assertDriverEligibleForAssignment, loadEligibleDriverForAssignment } from "../drivers/driver-eligibility";
 import {
   assertConsistentCurrentParcelCollectionAssignment,
@@ -445,6 +447,7 @@ function toOrderDetail(
     paymentType: order.payment_type,
     status: order.status,
     financialStatus: order.financial_status,
+    financialReleaseMode: order.financial_release_mode,
 
     parcelIntakeMethod: order.parcel_intake_method,
     parcelCollectionStatus: order.parcel_collection_status,
@@ -1917,6 +1920,19 @@ export async function assertConsistentCurrentAssignment(
 
   const currentAssignments = await prisma.order_assignments.findMany({ where: { order_id: orderId, is_current: true } });
   if (currentAssignments.length !== 1 || currentAssignments[0].driver_id !== currentDriverId) {
+    // The caller's order read and the read above are separate statements, so
+    // a concurrent assign/reassign/unassign/cancel committing between them
+    // produces a mismatch even though every committed state is consistent.
+    // Re-read both in ONE snapshot: if that is consistent, the mismatch came
+    // from that concurrent change -> 409. Only a snapshot that is itself
+    // inconsistent is a genuine integrity failure.
+    if (await isAssignmentStateConsistent(orderId)) {
+      throw new AppError({
+        statusCode: 409,
+        code: "CONFLICT",
+        message: "Order was changed by another request — please retry",
+      });
+    }
     console.error(
       `[order.service] assignment-history integrity failure for order ${orderId}: expected exactly one ` +
         `is_current row matching driver ${currentDriverId}, found ${currentAssignments.length} ` +
@@ -1930,6 +1946,22 @@ export async function assertConsistentCurrentAssignment(
   }
 
   return currentAssignments[0];
+}
+
+// One consistent snapshot of orders.current_driver_id and the current
+// order_assignments rows: no driver <-> no current row; a driver <-> exactly
+// one current row for that driver.
+async function isAssignmentStateConsistent(orderId: string): Promise<boolean> {
+  return readSnapshot(async (tx) => {
+    const order = await tx.orders.findUnique({ where: { id: orderId }, select: { current_driver_id: true } });
+    if (!order) return false;
+    const current = await tx.order_assignments.findMany({
+      where: { order_id: orderId, is_current: true },
+      select: { driver_id: true },
+    });
+    if (order.current_driver_id === null) return current.length === 0;
+    return current.length === 1 && current[0].driver_id === order.current_driver_id;
+  });
 }
 
 // POST /:id/ready — RECEIVED -> READY_FOR_PICKUP only. Does not touch
@@ -2308,6 +2340,60 @@ function validateCollectionDifferenceAllocation(order: orders, input: ResolveCol
   }
 }
 
+// ON_SETTLEMENT branch (contract §5.4). The approved split is recorded on
+// the order's financial release; money is posted only by releaseOrder(),
+// and only once the collection is ALSO fully allocated to settlements —
+// now if it already is, otherwise by the completing settlement (FR.4).
+async function resolveSettlementModeCollectionDifference(
+  existing: orders,
+  input: ResolveCollectionDifferenceInput,
+  actorUserId: string
+): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    const result = await resolveReleaseDifference(tx, {
+      orderId: existing.id,
+      actorUserId,
+      planned: {
+        customerWalletAmount: input.customerWalletCredit,
+        companyProductAmount: input.companyProductRevenue,
+        companyFeeAmount: input.companyDeliveryFeeRevenue,
+      },
+    });
+
+    await createAuditLog(tx, {
+      actorUserId,
+      action: "COLLECTION_DIFFERENCE_RESOLVED",
+      entityType: "ORDER",
+      entityId: existing.id,
+      previousValues: { financialStatus: "REVIEW_REQUIRED", needsFinancialReview: true, reviewStatus: "AWAITING_REVIEW" },
+      newValues: {
+        financialStatus: result.deferredRelease ? "AWAITING_SETTLEMENT" : "FINALIZED",
+        needsFinancialReview: false,
+        reviewStatus: "RESOLVED",
+      },
+      metadata: {
+        orderType: existing.order_type,
+        financialReleaseMode: "ON_SETTLEMENT",
+        releaseId: result.releaseId,
+        deferredRelease: result.deferredRelease,
+        collectionAmount: result.collectionAmount.toString(),
+        allocatedAmount: result.allocatedAmount.toString(),
+        expectedAmount: existing.amount_to_collect.toString(),
+        // actual_amount_collected is guaranteed non-null by loadEligibleReviewOrder.
+        actualAmount: (existing.actual_amount_collected as Prisma.Decimal).toString(),
+        originalDifferenceReason: existing.collection_difference_reason,
+        resolutionNotes: input.resolutionNotes,
+        customerWalletCredit: input.customerWalletCredit.toString(),
+        companyProductRevenue: input.companyProductRevenue.toString(),
+        companyDeliveryFeeRevenue: input.companyDeliveryFeeRevenue.toString(),
+        walletTransactionId: result.released?.walletTransactionId ?? null,
+        companyProductTransactionId: result.released?.companyProductTransactionId ?? null,
+        companyFeeTransactionId: result.released?.companyFeeTransactionId ?? null,
+      },
+    });
+  });
+}
+
 export async function resolveCollectionDifference(
   orderId: string,
   input: ResolveCollectionDifferenceInput,
@@ -2315,6 +2401,14 @@ export async function resolveCollectionDifference(
 ): Promise<OrderDetail> {
   const existing = await loadEligibleReviewOrder(orderId);
   validateCollectionDifferenceAllocation(existing, input);
+
+  // Settlement-Based Financial Release (FR.5, CLAUDE.md §74): the persisted
+  // mode decides. NULL (legacy) and IMMEDIATE (direct payment / zero cash)
+  // orders keep the immediate posting path below unchanged.
+  if (existing.financial_release_mode === "ON_SETTLEMENT") {
+    await resolveSettlementModeCollectionDifference(existing, input, actorUserId);
+    return getOrderById(orderId);
+  }
 
   // Every write below (the claim, the wallet/company-finance ledger entries,
   // and the audit log) is genuinely atomic — a real financial posting that

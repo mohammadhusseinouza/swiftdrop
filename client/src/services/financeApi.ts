@@ -1,4 +1,5 @@
 import { api } from './api';
+import { collectionVoidInvalidationTags, releaseReversalInvalidationTags } from './settlementInvalidation';
 import { cleanParams } from './queryParams';
 import { unwrapData, unwrapList } from './unwrap';
 import type {
@@ -12,6 +13,8 @@ import type {
   FinanceTransactionEntry,
   LedgerCorrectionResult,
   FinanceFeedLedger,
+  ReportingBasis,
+  ReleaseCorrectionEntry,
 } from './domain.types';
 
 /**
@@ -32,6 +35,8 @@ import type {
 export interface FinanceSummaryParams {
   from?: string;
   to?: string;
+  /** FR.8 — 'released' (default) or 'delivered' (adds the delivery-date block). */
+  basis?: ReportingBasis;
 }
 
 export interface FinanceTransactionsParams extends PaginationParams {
@@ -168,6 +173,52 @@ export const financeApi = api.injectEndpoints({
         ...FINANCE_VIEWS,
       ],
     }),
+
+    /**
+     * FR.10.2 — POST /finance/order-releases/:releaseId/void-collection
+     * (finance.adjust, Idempotency-Key required). A retry with the same reason
+     * returns the recorded correction; a different reason is a 409. Tags are
+     * invalidated on failure too: a transport failure may have committed.
+     */
+    voidReleaseCollection: builder.mutation<
+      ReleaseCorrectionEntry,
+      {
+        releaseId: string;
+        reason: string;
+        idempotencyKey: string;
+        /** cache-invalidation hints only — not sent */
+        ctx: { orderId: string; driverId: string | null; customerId: string };
+      }
+    >({
+      query: ({ releaseId, reason, idempotencyKey }) => ({
+        url: `/finance/order-releases/${releaseId}/void-collection`,
+        method: 'POST',
+        body: { reason },
+        headers: { 'Idempotency-Key': idempotencyKey },
+      }),
+      transformResponse: (r: ApiSuccessResponse<ReleaseCorrectionEntry>) => unwrapData(r),
+      invalidatesTags: (_res, _err, { ctx }) => collectionVoidInvalidationTags(ctx),
+    }),
+
+    /** FR.10.2 — POST /finance/order-releases/:releaseId/reverse-release (same contract). */
+    reverseFinancialRelease: builder.mutation<
+      ReleaseCorrectionEntry,
+      {
+        releaseId: string;
+        reason: string;
+        idempotencyKey: string;
+        ctx: { orderId: string; customerId: string; settlementIds: string[] };
+      }
+    >({
+      query: ({ releaseId, reason, idempotencyKey }) => ({
+        url: `/finance/order-releases/${releaseId}/reverse-release`,
+        method: 'POST',
+        body: { reason },
+        headers: { 'Idempotency-Key': idempotencyKey },
+      }),
+      transformResponse: (r: ApiSuccessResponse<ReleaseCorrectionEntry>) => unwrapData(r),
+      invalidatesTags: (_res, _err, { ctx }) => releaseReversalInvalidationTags(ctx),
+    }),
   }),
 });
 
@@ -178,4 +229,6 @@ export const {
   useReverseDriverCashTransactionMutation,
   useAdjustCompanyFinanceMutation,
   useReverseCompanyTransactionMutation,
+  useVoidReleaseCollectionMutation,
+  useReverseFinancialReleaseMutation,
 } = financeApi;

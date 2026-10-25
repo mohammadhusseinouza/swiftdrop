@@ -1,6 +1,6 @@
 import { Prisma } from "../../generated/prisma/client";
 import { prisma } from "../../db/prisma";
-import { getPendingAmountsForCustomers } from "../wallets/wallet.service";
+import { getPendingBreakdowns, totalPending } from "../wallets/wallet.service";
 import { resolveRange, type ResolvedRange } from "../finance/finance-summary.service";
 import type { CustomerReportQuery } from "./report.schema";
 import type { CustomerReportDto, CustomerReportRow } from "./report.types";
@@ -116,7 +116,7 @@ export async function getCustomerReport(query: CustomerReportQuery): Promise<Cus
     prisma.orders.groupBy({ by: ["customer_id"], where: { customer_id: { in: customerIds }, created_at: rangeToWhere(range) }, _count: true }),
     prisma.orders.groupBy({ by: ["customer_id"], where: { customer_id: { in: customerIds }, delivered_at: rangeToWhere(range) }, _count: true }),
     prisma.customer_wallets.findMany({ where: { customer_id: { in: customerIds } }, select: { customer_id: true, available_balance: true } }),
-    getPendingAmountsForCustomers(customerIds),
+    getPendingBreakdowns(customerIds),
     Promise.all(customerIds.map(async (id) => [id, await getWalletCredits(id, range)] as const)),
     Promise.all(customerIds.map(async (id) => [id, await getWalletPayouts(id, range)] as const)),
   ]);
@@ -127,15 +127,21 @@ export async function getCustomerReport(query: CustomerReportQuery): Promise<Cus
   const creditsById = new Map(creditsByCustomer);
   const payoutsById = new Map(payoutsByCustomer);
 
-  const rows: CustomerReportRow[] = customers.map((customer) => ({
+  const rows: CustomerReportRow[] = customers.map((customer) => {
+    const pending = pendingByCustomer.get(customer.id);
+    return {
     customer: { id: customer.id, customerNumber: customer.customer_number, name: customer.name, isActive: customer.is_active },
     ordersCreated: ordersCreatedById.get(customer.id) ?? 0,
     deliveredOrders: deliveredById.get(customer.id) ?? 0,
     walletCredits: creditsById.get(customer.id) ?? "0",
     walletPayouts: payoutsById.get(customer.id) ?? "0",
     currentWalletBalance: toAmount(balanceById.get(customer.id)),
-    pendingOrderValue: toAmount(pendingByCustomer.get(customer.id)),
-  }));
+    pendingOrderValue: toAmount(pending ? totalPending(pending) : undefined),
+    pendingDeliveryAmount: toAmount(pending?.pendingDelivery),
+    pendingSettlementAmount: toAmount(pending?.pendingSettlement),
+    underReviewOrderCount: pending?.underReviewOrderCount ?? 0,
+    };
+  });
 
   return { report: "CUSTOMERS", range: { from: query.from ?? null, to: query.to ?? null }, rows };
 }

@@ -9,6 +9,7 @@ import type {
   OrderReportDto,
   ParcelCollectionStatus,
   ParcelIntakeMethod,
+  ReportingBasis,
 } from './domain.types';
 
 /**
@@ -53,6 +54,8 @@ export interface CustomerReportParams extends DateRangeParams {
 }
 export interface FinanceReportParams extends DateRangeParams {
   groupBy?: 'day' | 'week' | 'month' | 'category';
+  /** FR.8 — 'released' (default) or 'delivered' (adds delivery-date summary / rows). */
+  basis?: ReportingBasis;
 }
 
 export const reportsApi = api.injectEndpoints({

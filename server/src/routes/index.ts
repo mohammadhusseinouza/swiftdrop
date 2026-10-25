@@ -23,6 +23,8 @@ import {
   parcelCollectionOrderRouter,
 } from "../modules/parcel-collection/parcel-collection.routes";
 import { financeRouter } from "../modules/finance/finance.routes";
+import { financialReleaseActivationRouter } from "../modules/financial-release/financial-release-activation.routes";
+import { historicalReconciliationRouter } from "../modules/historical-reconciliation/historical-reconciliation.routes";
 import { orderRouter } from "../modules/orders/order.routes";
 import { payoutRouter } from "../modules/payouts/payout.routes";
 import { referenceDataRouter } from "../modules/reference-data/reference-data.routes";
@@ -88,7 +90,14 @@ apiRouter.use("/driver-settlements", settlementRouter);
 // Wallet transaction corrections (Phase 8.8) — POST /wallet-transactions/:id/reverse.
 apiRouter.use("/wallet-transactions", walletTransactionRouter);
 // Driver Cash / Company Finance adjustments + reversals (Phase 8.8, Management/Finance only).
+// Driver cash historical reconciliation (FR.12A.5) — by ROLE (ADMIN / FINANCE),
+// mounted before the permission-based /finance router. Writes stay disabled
+// unless DRIVER_CASH_HISTORICAL_RECONCILIATION_ENABLED=true.
+apiRouter.use("/finance/historical-reconciliations", historicalReconciliationRouter);
 apiRouter.use("/finance", financeRouter);
+// Settlement-Based Financial Release activation (FR.11A, ADMIN role only).
+// Activation stays impossible unless FINANCIAL_RELEASE_ACTIVATION_AUTHORIZED=true.
+apiRouter.use("/admin/financial-release", financialReleaseActivationRouter);
 // Reports (Phase 9.3, reports.read — Management/Dispatcher/Finance).
 apiRouter.use("/reports", reportRouter);
 // Phase 11.17.6 — Customer/Public tracking BACKEND CONTRACTS ONLY (no

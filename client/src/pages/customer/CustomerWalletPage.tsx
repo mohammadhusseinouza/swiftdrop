@@ -1,8 +1,10 @@
-import { Wallet, Hourglass } from 'lucide-react';
+import { Wallet } from 'lucide-react';
 
 import { useGetCustomerWalletQuery } from '../../services/customerWalletApi';
 import { getApiErrorMessage, type UnknownApiError } from '../../services/apiError';
 import { formatMoney } from '../../lib/format';
+import { pendingBreakdown } from '../../components/finance/financialRelease';
+import { PendingBreakdownCard } from '../../components/finance/PendingBreakdownCard';
 
 import { PageHeader } from '../../components/data-display/PageHeader';
 import { StatisticCard } from '../../components/data-display/StatisticCard';
@@ -13,7 +15,8 @@ import { ErrorState } from '../../components/feedback/ErrorState';
 /**
  * Phase 13.4 — /customer/wallet.
  *
- * READ-ONLY wallet summary: Available Balance + Pending Amount, straight from
+ * READ-ONLY wallet summary: Available Balance + Pending Amount (FR.10: Pending
+ * Delivery + Pending Settlement, and an under-review order COUNT), straight from
  * GET /api/v1/customer/me/wallet (the same authoritative figures as the
  * Dashboard). No transaction ledger (Phase 13.5), no payout history (Phase
  * 13.6), and deliberately NO Withdraw / Request Payout control — V1 payouts
@@ -28,7 +31,7 @@ export default function CustomerWalletPage() {
       <PageHeader
         size="lg"
         title="Wallet"
-        description="Money currently available for payout, and money still pending from active Delivery Only orders."
+        description="Money currently available for payout, and money that is still pending."
       />
 
       {query.isLoading ? (
@@ -55,12 +58,7 @@ export default function CustomerWalletPage() {
               value={formatMoney(data.availableBalance, { fallback: '$0.00' })}
               supportingText="Available for payout by the company."
             />
-            <StatisticCard
-              icon={Hourglass}
-              label="Pending Amount"
-              value={formatMoney(data.pendingAmount, { fallback: '$0.00' })}
-              supportingText="Potential Customer money from active Delivery Only orders. Not yet available."
-            />
+            <PendingBreakdownCard audience="customer" breakdown={pendingBreakdown(data)} />
           </section>
 
           <Card>
@@ -74,11 +72,25 @@ export default function CustomerWalletPage() {
                 </dd>
               </div>
               <div>
-                <dt className="font-medium text-ink">Pending Amount</dt>
+                <dt className="font-medium text-ink">Pending Delivery</dt>
                 <dd className="mt-0.5 text-ink-muted">
-                  Potential money from your active Delivery Only orders. It
-                  becomes available once those orders are delivered and
-                  finalized. It is not yet available for payout.
+                  Your share of Delivery Only orders that are still on the way.
+                  It moves on once the order is delivered.
+                </dd>
+              </div>
+              <div>
+                <dt className="font-medium text-ink">Pending Settlement</dt>
+                <dd className="mt-0.5 text-ink-muted">
+                  Your share of orders that were already delivered. The courier
+                  collected the money but has not yet handed it to the company;
+                  it becomes available once they do.
+                </dd>
+              </div>
+              <div>
+                <dt className="font-medium text-ink">Total Pending</dt>
+                <dd className="mt-0.5 text-ink-muted">
+                  Pending Delivery plus Pending Settlement. None of it can be
+                  paid out yet.
                 </dd>
               </div>
             </dl>

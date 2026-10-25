@@ -33,3 +33,13 @@ export const DriverCashSummariesQuerySchema = z.object({
 });
 
 export type DriverCashSummariesQuery = z.infer<typeof DriverCashSummariesQuerySchema>;
+
+// FR.7 — GET /finance/driver-cash/:driverId/outstanding-collections.
+// The settlement form needs every outstanding collection of a driver, so the
+// page size goes up to 100 (oldest first).
+export const OutstandingCollectionsQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).optional().default(1),
+  limit: z.coerce.number().int().min(1).max(100).optional().default(50),
+});
+
+export type OutstandingCollectionsQuery = z.infer<typeof OutstandingCollectionsQuerySchema>;

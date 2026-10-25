@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import type { CreateSettlementRequest } from '../../../services/settlementsApi';
-import { parseMoneyToCents } from '../../../lib/money';
+import { compareMoney, parseMoneyToCents } from '../../../lib/money';
 
 /**
  * Frontend Process Settlement validation — mirrors the live backend contract
@@ -15,9 +15,11 @@ import { parseMoneyToCents } from '../../../lib/money';
  * transaction id, the idempotency key). Those are never in this schema or the
  * request body.
  *
- * The `amountReceived <= currentCashHeld` rule is enforced in the dialog
- * against the authoritative server balance using exact-cents comparison — not
- * here, because the balance is fetched asynchronously.
+ * FR.9: the form serves two request formats. The typed `amountReceived` is
+ * used only by the LEGACY format (validated by `legacyAmountError` against
+ * the authoritative server cash position); the ALLOCATION format computes
+ * amountReceived from the allocations + unattributed amount
+ * (settlementAllocation.ts), so the field is not schema-required here.
  */
 
 const MONEY_RE = /^\d+(?:\.\d{1,2})?$/;
@@ -27,15 +29,7 @@ export const processSettlementSchema = z.object({
     .string()
     .min(1, 'Select a driver')
     .pipe(z.uuid('Select a driver')),
-  amountReceived: z
-    .string()
-    .trim()
-    .min(1, 'Enter an amount')
-    .regex(MONEY_RE, 'Enter an amount with at most 2 decimals')
-    .refine((v) => {
-      const cents = parseMoneyToCents(v);
-      return cents !== null && cents > 0n;
-    }, 'Amount must be greater than zero'),
+  amountReceived: z.string().trim(),
   paymentMethodId: z
     .string()
     .min(1, 'Select a payment method')
@@ -45,13 +39,27 @@ export const processSettlementSchema = z.object({
 
 export type ProcessSettlementFormValues = z.infer<typeof processSettlementSchema>;
 
+/**
+ * Legacy-format amount rules: required, ≤2 decimals, > 0, and ≤ the cash the
+ * driver currently holds (exact cents). null when valid.
+ */
+export function legacyAmountError(amount: string, cashHeld: string | null): string | null {
+  const value = amount.trim();
+  if (value === '') return 'Enter an amount';
+  if (!MONEY_RE.test(value)) return 'Enter an amount with at most 2 decimals';
+  const cents = parseMoneyToCents(value);
+  if (cents === null || cents <= 0n) return 'Amount must be greater than zero';
+  if (cashHeld !== null && compareMoney(value, cashHeld) === 1) return 'Amount exceeds the cash held';
+  return null;
+}
+
 export function makeProcessSettlementDefaults(
   driverId = '',
 ): ProcessSettlementFormValues {
   return { driverId, amountReceived: '', paymentMethodId: '', notes: '' };
 }
 
-/** Build the exact POST /api/v1/driver-settlements body. `notes` omitted when blank. */
+/** Build the exact LEGACY-format POST /api/v1/driver-settlements body (no allocations). */
 export function toCreateSettlementRequest(
   values: ProcessSettlementFormValues,
 ): CreateSettlementRequest {

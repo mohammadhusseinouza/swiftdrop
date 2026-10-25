@@ -21,9 +21,18 @@ export interface CustomerWalletSummary {
   /** customer_wallets.available_balance — money owed to the Customer and
    *  available for company payout. */
   availableBalance: string;
-  /** Potential Customer money on active DELIVERY_ONLY orders — not yet
-   *  available (approved Phase 8.2 pending rule; delivery fee excluded). */
+  /** Money not yet available: pending delivery + pending settlement
+   *  (approved Phase 8.2 / FR.7 pending rule; delivery fees excluded). */
   pendingAmount: string;
+  /** FR.7 — pendingAmount = pendingDeliveryAmount + pendingSettlementAmount. */
+  /** Potential money on active DELIVERY_ONLY orders (not yet delivered). */
+  pendingDeliveryAmount: string;
+  /** Delivered DELIVERY_ONLY orders whose cash the driver has not yet fully
+   *  handed to the company (approved amounts only). */
+  pendingSettlementAmount: string;
+  /** Delivered orders whose collected amount is under review — a count
+   *  only; no unapproved amount is shown. */
+  underReviewOrderCount: number;
 }
 
 // ============================================================

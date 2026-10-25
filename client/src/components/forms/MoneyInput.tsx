@@ -21,6 +21,12 @@ export interface MoneyInputProps {
 // This is NOT financial validation — the backend recalculates and validates.
 const ALLOWED = /^\d*(\.\d{0,2})?$/;
 
+/** The same keystroke guard, for compact money inputs that render their own markup. */
+export function isMoneyInputText(raw: string): boolean {
+  const next = raw.trim();
+  return next === '' || ALLOWED.test(next);
+}
+
 /**
  * String-only money field. `value: string` / `onChange(value: string)` — there
  * is deliberately NO `value: number` API and NO `Number()` / `parseFloat`
@@ -46,7 +52,7 @@ export function MoneyInput({
   const handleChange = (raw: string) => {
     const next = raw.trim();
     // Reject characters that can't be part of a plain decimal string.
-    if (next === '' || ALLOWED.test(next)) {
+    if (isMoneyInputText(next)) {
       onChange(next);
     }
   };

@@ -1,4 +1,5 @@
 import { api } from './api';
+import { resolutionInvalidationTags } from './settlementInvalidation';
 import { cleanParams } from './queryParams';
 import { unwrapData, unwrapList, unwrapObjectWithMeta } from './unwrap';
 import type {
@@ -30,6 +31,7 @@ import type {
   ParcelCollectionStatus,
   ParcelIntakeMethod,
   WorkflowQueue,
+  OrderFinancialReleaseView,
 } from './domain.types';
 
 /**
@@ -281,6 +283,18 @@ export const ordersApi = api.injectEndpoints({
       providesTags: (_res, _err, id) => [{ type: 'Order', id }],
     }),
 
+    /**
+     * GET /orders/:id/financial-release (FR.7, finance.read) — the settlement
+     * release of ONE order. Callers must hold finance.read (skip otherwise);
+     * it is never inlined into OrderDetail. Shares the per-order tag, so a
+     * settlement or difference resolution touching the order refetches it.
+     */
+    getOrderFinancialRelease: builder.query<OrderFinancialReleaseView, string>({
+      query: (id) => ({ url: `/orders/${id}/financial-release` }),
+      transformResponse: (r: ApiSuccessResponse<OrderFinancialReleaseView>) => unwrapData(r),
+      providesTags: (_res, _err, id) => [{ type: 'Order', id }],
+    }),
+
     /** Unified operational timeline (Phase 11.17.6) — Collection + Delivery events, oldest-first. */
     getOrderTimeline: builder.query<OrderTimelineEvent[], string>({
       query: (id) => ({ url: `/orders/${id}/timeline` }),
@@ -464,12 +478,15 @@ export const ordersApi = api.injectEndpoints({
         body,
       }),
       transformResponse: (r: ApiSuccessResponse<OrderDetail>) => unwrapData(r),
-      invalidatesTags: (_res, _err, { id }) => [
+      // FR.10 — a resolution also changes that customer's pending settlement /
+      // wallet and the planned split in the driver's outstanding collections.
+      invalidatesTags: (res, _err, { id }) => [
         { type: 'Order', id },
         { type: 'Order', id: 'LIST' },
         { type: 'Wallet', id: 'LIST' },
         { type: 'WalletTransaction', id: 'LIST' },
         ...FINANCIAL_VIEWS,
+        ...resolutionInvalidationTags(res),
       ],
     }),
 
@@ -779,6 +796,7 @@ export const {
   useLazyGetOrderQuery,
   useGetOrderHistoryQuery,
   useGetOrderTimelineQuery,
+  useGetOrderFinancialReleaseQuery,
   useCreateOrderMutation,
   useUpdateOrderMutation,
   useAssignOrderMutation,

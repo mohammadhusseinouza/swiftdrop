@@ -13,6 +13,7 @@ import { ServerSearchSelect } from '../../../components/forms/ServerSearchSelect
 import { useDebouncedValue } from '../../../lib/useDebouncedValue';
 import { printPayoutReceipt } from '../../../lib/payoutReceiptPrint';
 import { formatMoney, isZeroMoney } from '../../../lib/format';
+import { pendingBreakdown, pendingSubline } from '../../../components/finance/financialRelease';
 import {
   compareMoney,
   formatCents,
@@ -181,6 +182,7 @@ export function ProcessPayoutDialog({
 
   const availableBalance = wallet.data?.wallet.availableBalance ?? null;
   const pendingAmount = wallet.data?.wallet.pendingAmount ?? null;
+  const pendingParts = wallet.data ? pendingSubline(pendingBreakdown(wallet.data.wallet), formatMoney) : null;
   const selectedCustomer = wallet.data?.customer ?? null;
   const walletStatus = getApiErrorStatus(wallet.error);
   const walletNotFound =
@@ -493,9 +495,13 @@ export function ProcessPayoutDialog({
                       {formatMoney(pendingAmount)}
                     </span>
                   </div>
+                  {pendingParts && (
+                    <p className="text-right text-[11px] tabular-nums text-ink-subtle">{pendingParts}</p>
+                  )}
                   <p className="mt-1.5 text-xs text-ink-muted">
                     Only the available balance can be paid out. Pending money
-                    from active delivery-only orders is <strong>not</strong>{' '}
+                    (orders still out for delivery, or delivered but not yet
+                    settled by the driver) is <strong>not</strong>{' '}
                     withdrawable.
                   </p>
                 </div>

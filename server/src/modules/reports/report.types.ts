@@ -1,3 +1,4 @@
+import type { DeliveryDateFigures, DeliveryDateSummary, ReleaseActivity, SettlementReleaseSnapshot } from "../financial-release/financial-release-reporting.service";
 // ============================================================
 // Reports DTOs (Phase 9.3)
 //
@@ -49,6 +50,20 @@ export interface OrderReportSummary {
   totalDeliveryFee: string;
   totalExpectedCollection: string;
   totalActualCollection: string;
+  // FR.8 — delivered orders of this population by persisted release
+  // mode and financial status (counts only).
+  financialRelease: OrderReportFinancialReleaseSummary;
+}
+
+export interface OrderReportFinancialReleaseSummary {
+  legacyMode: number;
+  immediateMode: number;
+  onSettlementMode: number;
+  awaitingSettlement: number;
+  reviewRequired: number;
+  finalized: number;
+  collectionVoided: number;
+  releaseReversed: number;
 }
 
 // Phase 11.17.6 (task §34) — Parcel Intake dimensions over the SAME report
@@ -171,6 +186,11 @@ export interface DriverReportRow {
   settlementCount: number;
   settlementAmount: string;
   currentCashHeld: string;
+  // FR.8 — current split of currentCashHeld (contract §7): cash reserved
+  // for outstanding settlement-mode collections vs unattributed cash.
+  attributedCashHeld: string;
+  unattributedCashHeld: string;
+  outstandingCollectionCount: number;
   // Phase 11.17.6 (task §36/§37) — separate Parcel Collection dimensions.
   // Every field above stays DELIVERY-only and unchanged; these never fold
   // into ordersAssigned/ordersDelivered/successRate.
@@ -199,7 +219,12 @@ export interface CustomerReportRow {
   walletCredits: string;
   walletPayouts: string;
   currentWalletBalance: string;
+  // pendingDeliveryAmount + pendingSettlementAmount (current snapshot).
   pendingOrderValue: string;
+  // FR.8 — current pending breakdown (contract §9).
+  pendingDeliveryAmount: string;
+  pendingSettlementAmount: string;
+  underReviewOrderCount: number;
 }
 
 export interface CustomerReportDto {
@@ -227,6 +252,15 @@ export interface FinanceReportSummary {
   currentDriverCashOutstanding: string;
   settlementCount: number;
   settlementAmount: string;
+  // FR.8 — basis of the fields above (ledger posting dates).
+  basis: "RELEASED";
+  // FR.8 — settlement-based release: current snapshot + activity in range.
+  settlementRelease: {
+    current: SettlementReleaseSnapshot;
+    activity: ReleaseActivity;
+  };
+  // FR.8 — present only when basis=delivered.
+  deliveryDate: DeliveryDateSummary | null;
 }
 
 export interface FinanceReportPeriodRow {
@@ -262,4 +296,7 @@ export interface FinanceReportDto {
   groupBy: FinanceReportGroupBy;
   summary: FinanceReportSummary;
   rows: FinanceReportPeriodRow[] | FinanceReportCategoryRow[];
+  // FR.8 — delivery-date rows (period of delivered_at); null unless
+  // basis=delivered with a day/week/month grouping.
+  deliveryDateRows: DeliveryDateFigures[] | null;
 }

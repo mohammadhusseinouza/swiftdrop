@@ -26,8 +26,11 @@
   /* Text ("ink") */
   --color-ink: #101319;
   --color-ink-secondary: #39404e;
-  --color-ink-muted: #6e7686;
-  --color-ink-subtle: #9aa1ae;
+  /* FR.11B accessibility: muted / subtle darkened to WCAG AA (>= 4.5:1) on every
+   * light surface (card, canvas, sunken, neutral-50); was #6e7686 (4.04-4.57) and
+   * #9aa1ae (2.30-2.60). Same hue; secondary > muted > subtle order kept. */
+  --color-ink-muted: #5c6473;
+  --color-ink-subtle: #666e7d;
   --color-ink-inverse: #f5f6f8;
 
   /* Hairlines */
