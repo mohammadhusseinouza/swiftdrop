@@ -38,7 +38,8 @@ export const EVIDENCE_ONLY_NOTICE =
   'A historical reconciliation is evidence only. Approving it explains a gap in the driver cash ledger for the activation checks (G3 / R1). It posts no money, changes no balance, and does not decide who owns the collected amount.';
 
 export const OWNERSHIP_NOTICE =
-  'Ownership of the collected amount stays UNRESOLVED whatever the reconciliation status. Gate G5 keeps blocking activation until a separate, approved ownership workflow resolves it.';
+  'A ledger reconciliation never decides ownership: its own ownership field stays UNRESOLVED permanently, whatever its status. ' +
+  'Whether the deleted order is resolved for gate G5 is shown separately as its liability resolution (Ownership tab).';
 
 /* ------------------------------ presentation ------------------------------ */
 
@@ -72,7 +73,7 @@ export function statusPresentation(status: HistoricalReconciliationStatus): Pres
 /** Ownership is never "resolved" by any reconciliation status. */
 export function ownershipPresentation(status: HistoricalOwnershipStatus | string): Presentation {
   if (status === 'UNRESOLVED') {
-    return { label: 'Ownership unresolved', tone: 'danger', description: OWNERSHIP_NOTICE };
+    return { label: 'Ledger record: ownership unresolved', tone: 'danger', description: OWNERSHIP_NOTICE };
   }
   // No other value exists today; anything unknown is shown, never assumed resolved.
   return { label: `Ownership: ${status}`, tone: 'warning', description: OWNERSHIP_NOTICE };
@@ -353,6 +354,7 @@ export const LIST_COLUMN_LAYOUT: { id: string; hideBelow?: 'lg' | 'xl' }[] = [
   { id: 'residual' },
   { id: 'status' },
   { id: 'ownership', hideBelow: 'lg' },
+  { id: 'liability', hideBelow: 'lg' },
   { id: 'evidence', hideBelow: 'lg' },
   { id: 'proposed', hideBelow: 'xl' },
 ];

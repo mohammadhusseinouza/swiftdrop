@@ -7,6 +7,8 @@ import { paths } from '../../../../routes/paths';
 import { formatDateTime, formatMoney } from '../../../../lib/format';
 import { getApiErrorMessage, getApiErrorStatus, type UnknownApiError } from '../../../../services/apiError';
 import { useDecideReconciliationMutation, useGetReconciliationQuery } from '../../../../services/historicalReconciliationApi';
+import { useGetOwnershipSummaryQuery } from '../../../../services/historicalOwnershipApi';
+import { liabilityResolutionPresentation } from './ownership/ownershipModel';
 
 import { PageHeader } from '../../../../components/data-display/PageHeader';
 import { StatisticCard } from '../../../../components/data-display/StatisticCard';
@@ -48,6 +50,7 @@ export default function HistoricalReconciliationDetailPage() {
   const { id = '' } = useParams<{ id: string }>();
   const user = useCurrentUser();
   const query = useGetReconciliationQuery(id, { skip: !id });
+  const ownershipSummary = useGetOwnershipSummaryQuery();
   const [decide] = useDecideReconciliationMutation();
   const [open, setOpen] = useState<ReconciliationAction | null>(null);
   const d = query.data;
@@ -77,6 +80,7 @@ export default function HistoricalReconciliationDetailPage() {
 
   const status = statusPresentation(d.status);
   const ownership = ownershipPresentation(d.ownership.status);
+  const liabilityResolution = liabilityResolutionPresentation(d.evidence.deletedOrderReference, ownershipSummary.data?.dispositions);
   const evidence = evidencePresentation(d);
   const actions = availableActions(d, user ? { id: user.id, roleCode: user.role.code } : null);
   const refresh = () => void query.refetch();
@@ -94,6 +98,7 @@ export default function HistoricalReconciliationDetailPage() {
           <span className="flex flex-wrap items-center gap-2">
             <Badge tone={status.tone}>{status.label}</Badge>
             <Badge tone={ownership.tone}>{ownership.label}</Badge>
+            <Badge tone={liabilityResolution.tone}>{liabilityResolution.label}</Badge>
             <Badge tone={evidence.tone}>{evidence.label}</Badge>
           </span>
         }

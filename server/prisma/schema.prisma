@@ -37,6 +37,8 @@ model audit_logs {
 
   // FR.12A.3 — a surviving audit cited as historical reconciliation evidence.
   historical_reconciliations driver_cash_historical_reconciliations[] @relation("dchr_source_audit_log")
+  // FR.12A.9 — a surviving audit cited by a historical ownership resolution.
+  historical_ownership_resolutions historical_ownership_resolutions[] @relation("hor_source_audit_log")
 
   @@index([action, created_at])
   @@index([actor_user_id, created_at])
@@ -650,6 +652,13 @@ model users {
   financial_ledger_incidents                financial_ledger_incidents[]                      @relation("fli_reported_by")
   proposed_historical_reconciliations       driver_cash_historical_reconciliations[]          @relation("dchr_proposed_by")
   historical_reconciliation_decisions       driver_cash_historical_reconciliation_decisions[] @relation("dchrd_decided_by")
+  // FR.12A.9 — historical ownership resolution / liability workflow actors.
+  proposed_historical_liability_policies    historical_liability_policies[]             @relation("hlp_proposed_by")
+  historical_liability_policy_decisions     historical_liability_policy_decisions[]     @relation("hlpd_decided_by")
+  proposed_historical_ownership_resolutions historical_ownership_resolutions[]          @relation("hor_proposed_by")
+  historical_ownership_resolution_decisions historical_ownership_resolution_decisions[] @relation("hord_decided_by")
+  recorded_historical_liabilities           historical_liabilities[]                    @relation("hl_recorded_by")
+  historical_liability_reviews              historical_liability_reviews[]              @relation("hlr_reviewed_by")
 
   @@index([is_active])
   @@index([role_id])
@@ -1141,6 +1150,7 @@ model financial_ledger_incidents {
 
   reported_by     users                                    @relation("fli_reported_by", fields: [reported_by_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
   reconciliations driver_cash_historical_reconciliations[]
+  ownership_resolutions historical_ownership_resolutions[]
 }
 
 /// One immutable proposal explaining ONE located balance-chain gap of one driver
@@ -1205,6 +1215,8 @@ model driver_cash_historical_reconciliations {
   related_settlement      driver_settlements?                               @relation("dchr_related_settlement", fields: [related_settlement_id, driver_id], references: [id, driver_id], onDelete: Restrict, onUpdate: NoAction, map: "dchr_related_settlement_fkey")
   proposed_by             users                                             @relation("dchr_proposed_by", fields: [proposed_by_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "dchr_proposed_by_id_fkey")
   decisions               driver_cash_historical_reconciliation_decisions[]
+  /// FR.12A.9 — ownership resolutions citing this reconciliation as collection evidence.
+  ownership_resolutions   historical_ownership_resolutions[]
   /// A re-proposal explains exactly the same gap, missing row and audit
   /// (composite FK on the evidence keys) ...
   supersedes              driver_cash_historical_reconciliations?           @relation("dchr_supersedes", fields: [supersedes_reconciliation_id, account_id, anchor_transaction_id, missing_transaction_id, source_audit_log_id], references: [id, account_id, anchor_transaction_id, missing_transaction_id, source_audit_log_id], onDelete: Restrict, onUpdate: NoAction, map: "dchr_supersedes_reconciliation_fkey")
@@ -1264,4 +1276,235 @@ model driver_cash_historical_reconciliation_decisions {
   @@unique([id, reconciliation_id, is_terminal], map: "dchrd_id_reconciliation_id_is_terminal_key")
   @@index([reconciliation_id, created_at], map: "dchrd_reconciliation_id_created_at_idx")
   @@index([decided_by_id], map: "dchrd_decided_by_id_idx")
+}
+
+// ============================================================
+// FR.12A.9 — Historical ownership resolution: company-assumed historical
+// liability. Migration 20261026000000_historical_ownership_liability_foundation;
+// design docs/fr12a7b-company-assumed-historical-liability-design.md.
+// A recorded liability is a separate sub-ledger: it never creates a wallet
+// credit, driver cash movement, payout, settlement or company revenue.
+// ============================================================
+
+enum HistoricalOwnershipOutcome {
+  COMPANY_ASSUMED_LIABILITY // the company recognizes an obligation to an unidentified beneficiary
+}
+
+enum HistoricalCollectionVerification {
+  APPROVED_LEDGER_RECONCILIATION // the only route: an approved, valid ledger reconciliation whose anchor is the full settlement that handed the collection over
+}
+
+enum HistoricalOwnershipEvidenceKind {
+  INVESTIGATION_REPORT
+  FINANCE_MEMO
+  BACKUP_EXTRACT
+  ORDER_DOCUMENT
+  CUSTOMER_STATEMENT
+  CORRESPONDENCE
+  OTHER
+}
+
+/// Immutable, versioned Finance policy for historical ownership outcomes. The
+/// document itself lives outside the database (SHA-256 + reference). Status is
+/// derived from historical_liability_policy_decisions.
+model historical_liability_policies {
+  id                          String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  policy_code                 String                     @db.VarChar(60)
+  version                     Int
+  outcome                     HistoricalOwnershipOutcome
+  title                       String
+  summary                     String
+  document_sha256             String                     @db.Char(64)
+  document_reference          String
+  /// L7: periodic Finance review interval; NULL = none configured.
+  review_interval_days        Int?
+  unclaimed_funds_handling    String
+  /// L7: when an outstanding liability becomes due for unclaimed-funds review; NULL = none. No legal expiry is assumed.
+  unclaimed_review_after_days Int?
+  content_sha256              String                     @db.Char(64)
+  /// SQL-only CHECK hlp_policy_digest_chk recomputes it.
+  policy_digest               String                     @db.Char(64)
+  proposed_by_id              String                     @db.Uuid
+  idempotency_key             String                     @unique(map: "hlp_idempotency_key_key") @db.VarChar(200)
+  created_at                  DateTime                   @default(now()) @db.Timestamptz(3)
+
+  proposed_by users                                   @relation("hlp_proposed_by", fields: [proposed_by_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "hlp_proposed_by_id_fkey")
+  decisions   historical_liability_policy_decisions[]
+  resolutions historical_ownership_resolutions[]
+
+  @@unique([policy_code, version], map: "hlp_policy_code_version_key")
+  @@unique([id, proposed_by_id, policy_digest], map: "hlp_id_proposed_by_id_policy_digest_key")
+  @@unique([id, policy_digest], map: "hlp_id_policy_digest_key")
+}
+
+/// Append-only policy lifecycle (APPROVED / REJECTED by FINANCE != proposer;
+/// WITHDRAWN; REVOKED by an ADMIN who is neither proposer nor approver - DB CHECK).
+model historical_liability_policy_decisions {
+  id                    String                                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  policy_id             String                                @db.Uuid
+  decision              HistoricalReconciliationDecisionType
+  is_terminal           Boolean
+  proposed_by_id        String                                @db.Uuid
+  policy_digest         String                                @db.Char(64)
+  revokes_decision_id   String?                               @unique(map: "hlpd_revokes_decision_id_key") @db.Uuid
+  revokes_decision_type HistoricalReconciliationDecisionType?
+  revoked_approver_id   String?                               @db.Uuid
+  decided_by_id         String                                @db.Uuid
+  reason                String?
+  idempotency_key       String                                @unique(map: "hlpd_idempotency_key_key") @db.VarChar(200)
+  created_at            DateTime                              @default(now()) @db.Timestamptz(3)
+
+  policy     historical_liability_policies           @relation(fields: [policy_id, proposed_by_id, policy_digest], references: [id, proposed_by_id, policy_digest], onDelete: Restrict, onUpdate: Restrict, map: "hlpd_policy_digest_fkey")
+  revokes    historical_liability_policy_decisions?  @relation("hlpd_revokes", fields: [revokes_decision_id, policy_id, revokes_decision_type, revoked_approver_id], references: [id, policy_id, decision, decided_by_id], onDelete: Restrict, onUpdate: Restrict, map: "hlpd_revokes_decision_fkey")
+  revoked_by historical_liability_policy_decisions[] @relation("hlpd_revokes")
+  decided_by users                                   @relation("hlpd_decided_by", fields: [decided_by_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "hlpd_decided_by_id_fkey")
+
+  @@unique([id, policy_id, decision, decided_by_id], map: "hlpd_id_policy_decision_decider_key")
+  @@index([policy_id, created_at], map: "hlpd_policy_id_created_at_idx")
+}
+
+/// One immutable proposal resolving the ownership of ONE deleted order whose
+/// collection difference was never resolved. Amounts are snapshots of the
+/// surviving audit; L1 (held = collected) and L2 (tracked shortfall) are DB
+/// CHECKs. Status is derived from historical_ownership_resolution_decisions.
+model historical_ownership_resolutions {
+  id                              String                           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  incident_id                     String                           @db.Uuid
+  outcome                         HistoricalOwnershipOutcome
+  policy_id                       String                           @db.Uuid
+  policy_digest                   String                           @db.Char(64)
+  /// The deleted order's id (audit entity_id). No FK: the order no longer exists.
+  deleted_order_reference         String                           @db.Uuid
+  source_audit_log_id             String                           @db.Uuid
+  order_type                      OrderType
+  expected_amount                 Decimal                          @db.Decimal(14, 2)
+  collected_amount                Decimal                          @db.Decimal(14, 2)
+  collection_difference           Decimal                          @db.Decimal(14, 2)
+  verification                    HistoricalCollectionVerification
+  ledger_reconciliation_id        String                           @db.Uuid
+  held_collection_amount          Decimal                          @db.Decimal(14, 2)
+  tracked_shortfall_amount        Decimal                          @db.Decimal(14, 2)
+  evidence_manifest_digest        String                           @db.Char(64)
+  evidence_count                  Int
+  rationale                       String
+  rationale_digest                String                           @db.Char(64)
+  /// SQL-only CHECK hor_resolution_digest_chk recomputes it.
+  resolution_digest               String                           @db.Char(64)
+  proposed_by_id                  String                           @db.Uuid
+  idempotency_key                 String                           @unique(map: "hor_idempotency_key_key") @db.VarChar(200)
+  supersedes_resolution_id        String?                          @unique(map: "hor_supersedes_resolution_id_key") @db.Uuid
+  supersedes_decision_id          String?                          @db.Uuid
+  supersedes_decision_is_terminal Boolean?
+  created_at                      DateTime                         @default(now()) @db.Timestamptz(3)
+
+  incident              financial_ledger_incidents                  @relation(fields: [incident_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "hor_incident_id_fkey")
+  policy                historical_liability_policies               @relation(fields: [policy_id, policy_digest], references: [id, policy_digest], onDelete: Restrict, onUpdate: Restrict, map: "hor_policy_digest_fkey")
+  source_audit_log      audit_logs                                  @relation("hor_source_audit_log", fields: [source_audit_log_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "hor_source_audit_log_id_fkey")
+  ledger_reconciliation driver_cash_historical_reconciliations      @relation(fields: [ledger_reconciliation_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "hor_ledger_reconciliation_id_fkey")
+  proposed_by           users                                       @relation("hor_proposed_by", fields: [proposed_by_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "hor_proposed_by_id_fkey")
+  evidence              historical_ownership_resolution_evidence[]
+  decisions             historical_ownership_resolution_decisions[]
+  supersedes            historical_ownership_resolutions?           @relation("hor_supersedes", fields: [supersedes_resolution_id, deleted_order_reference], references: [id, deleted_order_reference], onDelete: Restrict, onUpdate: NoAction, map: "hor_supersedes_resolution_fkey")
+  superseded_by         historical_ownership_resolutions[]          @relation("hor_supersedes")
+  supersedes_decision   historical_ownership_resolution_decisions?  @relation("hor_supersedes_decision", fields: [supersedes_decision_id, supersedes_resolution_id, supersedes_decision_is_terminal], references: [id, resolution_id, is_terminal], onDelete: Restrict, onUpdate: Restrict, map: "hor_supersedes_terminal_decision_fkey")
+  /// At most one element: historical_liabilities.resolution_id is UNIQUE.
+  liabilities             historical_liabilities[]
+
+  @@unique([id, proposed_by_id, resolution_digest], map: "hor_id_proposed_by_id_resolution_digest_key")
+  @@unique([id, proposed_by_id, resolution_digest, held_collection_amount, tracked_shortfall_amount], map: "hor_id_liability_binding_key")
+  @@unique([id, deleted_order_reference], map: "hor_id_deleted_order_reference_key")
+  @@index([incident_id], map: "hor_incident_id_idx")
+  @@index([policy_id], map: "hor_policy_id_idx")
+  @@index([supersedes_decision_id], map: "hor_supersedes_decision_id_idx")
+}
+
+/// Immutable evidence fingerprints of a resolution (documents stay outside the
+/// database). Their manifest digest is part of the resolution digest.
+model historical_ownership_resolution_evidence {
+  id              String                          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  resolution_id   String                          @db.Uuid
+  ordinal         Int
+  kind            HistoricalOwnershipEvidenceKind
+  document_sha256 String                          @db.Char(64)
+  reference       String
+  description     String
+  created_at      DateTime                        @default(now()) @db.Timestamptz(3)
+
+  resolution historical_ownership_resolutions @relation(fields: [resolution_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "hore_resolution_id_fkey")
+
+  @@unique([resolution_id, ordinal], map: "hore_resolution_ordinal_key")
+  @@unique([resolution_id, document_sha256], map: "hore_resolution_document_key")
+}
+
+/// Append-only resolution lifecycle (same rules as the policy decisions).
+model historical_ownership_resolution_decisions {
+  id                    String                                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  resolution_id         String                                @db.Uuid
+  decision              HistoricalReconciliationDecisionType
+  is_terminal           Boolean
+  proposed_by_id        String                                @db.Uuid
+  resolution_digest     String                                @db.Char(64)
+  revokes_decision_id   String?                               @unique(map: "hord_revokes_decision_id_key") @db.Uuid
+  revokes_decision_type HistoricalReconciliationDecisionType?
+  revoked_approver_id   String?                               @db.Uuid
+  decided_by_id         String                                @db.Uuid
+  reason                String?
+  idempotency_key       String                                @unique(map: "hord_idempotency_key_key") @db.VarChar(200)
+  created_at            DateTime                              @default(now()) @db.Timestamptz(3)
+
+  resolution             historical_ownership_resolutions            @relation(fields: [resolution_id, proposed_by_id, resolution_digest], references: [id, proposed_by_id, resolution_digest], onDelete: Restrict, onUpdate: Restrict, map: "hord_resolution_digest_fkey")
+  revokes                historical_ownership_resolution_decisions?  @relation("hord_revokes", fields: [revokes_decision_id, resolution_id, revokes_decision_type, revoked_approver_id], references: [id, resolution_id, decision, decided_by_id], onDelete: Restrict, onUpdate: Restrict, map: "hord_revokes_decision_fkey")
+  revoked_by             historical_ownership_resolution_decisions[] @relation("hord_revokes")
+  superseding_resolutions historical_ownership_resolutions[]         @relation("hor_supersedes_decision")
+  decided_by             users                                       @relation("hord_decided_by", fields: [decided_by_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "hord_decided_by_id_fkey")
+  liabilities            historical_liabilities[]
+
+  @@unique([id, resolution_id, decision, decided_by_id], map: "hord_id_resolution_decision_decider_key")
+  @@unique([id, resolution_id, is_terminal], map: "hord_id_resolution_id_is_terminal_key")
+  @@index([resolution_id, created_at], map: "hord_resolution_id_created_at_idx")
+}
+
+/// The historical liability register: one row per approved resolution,
+/// recorded separately from approval by a third person (D8). Amounts and the
+/// approval are pinned by composite FKs; recognized = held (L1); the tracked
+/// shortfall is never recognized (L2). Outstanding = recognized while no
+/// discharge workflow exists (discharges await Finance decision L4).
+model historical_liabilities {
+  id                       String                               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  resolution_id            String                               @unique(map: "hl_resolution_id_key") @db.Uuid
+  proposed_by_id           String                               @db.Uuid
+  resolution_digest        String                               @db.Char(64)
+  approval_decision_id     String                               @db.Uuid
+  approval_decision_type   HistoricalReconciliationDecisionType
+  approved_by_id           String                               @db.Uuid
+  held_collection_amount   Decimal                              @db.Decimal(14, 2)
+  tracked_shortfall_amount Decimal                              @db.Decimal(14, 2)
+  recognized_amount        Decimal                              @db.Decimal(14, 2)
+  /// SQL-only CHECK hl_liability_digest_chk recomputes it.
+  liability_digest         String                               @db.Char(64)
+  recorded_by_id           String                               @db.Uuid
+  idempotency_key          String                               @unique(map: "hl_idempotency_key_key") @db.VarChar(200)
+  created_at               DateTime                             @default(now()) @db.Timestamptz(3)
+
+  resolution  historical_ownership_resolutions          @relation(fields: [resolution_id, proposed_by_id, resolution_digest, held_collection_amount, tracked_shortfall_amount], references: [id, proposed_by_id, resolution_digest, held_collection_amount, tracked_shortfall_amount], onDelete: Restrict, onUpdate: Restrict, map: "hl_resolution_binding_fkey")
+  approval    historical_ownership_resolution_decisions @relation(fields: [approval_decision_id, resolution_id, approval_decision_type, approved_by_id], references: [id, resolution_id, decision, decided_by_id], onDelete: Restrict, onUpdate: Restrict, map: "hl_approval_decision_fkey")
+  recorded_by users                                     @relation("hl_recorded_by", fields: [recorded_by_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "hl_recorded_by_id_fkey")
+  reviews     historical_liability_reviews[]
+
+  @@index([created_at], map: "hl_created_at_idx")
+}
+
+/// Append-only periodic Finance reviews of an outstanding liability (L7).
+model historical_liability_reviews {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  liability_id    String   @db.Uuid
+  reviewed_by_id  String   @db.Uuid
+  note            String
+  idempotency_key String   @unique(map: "hlr_idempotency_key_key") @db.VarChar(200)
+  created_at      DateTime @default(now()) @db.Timestamptz(3)
+
+  liability   historical_liabilities @relation(fields: [liability_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "hlr_liability_id_fkey")
+  reviewed_by users                  @relation("hlr_reviewed_by", fields: [reviewed_by_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "hlr_reviewed_by_id_fkey")
+
+  @@index([liability_id, created_at], map: "hlr_liability_id_created_at_idx")
 }

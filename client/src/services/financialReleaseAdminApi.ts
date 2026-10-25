@@ -37,6 +37,18 @@ export interface ReadinessReport {
   failedGates: GateId[];
   gates: GateResult[];
   historicalFindings: { id: string; title: string; affectedCount: number }[];
+  /** FR.12A.10 — deleted orders G5 treats as resolved by a recorded historical liability. */
+  historicalDispositions?: {
+    deletedOrderReference: string;
+    resolutionId: string;
+    liabilityId: string;
+    outcome: 'COMPANY_ASSUMED_LIABILITY';
+    recognizedAmount: string;
+    outstandingAmount: string;
+    trackedShortfallAmount: string;
+    policyCode: string;
+    policyVersion: number;
+  }[];
 }
 
 export interface FinancialReleaseActivationState {

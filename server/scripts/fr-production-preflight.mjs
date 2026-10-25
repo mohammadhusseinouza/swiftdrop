@@ -25,14 +25,18 @@
 // was never resolved (historical ownership), with or without the migration.
 
 import { writeFileSync } from "node:fs";
+import { ACCOUNT_RESIDUAL_FAILS, driverCashReconciliationWith } from "../src/modules/historical-reconciliation/historical-reconciliation.sql.ts";
 import {
-  ACCOUNT_RESIDUAL_FAILS,
-  driverCashReconciliationWith,
+  INVALID_RESOLUTIONS_WHERE,
+  REVOKED_BY_RECORDER_SQL,
+  OUTSTANDING_LIABILITY_WHERE,
+  historicalOwnershipWith,
   unresolvedHistoricalOwnershipSql,
-} from "../src/modules/historical-reconciliation/historical-reconciliation.sql.ts";
+} from "../src/modules/historical-ownership/historical-ownership.sql.ts";
 import {
   FINANCIAL_RELEASE_MIGRATION,
   FINANCIAL_RELEASE_SETTING_KEY,
+  HISTORICAL_OWNERSHIP_MIGRATION,
   HISTORICAL_RECONCILIATION_MIGRATION,
   connectReadOnly,
   describeTarget,
@@ -110,7 +114,9 @@ async function main() {
     });
     add("financial-release migration", "INFO", `${FINANCIAL_RELEASE_MIGRATION}: ${frState}`);
     const hrApplied = checks.state[HISTORICAL_RECONCILIATION_MIGRATION] === "applied";
+    const hoApplied = hrApplied && checks.state[HISTORICAL_OWNERSHIP_MIGRATION] === "applied";
     add("historical-reconciliation migration", "INFO", `${HISTORICAL_RECONCILIATION_MIGRATION}: ${checks.state[HISTORICAL_RECONCILIATION_MIGRATION]}`);
+    add("historical-ownership migration", "INFO", `${HISTORICAL_OWNERSHIP_MIGRATION}: ${checks.state[HISTORICAL_OWNERSHIP_MIGRATION]}`);
 
     // ---- 4. activation setting
     const setting = await one(db, `select value::text as value from system_settings where key = '${FINANCIAL_RELEASE_SETTING_KEY}'`);
@@ -182,12 +188,31 @@ async function main() {
       { ...g3, historicalReconciliationSchema: hrApplied, rawRuleMismatches: ledgers.driver_cash_mismatches },
     );
     add("wallet ledger (G4)", ledgers.wallet_mismatches === 0 ? "OK" : "BLOCKER", `${ledgers.wallet_mismatches} wallet(s) differ from their ledger`);
-    const ownership = await one(db, `select count(*)::int as unresolved from (${unresolvedHistoricalOwnershipSql(hrApplied)}) u`);
+    const ownership = await one(db, `select count(*)::int as unresolved from (${unresolvedHistoricalOwnershipSql(hrApplied, hoApplied)}) u`);
+    // FR.12A.10 — recorded company-assumed liabilities (released from G5) and
+    // R14, always reported beside G5.
+    const liabilities = hoApplied
+      ? await one(
+          db,
+          `${historicalOwnershipWith()}
+           select (select count(*)::int from ho_released) as released,
+                  (select coalesce(sum(h.recognized_amount), 0)::numeric(14,2)::text from ho_evaluated h where ${OUTSTANDING_LIABILITY_WHERE}) as outstanding,
+                  (select coalesce(sum(h.tracked_shortfall_amount), 0)::numeric(14,2)::text from ho_evaluated h where ${OUTSTANDING_LIABILITY_WHERE}) as tracked_shortfall,
+                  (select count(*)::int from ho_evaluated h where ${INVALID_RESOLUTIONS_WHERE})
+                    + (select count(*)::int from (${REVOKED_BY_RECORDER_SQL}) rr) as r14_invalid`,
+        )
+      : { released: 0, outstanding: "0.00", tracked_shortfall: "0.00", r14_invalid: 0 };
     add(
       "legacy obligations (G5)",
       ledgers.legacy_review_required === 0 && ledgers.settlements_without_cash_row === 0 && ownership.unresolved === 0 ? "OK" : "WARN",
-      `${ledgers.legacy_review_required} delivered order(s) await collection-difference review; ${ledgers.settlements_without_cash_row} settlement(s) lack their cash row; ${ownership.unresolved} deleted order(s) with unresolved historical ownership. Resolve before activation.`,
-      { ...ledgers, unresolvedHistoricalOwnership: ownership.unresolved },
+      `${ledgers.legacy_review_required} delivered order(s) await collection-difference review; ${ledgers.settlements_without_cash_row} settlement(s) lack their cash row; ${ownership.unresolved} deleted order(s) with unresolved historical ownership; ${liabilities.released} resolved by recorded historical liabilities (outstanding ${liabilities.outstanding}, tracked shortfall ${liabilities.tracked_shortfall}). Resolve before activation.` +
+        (hoApplied ? "" : " — historical-ownership migration not applied: no deleted order can be resolved"),
+      { ...ledgers, unresolvedHistoricalOwnership: ownership.unresolved, historicalLiabilities: liabilities },
+    );
+    add(
+      "historical liability register (R14)",
+      liabilities.r14_invalid === 0 ? "OK" : "BLOCKER",
+      `${liabilities.r14_invalid} approved resolution(s) / recorded liabilities fail validation`,
     );
     const hist = await one(
       db,

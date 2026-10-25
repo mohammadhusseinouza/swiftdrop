@@ -12,6 +12,7 @@ export const DIRECT_COLLECTIONS_MIGRATION = "20260923000000_payment_method_bypas
 export const FINANCIAL_RELEASE_MIGRATION = "20261016000000_settlement_financial_release_foundation";
 export const FINANCIAL_RELEASE_SETTING_KEY = "financial_release.settlement_mode_enabled";
 export const HISTORICAL_RECONCILIATION_MIGRATION = "20261025000000_driver_cash_historical_reconciliation_foundation";
+export const HISTORICAL_OWNERSHIP_MIGRATION = "20261026000000_historical_ownership_liability_foundation";
 
 /** Hostname / database only — never user, password or query parameters. */
 export function describeTarget(url) {
@@ -131,6 +132,29 @@ const HR_UNIQUE_INDEXES = [
 ];
 const HR_CONSTRAINTS = ["dchr_evidence_digest_chk", "dchr_ownership_unresolved_chk", "dchrd_independent_reviewer_chk", "dchrd_reconciliation_evidence_fkey"];
 
+// FR.12A.9 historical ownership / company-assumed liability (additive; posts nothing).
+const HO_TYPES = ["HistoricalOwnershipOutcome", "HistoricalCollectionVerification", "HistoricalOwnershipEvidenceKind"];
+const HO_TABLES = [
+  "historical_liability_policies",
+  "historical_liability_policy_decisions",
+  "historical_ownership_resolutions",
+  "historical_ownership_resolution_evidence",
+  "historical_ownership_resolution_decisions",
+  "historical_liabilities",
+  "historical_liability_reviews",
+];
+const HO_UNIQUE_INDEXES = ["hor_root_deleted_order_uq", "hord_one_outcome_per_resolution_uq", "hlpd_one_outcome_per_policy_uq", "hl_resolution_id_key"];
+const HO_CONSTRAINTS = [
+  "hlp_policy_digest_chk",
+  "hor_resolution_digest_chk",
+  "hor_l1_full_collection_held_chk",
+  "hor_l2_shortfall_tracked_chk",
+  "hord_independent_revoker_chk",
+  "hl_independent_recorder_chk",
+  "hl_liability_digest_chk",
+  "hl_resolution_binding_fkey",
+];
+
 /**
  * State-aware checks for the migrations that follow the 0_init baseline.
  *
@@ -150,6 +174,7 @@ export async function migrationStateChecks(client, history) {
     [DIRECT_COLLECTIONS_MIGRATION]: applied.has(DIRECT_COLLECTIONS_MIGRATION) ? "applied" : "pending",
     [FINANCIAL_RELEASE_MIGRATION]: applied.has(FINANCIAL_RELEASE_MIGRATION) ? "applied" : "pending",
     [HISTORICAL_RECONCILIATION_MIGRATION]: applied.has(HISTORICAL_RECONCILIATION_MIGRATION) ? "applied" : "pending",
+    [HISTORICAL_OWNERSHIP_MIGRATION]: applied.has(HISTORICAL_OWNERSHIP_MIGRATION) ? "applied" : "pending",
   };
 
   const cdcTable = !!(await val("select to_regclass('public.company_direct_collections')::text"));
@@ -207,6 +232,12 @@ export async function migrationStateChecks(client, history) {
     hr_unique_indexes: (await rows(`select c.relname from pg_index i join pg_class c on c.oid=i.indexrelid where c.relnamespace='public'::regnamespace and i.indisunique and c.relname in (${HR_UNIQUE_INDEXES.map((t) => "'" + t + "'").join(",")}) order by 1`)).map((r) => r.relname),
     hr_constraints: (await rows(`select conname from pg_constraint where connamespace='public'::regnamespace and conname in (${HR_CONSTRAINTS.map((t) => "'" + t + "'").join(",")}) order by 1`)).map((r) => r.conname),
     hr_triggers: await val(`select count(*)::int from pg_trigger t join pg_class c on c.oid=t.tgrelid where not t.tgisinternal and c.relname in (${HR_TABLES.map((t) => "'" + t + "'").join(",")})`),
+    // historical ownership / liability (FR.12A.9)
+    ho_types: (await rows(`select typname from pg_type where typnamespace='public'::regnamespace and typname in (${HO_TYPES.map((t) => "'" + t + "'").join(",")}) order by 1`)).map((r) => r.typname),
+    ho_tables: (await rows(`select t from unnest(array[${HO_TABLES.map((t) => "'" + t + "'").join(",")}]) t where to_regclass('public.'||t) is not null order by 1`)).map((r) => r.t),
+    ho_unique_indexes: (await rows(`select c.relname from pg_index i join pg_class c on c.oid=i.indexrelid where c.relnamespace='public'::regnamespace and i.indisunique and c.relname in (${HO_UNIQUE_INDEXES.map((t) => "'" + t + "'").join(",")}) order by 1`)).map((r) => r.relname),
+    ho_constraints: (await rows(`select conname from pg_constraint where connamespace='public'::regnamespace and conname in (${HO_CONSTRAINTS.map((t) => "'" + t + "'").join(",")}) order by 1`)).map((r) => r.conname),
+    ho_triggers: await val(`select count(*)::int from pg_trigger t join pg_class c on c.oid=t.tgrelid where not t.tgisinternal and c.relname in (${HO_TABLES.map((t) => "'" + t + "'").join(",")})`),
   };
 
   const problems = [];
@@ -277,6 +308,18 @@ export async function migrationStateChecks(client, history) {
     if (facts.hr_triggers) problems.push(`historical-reconciliation tables carry ${facts.hr_triggers} trigger(s); none are expected`);
   }
 
+  const hoPresent = facts.ho_types.length + facts.ho_tables.length + facts.ho_unique_indexes.length + facts.ho_constraints.length;
+  if (state[HISTORICAL_OWNERSHIP_MIGRATION] === "pending") {
+    if (hoPresent) problems.push(`historical-ownership migration pending but ${hoPresent} of its objects already exist (partial application — investigate before deploy)`);
+  } else {
+    if (state[HISTORICAL_RECONCILIATION_MIGRATION] !== "applied") problems.push("historical-ownership migration applied before the historical-reconciliation migration");
+    for (const t of HO_TYPES) if (!facts.ho_types.includes(t)) problems.push(`historical-ownership migration applied but enum ${t} is missing`);
+    for (const t of HO_TABLES) if (!facts.ho_tables.includes(t)) problems.push(`historical-ownership migration applied but table ${t} is missing`);
+    for (const i of HO_UNIQUE_INDEXES) if (!facts.ho_unique_indexes.includes(i)) problems.push(`historical-ownership migration applied but unique index ${i} is missing`);
+    for (const c of HO_CONSTRAINTS) if (!facts.ho_constraints.includes(c)) problems.push(`historical-ownership migration applied but constraint ${c} is missing`);
+    if (facts.ho_triggers) problems.push(`historical-ownership tables carry ${facts.ho_triggers} trigger(s); none are expected`);
+  }
+
   return { state, facts, problems };
 }
 
@@ -296,6 +339,7 @@ export function summarizeFacts(f) {
     fr_objects: `${f.fr_types.length}/${FR_TYPES.length} enums, ${f.fr_status_labels.length}/${FR_STATUS_LABELS.length} labels, ${f.fr_tables.length}/${FR_TABLES.length} tables, ${f.fr_columns.length}/${FR_COLUMNS.length} columns, ${f.fr_unique_indexes.length}/${FR_UNIQUE_INDEXES.length} unique indexes`,
     fr_activation: f.fr_setting ? f.fr_setting.value : "absent",
     hr_objects: `${f.hr_types.length}/${HR_TYPES.length} enums, ${f.hr_tables.length}/${HR_TABLES.length} tables, ${f.hr_unique_indexes.length}/${HR_UNIQUE_INDEXES.length} unique indexes, ${f.hr_constraints.length}/${HR_CONSTRAINTS.length} constraints`,
+    ho_objects: `${f.ho_types.length}/${HO_TYPES.length} enums, ${f.ho_tables.length}/${HO_TABLES.length} tables, ${f.ho_unique_indexes.length}/${HO_UNIQUE_INDEXES.length} unique indexes, ${f.ho_constraints.length}/${HO_CONSTRAINTS.length} constraints`,
   };
 }
 

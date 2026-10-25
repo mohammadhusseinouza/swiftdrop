@@ -29,10 +29,12 @@ import {
   ACCOUNT_RESIDUAL_FAILS,
   INVALID_RECONCILIATIONS_WHERE,
   driverCashReconciliationWith,
-  unresolvedHistoricalOwnershipSql,
 } from "../historical-reconciliation/historical-reconciliation.sql";
 import { getDriverCashHistoricalReconciliationSummary } from "../historical-reconciliation/historical-reconciliation.service";
 import type { DriverCashHistoricalReconciliationSummary } from "../historical-reconciliation/historical-reconciliation.types";
+import { unresolvedHistoricalOwnershipSql } from "../historical-ownership/historical-ownership.sql";
+import { getHistoricalDispositions } from "../historical-ownership/historical-ownership.service";
+import type { HistoricalDisposition } from "../historical-ownership/historical-ownership.types";
 
 export const ACTIVATION_AUTHORIZATION_ENV = "FINANCIAL_RELEASE_ACTIVATION_AUTHORIZED";
 
@@ -74,12 +76,16 @@ export interface ReadinessReport {
   ready: boolean;
   failedGates: GateId[];
   gates: GateResult[];
-  // Legacy anomalies outside R1–R13 (H*). They do not block activation
+  // Legacy anomalies outside R1–R14 (H*). They do not block activation
   // (contract §11) but are always reported, never hidden.
   historicalFindings: { id: string; title: string; affectedCount: number }[];
   // FR.12A.4 — raw discrepancy, approved historical reconciliation, residual
   // and invalid evidence per account, always shown (null when G1 failed).
   driverCashHistoricalReconciliation: DriverCashHistoricalReconciliationSummary | null;
+  // FR.12A.10 — deleted orders whose historical ownership G5 treats as
+  // resolved by a recorded company-assumed liability, with the outstanding
+  // amount. Always reported separately; never hidden inside a passing gate.
+  historicalDispositions: HistoricalDisposition[];
 }
 
 export interface FinancialReleaseActivationState {
@@ -226,6 +232,33 @@ const REQUIRED_SCHEMA: [kind: string, name: string][] = [
   ["unique_index", "dchr_root_missing_transaction_uq"],
   ["unique_index", "dchr_root_source_audit_uq"],
   ["unique_index", "dchrd_one_outcome_per_reconciliation_uq"],
+  // FR.12A.9 historical ownership / liability schema — G5 and R14 read it (FR.12A.10).
+  ["type", "HistoricalOwnershipOutcome"],
+  ["type", "HistoricalCollectionVerification"],
+  ["type", "HistoricalOwnershipEvidenceKind"],
+  ["table", "historical_liability_policies"],
+  ["table", "historical_liability_policy_decisions"],
+  ["table", "historical_ownership_resolutions"],
+  ["table", "historical_ownership_resolution_evidence"],
+  ["table", "historical_ownership_resolution_decisions"],
+  ["table", "historical_liabilities"],
+  ["table", "historical_liability_reviews"],
+  ["constraint", "hlp_policy_digest_chk"],
+  ["constraint", "hlpd_independent_reviewer_chk"],
+  ["constraint", "hlpd_independent_revoker_chk"],
+  ["constraint", "hor_resolution_digest_chk"],
+  ["constraint", "hor_l1_full_collection_held_chk"],
+  ["constraint", "hor_l2_shortfall_tracked_chk"],
+  ["constraint", "hord_independent_reviewer_chk"],
+  ["constraint", "hord_independent_revoker_chk"],
+  ["constraint", "hord_resolution_digest_fkey"],
+  ["constraint", "hl_independent_recorder_chk"],
+  ["constraint", "hl_liability_digest_chk"],
+  ["constraint", "hl_resolution_binding_fkey"],
+  ["constraint", "hl_approval_decision_fkey"],
+  ["unique_index", "hor_root_deleted_order_uq"],
+  ["unique_index", "hord_one_outcome_per_resolution_uq"],
+  ["unique_index", "hl_resolution_id_key"],
 ];
 
 async function schemaGate(tx: Prisma.TransactionClient): Promise<GateResult> {
@@ -288,10 +321,10 @@ async function evaluateGates(tx: Prisma.TransactionClient, client: ClientContrac
       skipped("G3", "Driver cash ledger integrity"),
       skipped("G4", "Customer wallet ledger integrity"),
       skipped("G5", "No outstanding legacy obligations"),
-      skipped("G6", "Reconciliation R1–R13"),
+      skipped("G6", "Reconciliation R1–R14"),
       clientGate(client),
     ];
-    return report(gates, [], null);
+    return report(gates, [], null, []);
   }
 
   const g2 = gate(
@@ -382,22 +415,29 @@ async function evaluateGates(tx: Prisma.TransactionClient, client: ClientContrac
         SELECT 'DELETED_ORDER', u.order_ref,
                'order deleted while its collection difference was unresolved — ownership of the collected amount is undetermined ('
                  || u.sources || ')'
-        FROM (${Prisma.raw(unresolvedHistoricalOwnershipSql(true))}) u
+        FROM (${Prisma.raw(unresolvedHistoricalOwnershipSql(true, true))}) u
       `
     ),
-    "No legacy collection difference awaits review, no historical ownership is unresolved and every settlement is linked to its cash debit",
+    "No legacy collection difference awaits review, no historical ownership is unresolved (a deleted order counts as resolved only by an approved, valid, recorded historical liability) and every settlement is linked to its cash debit",
     "Legacy obligations are outstanding — resolve them before activation"
   );
+
+  // FR.12A.10 — dispositions G5 accepted, reported beside it (never hidden).
+  const historicalDispositions = await getHistoricalDispositions(tx);
+  if (g5.passed && historicalDispositions.length > 0) {
+    const outstanding = historicalDispositions.reduce((sum, d) => sum.plus(d.outstandingAmount), new Prisma.Decimal(0));
+    g5.detail += ` (${historicalDispositions.length} deleted order(s) resolved by recorded historical liabilities; outstanding ${outstanding.toFixed(2)})`;
+  }
 
   const checks = await runReconciliationChecks(tx);
   const failing = checks.filter((c) => c.kind === "INVARIANT" && c.status === "FAIL");
   const g6: GateResult = {
     id: "G6",
-    title: "Reconciliation R1–R13",
+    title: "Reconciliation R1–R14",
     passed: failing.length === 0,
     detail:
       failing.length === 0
-        ? "Every reconciliation invariant (R1–R13) holds"
+        ? "Every reconciliation invariant (R1–R14) holds"
         : `Reconciliation invariants fail: ${failing.map((c) => `${c.id} (${c.affectedCount})`).join(", ")}`,
     affectedCount: failing.reduce((s, c) => s + c.affectedCount, 0),
     findings: failing.flatMap((c) =>
@@ -413,7 +453,7 @@ async function evaluateGates(tx: Prisma.TransactionClient, client: ClientContrac
     g3.detail += ` (raw discrepancy ${reconciliation.totals.rawDiscrepancy} explained by approved historical reconciliation ${reconciliation.totals.approvedHistoricalAmount})`;
   }
 
-  return report([g0, g1, g2, g3, g4, g5, g6, clientGate(client)], historical, reconciliation);
+  return report([g0, g1, g2, g3, g4, g5, g6, clientGate(client)], historical, reconciliation, historicalDispositions);
 }
 
 function clientGate(client: ClientContractProbe): GateResult {
@@ -434,7 +474,8 @@ function clientGate(client: ClientContractProbe): GateResult {
 function report(
   gates: GateResult[],
   historicalFindings: ReadinessReport["historicalFindings"],
-  driverCashHistoricalReconciliation: DriverCashHistoricalReconciliationSummary | null
+  driverCashHistoricalReconciliation: DriverCashHistoricalReconciliationSummary | null,
+  historicalDispositions: HistoricalDisposition[]
 ): ReadinessReport {
   const failedGates = gates.filter((g) => !g.passed).map((g) => g.id);
   return {
@@ -444,6 +485,7 @@ function report(
     gates,
     historicalFindings,
     driverCashHistoricalReconciliation,
+    historicalDispositions,
   };
 }
 

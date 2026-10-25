@@ -6,6 +6,7 @@ import { nextUtcDay, parseUtcCalendarDate } from "../../shared/date/day-boundary
 import type { FinanceSummaryQuery } from "./finance-read.schema";
 import type { DriverCashOutstandingComponents, FinanceSummaryDto } from "./finance-read.types";
 import { getApprovedHistoricalReconciliationAsOf } from "../historical-reconciliation/historical-reconciliation.service";
+import { getHistoricalLiabilitySnapshot } from "../historical-ownership/historical-ownership.service";
 
 // ============================================================
 // GET /api/v1/finance/summary (Phase 9.2)
@@ -287,6 +288,7 @@ export async function getFinanceSummary(query: FinanceSummaryQuery): Promise<Fin
     driverCashOutstanding,
     driverCashOutstandingComponents,
     releaseFigures,
+    historicalLiabilities,
   ] = await Promise.all([
     getCompanyRevenueFlow(range),
     getNetCompanyCategoryFlow("DELIVERY_FEE_REVENUE", range),
@@ -297,6 +299,7 @@ export async function getFinanceSummary(query: FinanceSummaryQuery): Promise<Fin
     getDriverCashOutstandingSnapshot(range.endExclusive),
     getDriverCashOutstandingComponents(range.endExclusive),
     getSettlementReleaseFigures(range, query.basis === "delivered"),
+    getHistoricalLiabilitySnapshot(prisma),
   ]);
 
   return {
@@ -312,6 +315,7 @@ export async function getFinanceSummary(query: FinanceSummaryQuery): Promise<Fin
     customerPayouts,
     driverCashOutstanding,
     driverCashOutstandingComponents,
+    historicalLiabilities,
     settlementRelease: { current: releaseFigures.current, activity: releaseFigures.activity },
     deliveryDate: releaseFigures.deliveryDate,
   };

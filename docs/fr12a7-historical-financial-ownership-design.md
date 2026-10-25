@@ -504,7 +504,7 @@ by the APIs and UI is derived from `released(O)`, so `dchr_ownership_unresolved_
 | D2 | The evidence standard for the fee / goods split (backup extract, invoice, label, correspondence); what is sufficient when sources disagree |
 | D3 | **Who bears the 100.00 shortfall** (customer, company, or shared) and why, using the driver's recorded difference reason |
 | D4 | The split policy when the fee is evidenced but the shortfall cause is not |
-| D5 | **If the customer cannot be identified:** does it stay unallocated indefinitely (G5 keeps blocking activation), or is there an approved unclaimed-funds policy (time limit, legal review, ledger type)? |
+| D5 | **If the customer cannot be identified:** does it stay unallocated indefinitely (G5 keeps blocking activation), or is there an approved unclaimed-funds policy (time limit, legal review, ledger type)? **Answered (FR.12A.7b §11):** Finance approved a company-assumed historical liability outcome (P1, L1–L7); implemented locally in FR.12A.9–11, discharges still undecided. |
 | D6 | Ledger types: wallet `ORDER_CREDIT` (with `order_id` NULL) vs `ADJUSTMENT`; fee `DELIVERY_FEE_REVENUE` vs `ADJUSTMENT`. This affects customer statements and category reports |
 | D7 | Reporting: posting period (released basis) and the disclosure wording for delivery-date reports |
 | D8 | Who executes the posting: the approver, or a second Finance user (four-eyes on execution) |

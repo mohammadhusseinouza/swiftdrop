@@ -755,7 +755,7 @@ non-Admin roles.
 | G2 Zero legacy driver cash | Every driver's unattributed balance `U = 0` (§7). At first activation no release exists, so this is exactly `current_balance = 0` for every account; on a later re-activation, cash reserved by existing PENDING releases is permitted, but no legacy/unattributed cash is. |
 | G3 Driver cash ledger integrity | For every account: cached balance = ledger net, and latest `balance_after` = cached balance. |
 | G4 Wallet ledger integrity | For every wallet: `available_balance` = Σ(credit − debit). |
-| G5 Legacy obligations | No legacy (mode NULL) DELIVERED order with `financial_status = 'REVIEW_REQUIRED'`; no `driver_settlements` row whose `driver_cash_transactions` link is missing. |
+| G5 Legacy obligations | No legacy (mode NULL) DELIVERED order with `financial_status = 'REVIEW_REQUIRED'`; no `driver_settlements` row whose `driver_cash_transactions` link is missing; no deleted order with unresolved historical ownership (FR.12A.4). FR.12A.10: a deleted order counts as resolved **only** when an approved, valid ownership resolution under an approved policy version has its company-assumed liability **recorded**, no conflicting resolution exists and any ledger reconciliation of that order is still valid (`ho_released`, `historical-ownership.sql.ts`). An approval, acknowledgment or exception alone never resolves it; resolved orders are reported separately in `historicalDispositions` with their outstanding amount. |
 | G6 Reconciliation | Reconciliation (§11) returns zero violations. |
 | G7 Deployment readiness | Server build reports the FR.11 contract version and the client build serving the settlement-allocation UI (FR.9) is deployed (version endpoint check). |
 
@@ -807,6 +807,7 @@ returning violations only.
 | R11 | ON_SETTLEMENT order `financial_status` matches the §4.5 mapping exactly, and `status = 'DELIVERED'`. |
 | R12 | VOIDED release ⇔ a COLLECTION_VOID correction whose driver cash REVERSAL reverses the release's COLLECTION row; RELEASE_REVERSED ⇔ a RELEASE_REVERSAL correction. |
 | R13 | Wallet cached = ledger net (existing); payouts never touch Driver Cash; settlements never debit a wallet. |
+| R14 | FR.12A.10 — historical liability register: every approved ownership resolution and every recorded liability whose approval stands validates (policy approved and unrevoked, surviving audit, order still deleted, collected amount verified, evidence / rationale fingerprints, approval and recording audits, recorded amounts = approved amounts, collected amount handed over in a full historical settlement), no resolution was revoked by the user who recorded its liability, and no wallet / company / driver cash row carries a `historical-liability:` or `historical-ownership:` key (recording a liability posts nothing). A revoked resolution is not a violation. Design and approved policy: `docs/fr12a7b-company-assumed-historical-liability-design.md`. |
 
 ---
 

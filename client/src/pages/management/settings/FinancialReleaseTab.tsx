@@ -8,7 +8,7 @@ import { LoadingState } from '../../../components/feedback/LoadingState';
 import { ErrorState } from '../../../components/feedback/ErrorState';
 import { StaleDataNotice } from '../../../components/feedback/StaleDataNotice';
 import { ConfirmationModal } from '../../../components/feedback/ConfirmationModal';
-import { formatDateTime } from '../../../lib/format';
+import { formatDateTime, formatMoney } from '../../../lib/format';
 import { getApiErrorMessage, type UnknownApiError } from '../../../services/apiError';
 import {
   useActivateFinancialReleaseMutation,
@@ -199,6 +199,7 @@ export function FinancialReleaseTab() {
       <ReconciliationCard />
 
       <HistoricalCard report={report} />
+      <HistoricalDispositionsCard report={report} />
 
       <LatencyCard />
 
@@ -413,7 +414,7 @@ function HistoricalCard({ report }: { report: ReadinessReport | undefined }) {
     <Card className="space-y-2">
       <h2 className="text-base font-semibold text-ink">Historical findings</h2>
       <p className="text-sm text-ink-muted">
-        Legacy records outside the R1–R13 invariants. They are always reported and never hidden, deleted or rewritten. They do
+        Legacy records outside the R1–R14 invariants. They are always reported and never hidden, deleted or rewritten. They do
         not block activation; review them separately.
       </p>
       <ul className="space-y-1 text-sm">
@@ -423,6 +424,30 @@ function HistoricalCard({ report }: { report: ReadinessReport | undefined }) {
               <span className="font-medium">{f.id}</span> · {f.title}
             </span>
             <Badge tone={f.affectedCount ? 'warning' : 'success'}>{f.affectedCount} record(s)</Badge>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
+function HistoricalDispositionsCard({ report }: { report: ReadinessReport | undefined }) {
+  const dispositions = report?.historicalDispositions ?? [];
+  if (dispositions.length === 0) return null;
+  return (
+    <Card className="space-y-2">
+      <h2 className="text-base font-semibold text-ink">Historical liabilities accepted by G5</h2>
+      <p className="text-sm text-ink-muted">
+        Deleted orders whose historical ownership is resolved by an approved, recorded company-assumed liability. The amounts stay outstanding and
+        visible; recording them posted nothing.
+      </p>
+      <ul className="space-y-1 text-sm">
+        {dispositions.map((d) => (
+          <li key={d.liabilityId} className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-ink">
+              Deleted order <code className="text-xs">{d.deletedOrderReference.slice(0, 8)}</code> · {d.policyCode} v{d.policyVersion}
+            </span>
+            <Badge tone="warning">Outstanding {formatMoney(d.outstandingAmount)}</Badge>
           </li>
         ))}
       </ul>

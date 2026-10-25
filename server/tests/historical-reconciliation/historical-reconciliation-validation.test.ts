@@ -388,7 +388,7 @@ describe("Historical reconciliation validation and gate integration (FR.12A.4)",
     assert.equal(after.checks.R1, explained.checks.R1);
   });
 
-  test("20. R2–R13, H1, H2, I1, I2 are unaffected by an approval; the check list only gains H3 and I3", async () => {
+  test("20. R2–R13, H1, H2, I1, I2 are unaffected by an approval; the check list only gains H3, I3 and (FR.12A.10) R14", async () => {
     const fx = await createGapFixture();
     const before = await gateCounts();
     await approvedReconciliation(fx);
@@ -398,7 +398,7 @@ describe("Historical reconciliation validation and gate integration (FR.12A.4)",
     }
     assert.deepEqual(
       after.report.checks.map((c) => c.id),
-      ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "R10", "R11", "R12", "R13", "H1", "H2", "H3", "I1", "I2", "I3"]
+      ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "R10", "R11", "R12", "R13", "R14", "H1", "H2", "H3", "I1", "I2", "I3"]
     );
   });
 

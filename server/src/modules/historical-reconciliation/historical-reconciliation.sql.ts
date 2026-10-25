@@ -239,31 +239,8 @@ export const ACCOUNT_COMPONENTS_TEXT = `'stored ' || d.stored_balance::text || '
 // history is invalid: always blocking (G3 / R1).
 export const INVALID_RECONCILIATIONS_WHERE = `((e.asserts_approval AND cardinality(e.failures) > 0) OR e.status = 'INVALID_HISTORY')`;
 
-// G5 (and preflight): deleted orders whose collection difference was never
-// resolved — detected from the surviving audit, independently of any
-// reconciliation record, plus every reconciliation whose ownership is
-// UNRESOLVED whatever its decision status. A ledger reconciliation never
-// resolves ownership.
-export function unresolvedHistoricalOwnershipSql(schemaPresent: boolean): string {
-  const fromRecords = schemaPresent
-    ? `UNION
-       SELECT r.deleted_order_reference::text AS order_ref, 'historical reconciliation ' || r.id::text AS source
-       FROM driver_cash_historical_reconciliations r
-       WHERE r.ownership_status = 'UNRESOLVED'`
-    : "";
-  return `
-    SELECT u.order_ref, string_agg(DISTINCT u.source, '; ' ORDER BY u.source) AS sources
-    FROM (
-      SELECT l.entity_id AS order_ref, 'surviving COLLECTION_DIFFERENCE_RECORDED audit' AS source
-      FROM audit_logs l
-      WHERE l.action = 'COLLECTION_DIFFERENCE_RECORDED' AND l.entity_type = 'ORDER'
-        AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.id::text = l.entity_id)
-        AND NOT EXISTS (SELECT 1 FROM audit_logs z
-                        WHERE z.entity_type = 'ORDER' AND z.entity_id = l.entity_id AND z.action = 'COLLECTION_DIFFERENCE_RESOLVED')
-      ${fromRecords}
-    ) u
-    GROUP BY u.order_ref`;
-}
+// G5 / preflight unresolved historical ownership: unresolvedHistoricalOwnershipSql
+// in ../historical-ownership/historical-ownership.sql.ts (FR.12A.10).
 
 // Balance-chain discontinuities in (created_at, id) order that no valid
 // approved reconciliation explains. A break at a timestamp shared with

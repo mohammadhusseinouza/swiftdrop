@@ -40,6 +40,10 @@ import {
   statusPresentation,
 } from './historicalReconciliationModel';
 import { ProposeReconciliationDialog } from './ProposeReconciliationDialog';
+import { OwnershipTab } from './ownership/OwnershipTab';
+import { liabilityResolutionPresentation } from './ownership/ownershipModel';
+import { useGetOwnershipSummaryQuery } from '../../../../services/historicalOwnershipApi';
+import { cn } from '../../../../components/ui/cn';
 
 /**
  * FR.12A.6 — Historical driver cash reconciliations (ADMIN / FINANCE by
@@ -53,11 +57,18 @@ export default function HistoricalReconciliationsPage() {
   const isDesktop = useMediaQuery(MD_QUERY);
   const user = useCurrentUser();
   const isAdmin = user?.role.code === 'ADMIN';
+  // FR.12A.11 — Ledger reconciliation (evidence only) vs Ownership (company-assumed liabilities).
+  const view = sp.get('view') === 'ownership' ? 'ownership' : 'ledger';
 
   const params = useMemo(() => parseListParams(sp), [sp]);
-  const query = useGetReconciliationsQuery(params);
-  const summary = useGetReconciliationSummaryQuery();
-  const incidents = useGetLedgerIncidentsQuery({ page: 1, limit: 100 });
+  // Review L4 — no ledger requests while the Ownership tab is selected.
+  const onOwnership = sp.get('view') === 'ownership';
+  const query = useGetReconciliationsQuery(params, { skip: onOwnership });
+  const summary = useGetReconciliationSummaryQuery(undefined, { skip: onOwnership });
+  const incidents = useGetLedgerIncidentsQuery({ page: 1, limit: 100 }, { skip: onOwnership });
+  // Review L3 — the liability resolution shown beside the ledger record's ownership.
+  const ownershipSummary = useGetOwnershipSummaryQuery(undefined, { skip: onOwnership });
+  const dispositions = ownershipSummary.data?.dispositions;
   const [propose] = useProposeReconciliationMutation();
   const [proposeOpen, setProposeOpen] = useState(false);
 
@@ -82,7 +93,14 @@ export default function HistoricalReconciliationsPage() {
     approved: { header: 'Approved explanation', align: 'right', cell: (r) => <span className="tabular-nums">{formatMoney(r.account.approvedHistoricalAmount)}</span> },
     residual: { header: 'Unexplained residual', align: 'right', cell: (r) => <span className="tabular-nums font-medium">{formatMoney(r.account.unexplainedResidual)}</span> },
     status: { header: 'Status', cell: (r) => <Badge tone={statusPresentation(r.status).tone}>{statusPresentation(r.status).label}</Badge> },
-    ownership: { header: 'Ownership', cell: (r) => <Badge tone={ownershipPresentation(r.ownershipStatus).tone}>{ownershipPresentation(r.ownershipStatus).label}</Badge> },
+    ownership: { header: 'Ledger record', cell: (r) => <Badge tone={ownershipPresentation(r.ownershipStatus).tone}>{ownershipPresentation(r.ownershipStatus).label}</Badge> },
+    liability: {
+      header: 'Liability resolution',
+      cell: (r) => {
+        const p = liabilityResolutionPresentation(r.deletedOrderReference, dispositions);
+        return <Badge tone={p.tone}>{p.label}</Badge>;
+      },
+    },
     evidence: { header: 'Evidence', cell: (r) => <Badge tone={evidencePresentation(r).tone}>{evidencePresentation(r).label}</Badge> },
     proposed: { header: 'Proposed', cell: (r) => formatDate(r.proposedAt) },
   };
@@ -95,8 +113,31 @@ export default function HistoricalReconciliationsPage() {
         eyebrow={<Link to={paths.management.finance} className="hover:underline">Finance</Link>}
         title="Historical ledger reconciliation"
         description="Evidence that explains documented gaps in driver cash ledgers. Admins propose; an independent Finance reviewer approves."
-        actions={isAdmin ? <Button onClick={() => setProposeOpen(true)}>Propose reconciliation</Button> : undefined}
+        actions={isAdmin && view === 'ledger' ? <Button onClick={() => setProposeOpen(true)}>Propose reconciliation</Button> : undefined}
       />
+
+      <div role="tablist" aria-label="Historical ledger view" className="flex gap-1.5 overflow-x-auto pb-1">
+        {([['ledger', 'Ledger reconciliation'], ['ownership', 'Ownership']] as const).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={view === id}
+            onClick={() => setSp(id === 'ownership' ? new URLSearchParams({ view: 'ownership' }) : new URLSearchParams())}
+            className={cn(
+              'inline-flex h-9 shrink-0 items-center whitespace-nowrap rounded-[0.5rem] border px-3.5 text-sm transition-colors',
+              view === id ? 'border-brand-600 bg-brand-50 font-semibold text-brand-700' : 'border-line bg-card font-medium text-ink-secondary hover:bg-sunken',
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {view === 'ownership' ? (
+        <OwnershipTab />
+      ) : (
+      <>
 
       <div className="space-y-2">
         <p className="rounded-card border border-line bg-sunken px-4 py-2.5 text-sm text-ink-secondary">{EVIDENCE_ONLY_NOTICE}</p>
@@ -162,6 +203,9 @@ export default function HistoricalReconciliationsPage() {
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   <Badge tone={statusPresentation(r.status).tone}>{statusPresentation(r.status).label}</Badge>
                   <Badge tone={ownershipPresentation(r.ownershipStatus).tone}>{ownershipPresentation(r.ownershipStatus).label}</Badge>
+                  <Badge tone={liabilityResolutionPresentation(r.deletedOrderReference, dispositions).tone}>
+                    {liabilityResolutionPresentation(r.deletedOrderReference, dispositions).label}
+                  </Badge>
                   <Badge tone={evidencePresentation(r).tone}>{evidencePresentation(r).label}</Badge>
                 </div>
                 <dl className="mt-3 grid grid-cols-3 gap-2 text-xs">
@@ -187,6 +231,8 @@ export default function HistoricalReconciliationsPage() {
 
       {meta && meta.totalPages > 1 && (
         <Pagination page={meta.page} totalPages={meta.totalPages} total={meta.total} onPageChange={(page) => setSp(serializeListParams({ ...params, page }))} />
+      )}
+      </>
       )}
 
       {isAdmin && (

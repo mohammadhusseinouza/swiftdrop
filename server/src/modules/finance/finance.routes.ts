@@ -46,7 +46,7 @@ export const financeRouter = Router();
 
 // Phase 9.2 — read-only, finance.read (not dashboard.read/reports.read/
 // wallets.read — finance.read is the specific permission for this module).
-// FR.8 — read-only R1–R13 reconciliation of settlement-based release
+// FR.8 — read-only R1–R14 reconciliation of settlement-based release
 // (contract §11). finance.read only — never Dispatcher / Driver / Customer.
 financeRouter.get("/reconciliation/financial-release", authenticate, authorize("finance.read"), getFinancialReleaseReconciliationController);
 

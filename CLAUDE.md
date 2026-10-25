@@ -2571,3 +2571,29 @@ Existing, previously undocumented feature (migration `__0923__`). Business rules
   double counting.
 - Direct payments (and zero-cash deliveries) always use immediate financial release, including
   collection differences (Section 74).
+
+---
+
+# 76. Company-Assumed Historical Liability (FR.12A.9–11)
+
+Approved direction and implementation record: `docs/fr12a7b-company-assumed-historical-liability-design.md` §11–§12.
+Code: `server/src/modules/historical-ownership/` (`/api/v1/finance/historical-ownership`), migration
+`20261026000000_historical_ownership_liability_foundation`, Ownership tab of Historical Ledger Reconciliation.
+
+- A deleted order with unresolved historical ownership may be resolved by recording a **company-assumed liability** to an
+  unidentified beneficiary: the full verified collected amount is held as a liability (L1, DB CHECK); the shortfall is
+  tracked separately and never recognized (L2). Recording posts **nothing** — no wallet credit, driver cash movement,
+  payout, settlement or revenue — and never discharges anything. No discharge workflow exists until Finance decides its
+  ledger treatment (L4).
+- The collected amount is verified ONLY by an approved, valid ledger reconciliation whose anchor is the settlement that
+  handed over the whole balance (`SETTLEMENT_INCLUSION_NOT_ESTABLISHED`); there is no surviving-collection-row route.
+- Separation of duties (D8, by role; DB CHECKs for reviewer / revoker vs proposer-approver and recorder vs proposer-approver,
+  service + R14 detection for revoker ≠ recorder): ADMIN proposes / withdraws; FINANCE ≠ proposer approves /
+  rejects; a FINANCE user who is neither proposer nor approver records; an ADMIN who is neither proposer, approver nor
+  recorder revokes. Policies are versioned and Finance-approved the same way.
+- G5 treats a deleted order as resolved **only** through `ho_released` (approved, valid resolution + recorded liability +
+  approved unrevoked policy + valid ledger reconciliation + no conflicting resolution). Approval alone, an acknowledgment
+  or an exception never clears G5; there is no override. R14 (INVARIANT) checks the register. Never hardcode incident
+  identifiers or amounts in gate logic.
+- Writes need `HISTORICAL_OWNERSHIP_RESOLUTION_ENABLED=true` (unset by default; set only for an authorized window).
+  Never apply a liability to a production incident without explicit authorization.

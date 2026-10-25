@@ -334,8 +334,10 @@ describe('FR.12A.6 historical reconciliation UI', () => {
 
   test('18. ownership stays unresolved whatever the status — APPROVED never reads as resolved', () => {
     const o = ownershipPresentation('UNRESOLVED');
-    assert.deepEqual([o.label, o.tone], ['Ownership unresolved', 'danger']);
-    assert.match(o.description, /G5 keeps blocking/);
+    assert.deepEqual([o.label, o.tone], ['Ledger record: ownership unresolved', 'danger']);
+    // FR.12A.11 (review L3): the ledger record never decides ownership; G5 resolution is shown separately.
+    assert.match(o.description, /never decides ownership/);
+    assert.match(o.description, /liability resolution/);
     assert.ok(!/resolved/i.test(statusPresentation('APPROVED').label));
     assert.match(statusPresentation('APPROVED').description, /Ownership is still unresolved/);
     assert.notEqual(ownershipPresentation('SOMETHING').label, 'Ownership resolved', 'an unknown value is never assumed resolved');

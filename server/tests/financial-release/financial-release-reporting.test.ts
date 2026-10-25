@@ -677,7 +677,7 @@ describe("Financial release reporting, dashboard and reconciliation (FR.8)", () 
 
   // ============================================================
   describe("reconciliation", () => {
-    test("21. every R1–R13 check passes for a full lifecycle of this suite's records", async () => {
+    test("21. every R1–R14 check passes for a full lifecycle of this suite's records", async () => {
       const driver = await createDriver();
       const c = await newCustomer();
       await legacyOrder(driver, c.id);
@@ -703,7 +703,8 @@ describe("Financial release reporting, dashboard and reconciliation (FR.8)", () 
       const ids = [driver.driverId, c.id, s1.body.data.id, s2.body.data.id, ...[exact, partial, review, voided, reversed, company].flatMap((x) => [x.orderId, x.release.id])];
       const r = await reconcile();
       assert.deepEqual(findingsFor(r, ids), []);
-      assert.equal(r.checks.filter((x) => x.id.startsWith("R")).length, 13);
+      // R1–R13 plus FR.12A.10 R14 (historical liability register).
+      assert.equal(r.checks.filter((x) => x.id.startsWith("R")).length, 14);
       const i1 = check(r, "I1");
       assert.equal(i1.status, "INFO");
       assert.equal(i1.blocksActivation, false);

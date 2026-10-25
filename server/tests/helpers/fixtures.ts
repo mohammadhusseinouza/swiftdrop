@@ -206,15 +206,45 @@ export async function cleanupFinancialReleaseRows(scope: { orderId?: string; dri
 // revocation link their own rows into chains, so rows are removed leaf first.
 // Scoped strictly to one driver or to the given incidents. Test-only: the
 // application never deletes these rows.
-export async function cleanupHistoricalReconciliationRows(scope: { driverId?: string; incidentIds?: string[] }): Promise<void> {
+type CleanupDb = Prisma.TransactionClient | typeof prisma;
+
+// FR.12A.9 (review M1) — the ownership tables exist only once migration
+// 20261026000000_historical_ownership_liability_foundation is applied. Older
+// isolated test databases lack them; cleanup must still work there. A narrow
+// catalog check (never a try/catch), so any other database error surfaces.
+export async function historicalOwnershipTablesPresent(db: CleanupDb = prisma): Promise<boolean> {
+  const [row] = await db.$queryRaw<{ present: boolean }[]>`
+    SELECT to_regclass('public.historical_ownership_resolutions') IS NOT NULL AS present
+  `;
+  return row.present;
+}
+
+export async function cleanupHistoricalReconciliationRows(
+  scope: { driverId?: string; incidentIds?: string[] },
+  db: CleanupDb = prisma
+): Promise<void> {
   const where = scope.driverId ? { driver_id: scope.driverId } : { incident_id: { in: scope.incidentIds ?? [] } };
+  // FR.12A.9 — ownership resolutions cite these reconciliations or the
+  // incidents (ON DELETE RESTRICT): they go first, when the tables exist.
+  if (await historicalOwnershipTablesPresent(db)) {
+    const reconciliationIds = (await db.driver_cash_historical_reconciliations.findMany({ where, select: { id: true } })).map((r) => r.id);
+    await cleanupHistoricalOwnershipRows(
+      {
+        OR: [
+          { ledger_reconciliation_id: { in: reconciliationIds } },
+          ...(scope.incidentIds?.length ? [{ incident_id: { in: scope.incidentIds } }] : []),
+        ],
+      },
+      db
+    );
+  }
   for (;;) {
-    const ids = (await prisma.driver_cash_historical_reconciliations.findMany({ where, select: { id: true } })).map((r) => r.id);
+    const ids = (await db.driver_cash_historical_reconciliations.findMany({ where, select: { id: true } })).map((r) => r.id);
     if (ids.length === 0) break;
-    const decisions = await prisma.driver_cash_historical_reconciliation_decisions.deleteMany({
+    const decisions = await db.driver_cash_historical_reconciliation_decisions.deleteMany({
       where: { reconciliation_id: { in: ids }, revoked_by: { none: {} }, superseding_reconciliations: { none: {} } },
     });
-    const reconciliations = await prisma.driver_cash_historical_reconciliations.deleteMany({
+    const reconciliations = await db.driver_cash_historical_reconciliations.deleteMany({
       where: { id: { in: ids }, decisions: { none: {} }, superseded_by: { none: {} } },
     });
     if (decisions.count + reconciliations.count === 0) {
@@ -222,7 +252,45 @@ export async function cleanupHistoricalReconciliationRows(scope: { driverId?: st
     }
   }
   if (scope.incidentIds?.length) {
-    await prisma.financial_ledger_incidents.deleteMany({ where: { id: { in: scope.incidentIds } } });
+    await db.financial_ledger_incidents.deleteMany({ where: { id: { in: scope.incidentIds } } });
+  }
+}
+
+// FR.12A.9 — removes historical ownership resolutions matching `where` with
+// their evidence, decisions, liabilities and reviews, leaf first (revocations
+// and supersession chain the rows). Test-only: the application never deletes
+// these rows. Requires the ownership tables (see historicalOwnershipTablesPresent).
+export async function cleanupHistoricalOwnershipRows(where: Prisma.historical_ownership_resolutionsWhereInput, db: CleanupDb = prisma): Promise<void> {
+  for (;;) {
+    const ids = (await db.historical_ownership_resolutions.findMany({ where, select: { id: true } })).map((r) => r.id);
+    if (ids.length === 0) return;
+    await db.historical_liability_reviews.deleteMany({ where: { liability: { resolution_id: { in: ids } } } });
+    const liabilities = await db.historical_liabilities.deleteMany({ where: { resolution_id: { in: ids } } });
+    const decisions = await db.historical_ownership_resolution_decisions.deleteMany({
+      where: { resolution_id: { in: ids }, revoked_by: { none: {} }, superseding_resolutions: { none: {} }, liabilities: { none: {} } },
+    });
+    const removable = { id: { in: ids }, decisions: { none: {} }, superseded_by: { none: {} } };
+    await db.historical_ownership_resolution_evidence.deleteMany({ where: { resolution: removable } });
+    const resolutions = await db.historical_ownership_resolutions.deleteMany({ where: removable });
+    if (liabilities.count + decisions.count + resolutions.count === 0) {
+      throw new Error("historical ownership cleanup made no progress");
+    }
+  }
+}
+
+// Removes liability policy versions (and their decisions) — only after the
+// resolutions citing them are gone.
+export async function cleanupLiabilityPolicies(policyIds: string[]): Promise<void> {
+  for (;;) {
+    const remaining = await prisma.historical_liability_policies.count({ where: { id: { in: policyIds } } });
+    if (remaining === 0) return;
+    const decisions = await prisma.historical_liability_policy_decisions.deleteMany({
+      where: { policy_id: { in: policyIds }, revoked_by: { none: {} } },
+    });
+    const policies = await prisma.historical_liability_policies.deleteMany({
+      where: { id: { in: policyIds }, decisions: { none: {} }, resolutions: { none: {} } },
+    });
+    if (decisions.count + policies.count === 0) throw new Error("liability policy cleanup made no progress");
   }
 }
 

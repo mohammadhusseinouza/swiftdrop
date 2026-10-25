@@ -2,7 +2,7 @@
 // Settlement-Based Financial Release — reconciliation (FR.8)
 //
 // GET /api/v1/finance/reconciliation/financial-release   (finance.read)
-// Contract: docs/settlement-financial-release-contract.md §11 (R1–R13).
+// Contract: docs/settlement-financial-release-contract.md §11 (R1–R14).
 //
 // Strictly READ-ONLY and never repairs anything. Every check runs inside ONE
 // readSnapshot() (REPEATABLE READ, READ ONLY) so cross-table comparisons see
@@ -17,9 +17,9 @@
 //     allocation or correction.
 //   HISTORICAL_ANOMALY          — involves only legacy / immediate records.
 // Check kinds:
-//   INVARIANT (R1–R13)  — any finding blocks activation (FR.11 gates
+//   INVARIANT (R1–R14)  — any finding blocks activation (FR.11 gates
 //                         G3/G4/G6), whatever its classification.
-//   HISTORICAL (H*)     — legacy ledger anomalies outside R1–R13: reported
+//   HISTORICAL (H*)     — legacy ledger anomalies outside R1–R14: reported
 //                         for separate review, do not block activation.
 //   INFORMATIONAL (I*)  — observations, never violations.
 //
@@ -30,6 +30,12 @@
 // breaks no valid approval explains (ambiguous ordering classified as needing
 // evidence); I3 keeps the raw discrepancy visible even when R1 passes. Before
 // the FR.12A.3 migration the raw rule applies unchanged.
+//
+// FR.12A.10 — R14 checks the historical liability register: every approved
+// ownership resolution and every recorded liability whose approval stands
+// must validate (shared SQL, historical-ownership.sql.ts), and no ledger row
+// may carry a historical-liability / historical-ownership key (recording a
+// liability posts nothing). Before the FR.12A.9 migration R14 is empty.
 // ============================================================
 
 import { Prisma } from "../../generated/prisma/client";
@@ -47,6 +53,8 @@ import {
   isHistoricalReconciliationSchemaPresent,
 } from "../historical-reconciliation/historical-reconciliation.service";
 import type { DriverCashHistoricalReconciliationSummary } from "../historical-reconciliation/historical-reconciliation.types";
+import { INVALID_RESOLUTIONS_WHERE, REVOKED_BY_RECORDER_SQL, historicalOwnershipWith } from "../historical-ownership/historical-ownership.sql";
+import { isHistoricalOwnershipSchemaPresent } from "../historical-ownership/historical-ownership.service";
 
 export const RECONCILIATION_SAMPLE_LIMIT = 50;
 
@@ -99,8 +107,8 @@ interface CheckDefinition {
   kind: CheckKind;
   // A SELECT producing: entity_type, entity_id, expected, actual, detail,
   // origin ('FINANCIAL_RELEASE' | 'LEGACY' | 'OBSERVATION'). A function when it
-  // depends on whether the historical reconciliation schema exists.
-  sql: Prisma.Sql | ((historicalSchemaPresent: boolean) => Prisma.Sql);
+  // depends on whether the historical reconciliation / ownership schema exists.
+  sql: Prisma.Sql | ((historicalSchemaPresent: boolean, ownershipSchemaPresent: boolean) => Prisma.Sql);
 }
 
 type FindingRow = {
@@ -446,6 +454,47 @@ const CHECKS: CheckDefinition[] = [
     `,
   },
   {
+    id: "R14",
+    title: "Historical liability register: approved resolutions and recorded liabilities validate; no historical ledger posting exists",
+    kind: "INVARIANT",
+    sql: (_hr, ho) =>
+      ho
+        ? Prisma.sql`
+            ${Prisma.raw(historicalOwnershipWith())}
+            SELECT CASE WHEN h.liability_id IS NULL THEN 'HISTORICAL_OWNERSHIP_RESOLUTION' ELSE 'HISTORICAL_LIABILITY' END AS entity_type,
+                   COALESCE(h.liability_id, h.id)::text AS entity_id,
+                   'valid approved evidence' AS expected,
+                   array_to_string(h.failures, ', ') AS actual,
+                   CASE WHEN h.liability_id IS NULL
+                        THEN 'approved historical ownership resolution no longer validates (' || h.status || ')'
+                        ELSE 'recorded historical liability ' || h.recognized_amount::text || ' no longer validates (' || h.status || ')' END AS detail,
+                   'LEGACY' AS origin
+            FROM ho_evaluated h
+            WHERE ${Prisma.raw(INVALID_RESOLUTIONS_WHERE)}
+            UNION ALL
+            SELECT 'HISTORICAL_LIABILITY', rr.liability_id::text, 'revoked by an Admin other than the recorder', rr.decided_by_id::text,
+                   'the resolution was revoked by the user who recorded its liability (separation of duties)', 'LEGACY'
+            FROM (${Prisma.raw(REVOKED_BY_RECORDER_SQL)}) rr
+            UNION ALL
+            SELECT 'WALLET_TRANSACTION', w.id::text, 'no historical posting', w.idempotency_key,
+                   'wallet row in the historical liability / ownership key namespace (recording a liability posts nothing)', 'LEGACY'
+            FROM wallet_transactions w
+            WHERE w.idempotency_key LIKE 'historical-liability:%' OR w.idempotency_key LIKE 'historical-ownership:%'
+            UNION ALL
+            SELECT 'COMPANY_FINANCIAL_TRANSACTION', c.id::text, 'no historical posting', c.idempotency_key,
+                   'company row in the historical liability / ownership key namespace (recording a liability posts nothing)', 'LEGACY'
+            FROM company_financial_transactions c
+            WHERE c.idempotency_key LIKE 'historical-liability:%' OR c.idempotency_key LIKE 'historical-ownership:%'
+            UNION ALL
+            SELECT 'DRIVER_CASH_TRANSACTION', x.id::text, 'no historical posting', x.idempotency_key,
+                   'driver cash row in the historical liability / ownership key namespace (recording a liability posts nothing)', 'LEGACY'
+            FROM driver_cash_transactions x
+            WHERE x.idempotency_key LIKE 'historical-liability:%' OR x.idempotency_key LIKE 'historical-ownership:%'
+          `
+        : Prisma.sql`SELECT NULL::text AS entity_type, NULL::text AS entity_id, NULL::text AS expected, NULL::text AS actual,
+                            NULL::text AS detail, NULL::text AS origin WHERE false`,
+  },
+  {
     id: "H1",
     title: "Category postings without an order (not attributable to any delivery or release)",
     kind: "HISTORICAL",
@@ -537,8 +586,13 @@ function classify(kind: CheckKind, origin: string): FindingClassification {
   return origin === "FINANCIAL_RELEASE" ? "FINANCIAL_RELEASE_VIOLATION" : "HISTORICAL_ANOMALY";
 }
 
-async function runCheck(tx: Prisma.TransactionClient, check: CheckDefinition, historicalSchemaPresent: boolean): Promise<ReconciliationCheckResult> {
-  const sql = typeof check.sql === "function" ? check.sql(historicalSchemaPresent) : check.sql;
+async function runCheck(
+  tx: Prisma.TransactionClient,
+  check: CheckDefinition,
+  historicalSchemaPresent: boolean,
+  ownershipSchemaPresent: boolean
+): Promise<ReconciliationCheckResult> {
+  const sql = typeof check.sql === "function" ? check.sql(historicalSchemaPresent, ownershipSchemaPresent) : check.sql;
   const rows = await tx.$queryRaw<FindingRow[]>`
     SELECT f.entity_type, f.entity_id, f.expected, f.actual, f.detail, f.origin,
            (COUNT(*) OVER ())::int AS total,
@@ -577,8 +631,9 @@ async function runCheck(tx: Prisma.TransactionClient, check: CheckDefinition, hi
 export async function runReconciliationChecks(tx: Prisma.TransactionClient): Promise<ReconciliationCheckResult[]> {
   // Sequential: one connection, and a predictable statement order.
   const historicalSchemaPresent = await isHistoricalReconciliationSchemaPresent(tx);
+  const ownershipSchemaPresent = historicalSchemaPresent && (await isHistoricalOwnershipSchemaPresent(tx));
   const results: ReconciliationCheckResult[] = [];
-  for (const check of CHECKS) results.push(await runCheck(tx, check, historicalSchemaPresent));
+  for (const check of CHECKS) results.push(await runCheck(tx, check, historicalSchemaPresent, ownershipSchemaPresent));
   return results;
 }
 

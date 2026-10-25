@@ -10,6 +10,7 @@ import type { CorrectionEligibility } from "./correction-eligibility.service";
 // ============================================================
 
 import type { DeliveryDateSummary, ReleaseActivity, SettlementReleaseSnapshot } from "../financial-release/financial-release-reporting.service";
+import type { HistoricalLiabilitySnapshot } from "../historical-ownership/historical-ownership.types";
 
 // DIRECT_COMPANY_COLLECTION is a READ-ONLY feed source (company_direct_
 // collections — money collected at delivery with a bypass_driver_cash payment
@@ -53,6 +54,11 @@ export interface FinanceSummaryDto {
   // is evidence-only (FR.12A.2 option B) — never a collection, revenue or
   // posting; explainedLedgerTotal = ledgerNet + approvedHistoricalReconciliation.
   driverCashOutstandingComponents: DriverCashOutstandingComponents;
+  // FR.12A.10 — company-assumed historical liabilities to unidentified
+  // beneficiaries (approved policy L3). A current SNAPSHOT (from/to ignored),
+  // reported separately: it is NOT part of customerWalletLiability, company
+  // revenue or driver cash, and the tracked shortfall is never recognized.
+  historicalLiabilities: HistoricalLiabilitySnapshot;
   // FR.8 — settlement-based release. `current` is a point-in-time snapshot
   // (now; `from`/`to` ignored); `activity` is filtered by release /
   // correction date within the range.

@@ -163,6 +163,8 @@ export const API_TAG_TYPES = [
   'AuditLog',
   'Employee',
   'Role',
+  // FR.12A.11 — historical ownership resolution / company-assumed liability.
+  'HistoricalOwnership',
   // Driver Expenses (independent admin-only module).
   'FuelSettings',
   'ExpenseDriver',

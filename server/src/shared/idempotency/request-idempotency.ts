@@ -6,7 +6,14 @@ export type RequestIdempotencyOperation =
   | "settlement-shortfall"
   // FR.12A.5 — historical reconciliation workflow
   | "historical-reconciliation-proposal"
-  | "historical-reconciliation-decision";
+  | "historical-reconciliation-decision"
+  // FR.12A.11 — historical ownership resolution / liability workflow
+  | "historical-liability-policy-proposal"
+  | "historical-liability-policy-decision"
+  | "historical-ownership-resolution-proposal"
+  | "historical-ownership-resolution-decision"
+  | "historical-liability-record"
+  | "historical-liability-review";
 
 // Derives a bounded, non-reversible internal ledger idempotency_key from a
 // raw client-supplied Idempotency-Key header, scoped to the authenticated

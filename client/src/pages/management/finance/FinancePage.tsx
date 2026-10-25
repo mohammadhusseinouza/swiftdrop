@@ -342,6 +342,13 @@ export default function FinancePage() {
                 value={formatMoney(s.driverCashOutstanding)}
                 hint={`Balance ${rangeLabel} · held by drivers`}
               />
+              {s.historicalLiabilities && (
+                <MetricTile
+                  label="Historical liabilities (unidentified beneficiary)"
+                  value={formatMoney(s.historicalLiabilities.outstanding)}
+                  hint={`Current · company-assumed, not wallet or revenue · tracked shortfall ${formatMoney(s.historicalLiabilities.trackedShortfall)} (not recognized)`}
+                />
+              )}
               <MetricTile
                 label="Company revenue (net)"
                 value={formatMoney(s.companyRevenue)}

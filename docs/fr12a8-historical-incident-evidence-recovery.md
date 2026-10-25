@@ -370,3 +370,902 @@ recorded on anyone's behalf in this document.**
    correspondence. Hash and store the originals outside the repository.
 5. Then a Finance decision session on F1–F10, and a review gate that chooses Path A (restoration
    assessment) or Path B (the FR.12A.7 model, FR.12A.9).
+
+---
+
+## 12. FR.12A.8b — Replacement-order evidence report (read-only, offline)
+
+Status: **read-only investigation aid.** No API, page, schema, gate, release rule or reconciliation
+approval was changed. The G5 exception rejected in the Phase A assessment is **not** implemented. The
+report has not been run against production.
+
+**Why it exists.** The owner reports that a *replacement order* was created for the deleted order
+`0c937fee-8ebd-4679-8113-5bad8b713f01`, but no record links the two. E1–E6 (§3) cover the deleted
+order itself. This report adds a structured search for **potential** replacement orders, and for the
+movements, assignments, settlements and payouts around them.
+
+**Code.**
+- `server/src/modules/historical-reconciliation/incident-evidence-report.ts`: the queries (E1S, E3S,
+  E5S, E6S, E7–E12) and the classification into confirmed facts, potential matches, missing evidence
+  and unresolved assumptions.
+- `server/scripts/fr12a8-incident-evidence-report.mjs`: the operator script. It forces the session
+  read-only, verifies it, runs every query in one `READ ONLY` transaction and rolls it back.
+- `server/tests/historical-reconciliation/incident-evidence-report.test.ts`.
+
+**Run it (authorized operator only, direct / session connection):**
+
+```
+EVIDENCE_DATABASE_URL="<read-only direct URL, port 5432>" \
+npx tsx scripts/fr12a8-incident-evidence-report.mjs \
+  --order 0c937fee-8ebd-4679-8113-5bad8b713f01 [--days-before 7] [--days-after 30] [--out <file outside the repo>]
+```
+
+- Exit code 0 = report produced; 2 = STOP; 1 = failed.
+- `--print-sql` prints the SQL in §12.4 with the inputs bound, for psql. It makes no connection.
+- The `--out` JSON holds order / customer / driver / settlement / payout **numbers**. Store it with
+  the incident record, not in tickets or chat.
+
+### 12.1 What the report never does
+
+- It never identifies a replacement. `replacementIdentified` is always `false`; identification is a
+  Finance decision on documents (§5, F1).
+- It never selects a candidate on dates, amounts or driver identity **alone**.
+  - A candidate must show at least one *content* signal (§12.2) inside the window.
+  - Matching the driver or the order type is shown only as an annotation.
+  - Incident-driver orders without any content signal are **counted** (E12), never silently dropped.
+- It never selects receiver, customer or user names, phones, addresses or free text. Free text only
+  feeds boolean signals. The driver's difference reason (E4) stays restricted and is not read.
+- It never writes.
+
+### 12.2 Signals (each shown separately; none is proof)
+
+| Signal | Meaning |
+|---|---|
+| expected total | `amount_to_collect` or `order_amount + delivery_fee` equals the recorded expected amount (210) |
+| actual amount | `amount_to_collect` or `actual_amount_collected` equals the recorded actual amount (110) |
+| difference | the same, against the recorded difference (100) |
+| nothing to collect | `amount_to_collect = 0` or `ALREADY_PAID` (the cash was already in hand) |
+| back-entered | delivered within 30 minutes of creation |
+| mentions deleted reference | order text, status-history text or the order's audits contain the deleted UUID (or its first 8 characters) |
+| replacement wording | order or status-history text matches replac / re-enter / re-create / duplicat / delet / resubmit (English only) |
+| *annotation:* incident driver | delivery assignment / attempt, or parcel collection, by the driver who recorded the difference |
+| *annotation:* same order type | DELIVERY_ONLY |
+
+The window is 7 days before to 30 days after the recorded delivery by default. "Before" covers a
+duplicate that existed first. Widen it with `--days-before` / `--days-after` if nothing plausible is
+found.
+
+### 12.3 Queries and interpretation
+
+| Query | Content | Interpretation |
+|---|---|---|
+| E1S | E1 scoped to this reference | must be **exactly one** row, order absent, not resolved; otherwise STOP |
+| E3S | audits naming the reference (action and flags only) | the deletion scope (V5) |
+| E5S | chain jumps on the incident driver's account, with the settlement row | exactly one jump equal to the actual amount after the delivery (V2/V3) |
+| E6S | the driver's surviving deliveries that UTC day (E6, using delivery attempts as well as the current driver) | corroboration for a printed day summary only |
+| E7 | potential replacement orders and their signals | a **list for Finance review**, never an identification |
+| E8 | ledger movements of the potential matches; for driver cash, the linked or next settlement | "next settlement" is **positional**: legacy settlements are amount-only |
+| E9 | delivery / collection assignments, attempts and status history (no notes) | who handled each potential match, and when |
+| E10 | payouts to the potential matches' customers since the window start | payouts debit the wallet, **not** an order; no payout can be tied to an order from the system |
+| E11 | the incident driver's settlements since the window start | `amount_only_legacy_format = true` means which collections it covered was never recorded |
+| E12 | coverage counts and the window bounds | how much was **not** listed |
+
+**Reading a potential match.** Promote a match to Finance only together with documentary evidence
+(§5):
+- a label or statement with the same customer and amounts;
+- the customer's or the driver's written account;
+- the build-log hash check (§4).
+
+Even then, the identification is a Finance decision F1, recorded outside this report.
+
+### 12.4 Read-only SQL for the next production evidence-recovery step
+
+Generated by `--print-sql` for the incident reference, default window. Run it as one script in
+psql. It opens a `READ ONLY` transaction and ends with `ROLLBACK`.
+
+```sql
+BEGIN TRANSACTION READ ONLY;
+
+-- E1S — Unresolved collection-difference audit(s) of the deleted order (must be exactly one)
+SELECT
+  l.id::text AS audit_id,
+  to_char((l.created_at) AT TIME ZONE 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS recorded_at_utc,
+  l.metadata ->> 'orderType' AS order_type,
+  l.metadata ->> 'expectedAmount' AS expected_amount,
+  l.metadata ->> 'actualAmount' AS actual_amount,
+  l.metadata ->> 'difference' AS difference,
+  l.metadata ->> 'driverCashTransactionId' AS original_cash_transaction_id,
+  EXISTS (SELECT 1 FROM driver_cash_transactions x
+          WHERE x.id::text = l.metadata ->> 'driverCashTransactionId') AS cash_row_still_exists,
+  EXISTS (SELECT 1 FROM orders o WHERE o.id::text = l.entity_id) AS order_still_exists,
+  EXISTS (SELECT 1 FROM audit_logs z
+          WHERE z.entity_type = 'ORDER' AND z.entity_id = l.entity_id
+            AND z.action = 'COLLECTION_DIFFERENCE_RESOLVED') AS resolved,
+  l.metadata ->> 'collectionRoute' AS collection_route,
+  r.code AS actor_role,
+  dr.id::text AS driver_id,
+  dr.driver_number
+FROM audit_logs l
+LEFT JOIN users u ON u.id = l.actor_user_id
+LEFT JOIN roles r ON r.id = u.role_id
+LEFT JOIN drivers dr ON dr.user_id = l.actor_user_id
+WHERE l.action = 'COLLECTION_DIFFERENCE_RECORDED'
+  AND l.entity_type = 'ORDER'
+  AND l.entity_id = '0c937fee-8ebd-4679-8113-5bad8b713f01'::text
+  AND 7::int >= 0
+  AND 30::int >= 0
+ORDER BY l.created_at, l.id;
+
+-- E3S — Every surviving audit that names the deleted order (no payload content)
+SELECT
+  l.id::text AS audit_id,
+  to_char((l.created_at) AT TIME ZONE 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS at_utc,
+  l.action,
+  l.entity_type,
+  r.code AS actor_role,
+  (l.entity_id = '0c937fee-8ebd-4679-8113-5bad8b713f01'::text) AS is_entity,
+  (coalesce(l.metadata::text, '')
+    LIKE '%' || '0c937fee-8ebd-4679-8113-5bad8b713f01'::text || '%') AS in_metadata,
+  (concat_ws(' ', l.previous_values::text, l.new_values::text)
+    LIKE '%' || '0c937fee-8ebd-4679-8113-5bad8b713f01'::text || '%') AS in_values
+FROM audit_logs l
+LEFT JOIN users u ON u.id = l.actor_user_id
+LEFT JOIN roles r ON r.id = u.role_id
+WHERE 7::int >= 0
+  AND 30::int >= 0
+  AND (l.entity_id = '0c937fee-8ebd-4679-8113-5bad8b713f01'::text
+    OR concat_ws(' ', l.metadata::text, l.previous_values::text, l.new_values::text)
+      LIKE '%' || '0c937fee-8ebd-4679-8113-5bad8b713f01'::text || '%')
+ORDER BY l.created_at, l.id;
+
+-- E5S — Balance-chain jumps on the incident driver's cash account, with the settlement row they fall on
+WITH 
+inc AS (
+  SELECT
+    l.id AS audit_id,
+    l.created_at AS recorded_at,
+    l.metadata ->> 'orderType' AS order_type,
+    CASE WHEN (l.metadata ->> 'expectedAmount') ~ '^-?[0-9]+([.][0-9]+)?$'
+           THEN (l.metadata ->> 'expectedAmount')::numeric END AS expected_amount,
+    CASE WHEN (l.metadata ->> 'actualAmount') ~ '^-?[0-9]+([.][0-9]+)?$'
+           THEN (l.metadata ->> 'actualAmount')::numeric END AS actual_amount,
+    abs(CASE WHEN (l.metadata ->> 'difference') ~ '^-?[0-9]+([.][0-9]+)?$'
+           THEN (l.metadata ->> 'difference')::numeric END) AS difference_abs,
+    dr.id AS driver_id,
+    a.id AS account_id
+  FROM audit_logs l
+  LEFT JOIN drivers dr ON dr.user_id = l.actor_user_id
+  LEFT JOIN driver_cash_accounts a ON a.driver_id = dr.id
+  WHERE l.action = 'COLLECTION_DIFFERENCE_RECORDED'
+    AND l.entity_type = 'ORDER'
+    AND l.entity_id = '0c937fee-8ebd-4679-8113-5bad8b713f01'::text
+    AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.id::text = '0c937fee-8ebd-4679-8113-5bad8b713f01'::text)
+  ORDER BY l.created_at, l.id
+  LIMIT 1
+),
+win AS (
+  SELECT
+    recorded_at - make_interval(days => 7::int) AS from_at,
+    recorded_at + make_interval(days => 30::int) AS to_at
+  FROM inc
+),
+seq AS (
+  SELECT
+    t.*,
+    lag(t.balance_after) OVER (ORDER BY t.created_at, t.id) AS prev_after
+  FROM driver_cash_transactions t
+  JOIN inc ON inc.account_id = t.account_id
+)
+SELECT
+  s.id::text AS ledger_row_id,
+  to_char((s.created_at) AT TIME ZONE 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS at_utc,
+  s.type::text AS type,
+  s.amount::text AS amount,
+  s.balance_before::text AS balance_before,
+  s.balance_after::text AS balance_after,
+  (s.balance_before - coalesce(s.prev_after, 0))::text AS chain_jump,
+  ((s.balance_before - coalesce(s.prev_after, 0)) = inc.actual_amount) AS jump_equals_actual_amount,
+  (s.created_at >= inc.recorded_at) AS after_recorded_delivery,
+  ds.settlement_number,
+  ds.amount_received::text AS settlement_amount_received
+FROM seq s
+CROSS JOIN inc
+LEFT JOIN driver_settlements ds ON ds.id = s.settlement_id
+WHERE s.balance_before <> coalesce(s.prev_after, 0)
+ORDER BY s.created_at, s.id;
+
+-- E6S — Surviving deliveries by the incident driver on the same UTC day (corroboration only)
+WITH 
+inc AS (
+  SELECT
+    l.id AS audit_id,
+    l.created_at AS recorded_at,
+    l.metadata ->> 'orderType' AS order_type,
+    CASE WHEN (l.metadata ->> 'expectedAmount') ~ '^-?[0-9]+([.][0-9]+)?$'
+           THEN (l.metadata ->> 'expectedAmount')::numeric END AS expected_amount,
+    CASE WHEN (l.metadata ->> 'actualAmount') ~ '^-?[0-9]+([.][0-9]+)?$'
+           THEN (l.metadata ->> 'actualAmount')::numeric END AS actual_amount,
+    abs(CASE WHEN (l.metadata ->> 'difference') ~ '^-?[0-9]+([.][0-9]+)?$'
+           THEN (l.metadata ->> 'difference')::numeric END) AS difference_abs,
+    dr.id AS driver_id,
+    a.id AS account_id
+  FROM audit_logs l
+  LEFT JOIN drivers dr ON dr.user_id = l.actor_user_id
+  LEFT JOIN driver_cash_accounts a ON a.driver_id = dr.id
+  WHERE l.action = 'COLLECTION_DIFFERENCE_RECORDED'
+    AND l.entity_type = 'ORDER'
+    AND l.entity_id = '0c937fee-8ebd-4679-8113-5bad8b713f01'::text
+    AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.id::text = '0c937fee-8ebd-4679-8113-5bad8b713f01'::text)
+  ORDER BY l.created_at, l.id
+  LIMIT 1
+),
+win AS (
+  SELECT
+    recorded_at - make_interval(days => 7::int) AS from_at,
+    recorded_at + make_interval(days => 30::int) AS to_at
+  FROM inc
+)
+SELECT
+  o.order_number,
+  c.customer_number,
+  o.order_type::text AS order_type,
+  o.payment_type::text AS payment_type,
+  o.order_amount::text AS order_amount,
+  o.delivery_fee::text AS delivery_fee,
+  o.amount_to_collect::text AS amount_to_collect,
+  o.actual_amount_collected::text AS actual_amount_collected,
+  to_char((o.created_at) AT TIME ZONE 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at_utc,
+  to_char((o.delivered_at) AT TIME ZONE 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS delivered_at_utc
+FROM orders o
+CROSS JOIN inc
+JOIN customers c ON c.id = o.customer_id
+WHERE o.delivered_at IS NOT NULL
+  AND (o.delivered_at AT TIME ZONE 'UTC')::date = (inc.recorded_at AT TIME ZONE 'UTC')::date
+  AND (o.current_driver_id = inc.driver_id
+    OR EXISTS (SELECT 1 FROM delivery_attempts x
+               WHERE x.order_id = o.id AND x.driver_id = inc.driver_id
+                 AND x.outcome = 'DELIVERED'))
+ORDER BY o.delivered_at, o.id;
+
+-- E7 — POTENTIAL replacement orders in the window, with every signal shown separately (not identification)
+WITH 
+
+inc AS (
+  SELECT
+    l.id AS audit_id,
+    l.created_at AS recorded_at,
+    l.metadata ->> 'orderType' AS order_type,
+    CASE WHEN (l.metadata ->> 'expectedAmount') ~ '^-?[0-9]+([.][0-9]+)?$'
+           THEN (l.metadata ->> 'expectedAmount')::numeric END AS expected_amount,
+    CASE WHEN (l.metadata ->> 'actualAmount') ~ '^-?[0-9]+([.][0-9]+)?$'
+           THEN (l.metadata ->> 'actualAmount')::numeric END AS actual_amount,
+    abs(CASE WHEN (l.metadata ->> 'difference') ~ '^-?[0-9]+([.][0-9]+)?$'
+           THEN (l.metadata ->> 'difference')::numeric END) AS difference_abs,
+    dr.id AS driver_id,
+    a.id AS account_id
+  FROM audit_logs l
+  LEFT JOIN drivers dr ON dr.user_id = l.actor_user_id
+  LEFT JOIN driver_cash_accounts a ON a.driver_id = dr.id
+  WHERE l.action = 'COLLECTION_DIFFERENCE_RECORDED'
+    AND l.entity_type = 'ORDER'
+    AND l.entity_id = '0c937fee-8ebd-4679-8113-5bad8b713f01'::text
+    AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.id::text = '0c937fee-8ebd-4679-8113-5bad8b713f01'::text)
+  ORDER BY l.created_at, l.id
+  LIMIT 1
+),
+win AS (
+  SELECT
+    recorded_at - make_interval(days => 7::int) AS from_at,
+    recorded_at + make_interval(days => 30::int) AS to_at
+  FROM inc
+),
+win_orders AS (
+  SELECT
+    o.*,
+    (EXISTS (SELECT 1 FROM order_assignments x WHERE x.order_id = o.id AND x.driver_id = inc.driver_id)
+      OR EXISTS (SELECT 1 FROM delivery_attempts x WHERE x.order_id = o.id AND x.driver_id = inc.driver_id))
+      AS s_incident_driver_delivery,
+    EXISTS (SELECT 1 FROM parcel_collection_assignments x
+            WHERE x.order_id = o.id AND x.driver_id = inc.driver_id)
+      AS s_incident_driver_collection,
+    (o.order_type::text = inc.order_type) AS s_same_order_type,
+    (o.amount_to_collect = inc.expected_amount
+      OR o.order_amount + o.delivery_fee = inc.expected_amount) AS s_expected_total,
+    (o.amount_to_collect = inc.actual_amount
+      OR o.actual_amount_collected = inc.actual_amount) AS s_actual_amount,
+    (o.amount_to_collect = inc.difference_abs
+      OR o.actual_amount_collected = inc.difference_abs) AS s_difference_amount,
+    (o.amount_to_collect = 0 OR o.payment_type = 'ALREADY_PAID') AS s_nothing_to_collect,
+    (o.delivered_at IS NOT NULL
+      AND o.delivered_at - o.created_at <= interval '30 minutes') AS s_back_entered,
+    (concat_ws(' ',
+        o.description, o.package_notes, o.receiver_instructions,
+        o.collection_difference_reason, o.parcel_collection_notes)
+        ILIKE '%' || left('0c937fee-8ebd-4679-8113-5bad8b713f01'::text, 8) || '%'
+      OR coalesce((SELECT string_agg(concat_ws(' ', h.reason, h.notes), ' ')
+        FROM order_status_history h WHERE h.order_id = o.id), '')
+        ILIKE '%' || left('0c937fee-8ebd-4679-8113-5bad8b713f01'::text, 8) || '%'
+      OR EXISTS (
+        SELECT 1 FROM audit_logs z
+        WHERE z.entity_type = 'ORDER' AND z.entity_id = o.id::text
+          AND concat_ws(' ', z.metadata::text, z.previous_values::text, z.new_values::text)
+            LIKE '%' || '0c937fee-8ebd-4679-8113-5bad8b713f01'::text || '%'))
+      AS s_mentions_deleted_reference,
+    (concat_ws(' ', concat_ws(' ',
+        o.description, o.package_notes, o.receiver_instructions,
+        o.collection_difference_reason, o.parcel_collection_notes),
+        (SELECT string_agg(concat_ws(' ', h.reason, h.notes), ' ')
+        FROM order_status_history h WHERE h.order_id = o.id))
+      ~* '(replac|re-?enter|re-?creat|duplicat|delet|resubmit)') AS s_replacement_wording
+  FROM orders o
+  CROSS JOIN inc
+  CROSS JOIN win
+  WHERE o.created_at >= win.from_at
+    AND o.created_at < win.to_at
+    AND o.id::text <> '0c937fee-8ebd-4679-8113-5bad8b713f01'::text
+),
+cand AS (
+  SELECT * FROM win_orders
+  WHERE s_expected_total OR s_actual_amount OR s_difference_amount
+     OR s_nothing_to_collect OR s_back_entered
+     OR s_mentions_deleted_reference OR s_replacement_wording
+)
+SELECT
+  c.id::text AS order_id,
+  c.order_number,
+  cu.customer_number,
+  c.order_type::text AS order_type,
+  c.payment_type::text AS payment_type,
+  c.status::text AS status,
+  c.financial_status::text AS financial_status,
+  c.financial_release_mode::text AS release_mode,
+  c.order_amount::text AS order_amount,
+  c.delivery_fee::text AS delivery_fee,
+  c.prepaid_order_amount::text AS prepaid_order_amount,
+  c.prepaid_delivery_fee::text AS prepaid_delivery_fee,
+  c.amount_to_collect::text AS amount_to_collect,
+  c.actual_amount_collected::text AS actual_amount_collected,
+  to_char((c.created_at) AT TIME ZONE 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at_utc,
+  to_char((c.delivered_at) AT TIME ZONE 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS delivered_at_utc,
+  c.s_expected_total,
+  c.s_actual_amount,
+  c.s_difference_amount,
+  c.s_nothing_to_collect,
+  c.s_back_entered,
+  c.s_mentions_deleted_reference,
+  c.s_replacement_wording,
+  c.s_incident_driver_delivery,
+  c.s_incident_driver_collection,
+  c.s_same_order_type
+FROM cand c
+JOIN customers cu ON cu.id = c.customer_id
+ORDER BY c.created_at, c.id;
+
+-- E8 — Ledger movements of the potential matches (driver cash, wallet, company, direct, release)
+WITH 
+
+inc AS (
+  SELECT
+    l.id AS audit_id,
+    l.created_at AS recorded_at,
+    l.metadata ->> 'orderType' AS order_type,
+    CASE WHEN (l.metadata ->> 'expectedAmount') ~ '^-?[0-9]+([.][0-9]+)?$'
+           THEN (l.metadata ->> 'expectedAmount')::numeric END AS expected_amount,
+    CASE WHEN (l.metadata ->> 'actualAmount') ~ '^-?[0-9]+([.][0-9]+)?$'
+           THEN (l.metadata ->> 'actualAmount')::numeric END AS actual_amount,
+    abs(CASE WHEN (l.metadata ->> 'difference') ~ '^-?[0-9]+([.][0-9]+)?$'
+           THEN (l.metadata ->> 'difference')::numeric END) AS difference_abs,
+    dr.id AS driver_id,
+    a.id AS account_id
+  FROM audit_logs l
+  LEFT JOIN drivers dr ON dr.user_id = l.actor_user_id
+  LEFT JOIN driver_cash_accounts a ON a.driver_id = dr.id
+  WHERE l.action = 'COLLECTION_DIFFERENCE_RECORDED'
+    AND l.entity_type = 'ORDER'
+    AND l.entity_id = '0c937fee-8ebd-4679-8113-5bad8b713f01'::text
+    AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.id::text = '0c937fee-8ebd-4679-8113-5bad8b713f01'::text)
+  ORDER BY l.created_at, l.id
+  LIMIT 1
+),
+win AS (
+  SELECT
+    recorded_at - make_interval(days => 7::int) AS from_at,
+    recorded_at + make_interval(days => 30::int) AS to_at
+  FROM inc
+),
+win_orders AS (
+  SELECT
+    o.*,
+    (EXISTS (SELECT 1 FROM order_assignments x WHERE x.order_id = o.id AND x.driver_id = inc.driver_id)
+      OR EXISTS (SELECT 1 FROM delivery_attempts x WHERE x.order_id = o.id AND x.driver_id = inc.driver_id))
+      AS s_incident_driver_delivery,
+    EXISTS (SELECT 1 FROM parcel_collection_assignments x
+            WHERE x.order_id = o.id AND x.driver_id = inc.driver_id)
+      AS s_incident_driver_collection,
+    (o.order_type::text = inc.order_type) AS s_same_order_type,
+    (o.amount_to_collect = inc.expected_amount
+      OR o.order_amount + o.delivery_fee = inc.expected_amount) AS s_expected_total,
+    (o.amount_to_collect = inc.actual_amount
+      OR o.actual_amount_collected = inc.actual_amount) AS s_actual_amount,
+    (o.amount_to_collect = inc.difference_abs
+      OR o.actual_amount_collected = inc.difference_abs) AS s_difference_amount,
+    (o.amount_to_collect = 0 OR o.payment_type = 'ALREADY_PAID') AS s_nothing_to_collect,
+    (o.delivered_at IS NOT NULL
+      AND o.delivered_at - o.created_at <= interval '30 minutes') AS s_back_entered,
+    (concat_ws(' ',
+        o.description, o.package_notes, o.receiver_instructions,
+        o.collection_difference_reason, o.parcel_collection_notes)
+        ILIKE '%' || left('0c937fee-8ebd-4679-8113-5bad8b713f01'::text, 8) || '%'
+      OR coalesce((SELECT string_agg(concat_ws(' ', h.reason, h.notes), ' ')
+        FROM order_status_history h WHERE h.order_id = o.id), '')
+        ILIKE '%' || left('0c937fee-8ebd-4679-8113-5bad8b713f01'::text, 8) || '%'
+      OR EXISTS (
+        SELECT 1 FROM audit_logs z
+        WHERE z.entity_type = 'ORDER' AND z.entity_id = o.id::text
+          AND concat_ws(' ', z.metadata::text, z.previous_values::text, z.new_values::text)
+            LIKE '%' || '0c937fee-8ebd-4679-8113-5bad8b713f01'::text || '%'))
+      AS s_mentions_deleted_reference,
+    (concat_ws(' ', concat_ws(' ',
+        o.description, o.package_notes, o.receiver_instructions,
+        o.collection_difference_reason, o.parcel_collection_notes),
+        (SELECT string_agg(concat_ws(' ', h.reason, h.notes), ' ')
+        FROM order_status_history h WHERE h.order_id = o.id))
+      ~* '(replac|re-?enter|re-?creat|duplicat|delet|resubmit)') AS s_replacement_wording
+  FROM orders o
+  CROSS JOIN inc
+  CROSS JOIN win
+  WHERE o.created_at >= win.from_at
+    AND o.created_at < win.to_at
+    AND o.id::text <> '0c937fee-8ebd-4679-8113-5bad8b713f01'::text
+),
+cand AS (
+  SELECT * FROM win_orders
+  WHERE s_expected_total OR s_actual_amount OR s_difference_amount
+     OR s_nothing_to_collect OR s_back_entered
+     OR s_mentions_deleted_reference OR s_replacement_wording
+)
+SELECT
+  m.order_number,
+  m.ledger,
+  m.type,
+  m.amount,
+  m.party,
+  m.settlement_ref,
+  m.settlement_basis,
+  to_char((m.at) AT TIME ZONE 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS at_utc
+FROM (
+  SELECT
+    c.order_number,
+    'DRIVER_CASH' AS ledger,
+    t.type::text AS type,
+    t.amount::text AS amount,
+    dr.driver_number AS party,
+    coalesce(ds.settlement_number, nx.settlement_number) AS settlement_ref,
+    CASE WHEN ds.id IS NOT NULL THEN 'linked'
+         WHEN nx.settlement_number IS NOT NULL
+           THEN 'next settlement on the account (positional only)'
+    END AS settlement_basis,
+    t.created_at AS at
+  FROM cand c
+  JOIN driver_cash_transactions t ON t.order_id = c.id
+  JOIN drivers dr ON dr.id = t.driver_id
+  LEFT JOIN driver_settlements ds ON ds.id = t.settlement_id
+  LEFT JOIN LATERAL (
+    SELECT s2.settlement_number
+    FROM driver_cash_transactions n
+    JOIN driver_settlements s2 ON s2.id = n.settlement_id
+    WHERE n.account_id = t.account_id
+      AND n.type = 'SETTLEMENT'
+      AND (n.created_at, n.id) > (t.created_at, t.id)
+    ORDER BY n.created_at, n.id
+    LIMIT 1
+  ) nx ON t.type = 'COLLECTION'
+  UNION ALL
+  SELECT c.order_number, 'CUSTOMER_WALLET', w.type::text, (w.credit - w.debit)::text,
+         cu.customer_number, NULL, NULL, w.created_at
+  FROM cand c
+  JOIN wallet_transactions w ON w.order_id = c.id
+  JOIN customers cu ON cu.id = w.customer_id
+  UNION ALL
+  SELECT c.order_number, 'COMPANY', f.type::text, f.amount::text,
+         NULL, NULL, NULL, f.created_at
+  FROM cand c
+  JOIN company_financial_transactions f ON f.order_id = c.id
+  UNION ALL
+  SELECT c.order_number, 'DIRECT_COMPANY_COLLECTION', 'DIRECT', k.amount::text,
+         NULL, NULL, NULL, k.created_at
+  FROM cand c
+  JOIN company_direct_collections k ON k.order_id = c.id
+  UNION ALL
+  SELECT c.order_number, 'FINANCIAL_RELEASE',
+         r.release_status::text || '/' || r.review_status::text, r.collection_amount::text,
+         NULL, NULL, NULL, r.created_at
+  FROM cand c
+  JOIN order_financial_releases r ON r.order_id = c.id
+) m
+ORDER BY m.order_number, m.at, m.ledger;
+
+-- E9 — Assignment, delivery-attempt and status history of the potential matches (no notes)
+WITH 
+
+inc AS (
+  SELECT
+    l.id AS audit_id,
+    l.created_at AS recorded_at,
+    l.metadata ->> 'orderType' AS order_type,
+    CASE WHEN (l.metadata ->> 'expectedAmount') ~ '^-?[0-9]+([.][0-9]+)?$'
+           THEN (l.metadata ->> 'expectedAmount')::numeric END AS expected_amount,
+    CASE WHEN (l.metadata ->> 'actualAmount') ~ '^-?[0-9]+([.][0-9]+)?$'
+           THEN (l.metadata ->> 'actualAmount')::numeric END AS actual_amount,
+    abs(CASE WHEN (l.metadata ->> 'difference') ~ '^-?[0-9]+([.][0-9]+)?$'
+           THEN (l.metadata ->> 'difference')::numeric END) AS difference_abs,
+    dr.id AS driver_id,
+    a.id AS account_id
+  FROM audit_logs l
+  LEFT JOIN drivers dr ON dr.user_id = l.actor_user_id
+  LEFT JOIN driver_cash_accounts a ON a.driver_id = dr.id
+  WHERE l.action = 'COLLECTION_DIFFERENCE_RECORDED'
+    AND l.entity_type = 'ORDER'
+    AND l.entity_id = '0c937fee-8ebd-4679-8113-5bad8b713f01'::text
+    AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.id::text = '0c937fee-8ebd-4679-8113-5bad8b713f01'::text)
+  ORDER BY l.created_at, l.id
+  LIMIT 1
+),
+win AS (
+  SELECT
+    recorded_at - make_interval(days => 7::int) AS from_at,
+    recorded_at + make_interval(days => 30::int) AS to_at
+  FROM inc
+),
+win_orders AS (
+  SELECT
+    o.*,
+    (EXISTS (SELECT 1 FROM order_assignments x WHERE x.order_id = o.id AND x.driver_id = inc.driver_id)
+      OR EXISTS (SELECT 1 FROM delivery_attempts x WHERE x.order_id = o.id AND x.driver_id = inc.driver_id))
+      AS s_incident_driver_delivery,
+    EXISTS (SELECT 1 FROM parcel_collection_assignments x
+            WHERE x.order_id = o.id AND x.driver_id = inc.driver_id)
+      AS s_incident_driver_collection,
+    (o.order_type::text = inc.order_type) AS s_same_order_type,
+    (o.amount_to_collect = inc.expected_amount
+      OR o.order_amount + o.delivery_fee = inc.expected_amount) AS s_expected_total,
+    (o.amount_to_collect = inc.actual_amount
+      OR o.actual_amount_collected = inc.actual_amount) AS s_actual_amount,
+    (o.amount_to_collect = inc.difference_abs
+      OR o.actual_amount_collected = inc.difference_abs) AS s_difference_amount,
+    (o.amount_to_collect = 0 OR o.payment_type = 'ALREADY_PAID') AS s_nothing_to_collect,
+    (o.delivered_at IS NOT NULL
+      AND o.delivered_at - o.created_at <= interval '30 minutes') AS s_back_entered,
+    (concat_ws(' ',
+        o.description, o.package_notes, o.receiver_instructions,
+        o.collection_difference_reason, o.parcel_collection_notes)
+        ILIKE '%' || left('0c937fee-8ebd-4679-8113-5bad8b713f01'::text, 8) || '%'
+      OR coalesce((SELECT string_agg(concat_ws(' ', h.reason, h.notes), ' ')
+        FROM order_status_history h WHERE h.order_id = o.id), '')
+        ILIKE '%' || left('0c937fee-8ebd-4679-8113-5bad8b713f01'::text, 8) || '%'
+      OR EXISTS (
+        SELECT 1 FROM audit_logs z
+        WHERE z.entity_type = 'ORDER' AND z.entity_id = o.id::text
+          AND concat_ws(' ', z.metadata::text, z.previous_values::text, z.new_values::text)
+            LIKE '%' || '0c937fee-8ebd-4679-8113-5bad8b713f01'::text || '%'))
+      AS s_mentions_deleted_reference,
+    (concat_ws(' ', concat_ws(' ',
+        o.description, o.package_notes, o.receiver_instructions,
+        o.collection_difference_reason, o.parcel_collection_notes),
+        (SELECT string_agg(concat_ws(' ', h.reason, h.notes), ' ')
+        FROM order_status_history h WHERE h.order_id = o.id))
+      ~* '(replac|re-?enter|re-?creat|duplicat|delet|resubmit)') AS s_replacement_wording
+  FROM orders o
+  CROSS JOIN inc
+  CROSS JOIN win
+  WHERE o.created_at >= win.from_at
+    AND o.created_at < win.to_at
+    AND o.id::text <> '0c937fee-8ebd-4679-8113-5bad8b713f01'::text
+),
+cand AS (
+  SELECT * FROM win_orders
+  WHERE s_expected_total OR s_actual_amount OR s_difference_amount
+     OR s_nothing_to_collect OR s_back_entered
+     OR s_mentions_deleted_reference OR s_replacement_wording
+)
+SELECT
+  e.order_number,
+  e.kind,
+  e.driver_number,
+  to_char((e.at) AT TIME ZONE 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS at_utc,
+  to_char((e.ended) AT TIME ZONE 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS ended_utc,
+  e.detail,
+  e.is_incident_driver
+FROM (
+  SELECT c.order_number, 'DELIVERY_ASSIGNMENT' AS kind, dr.driver_number,
+         x.assigned_at AS at, x.ended_at AS ended, x.end_reason AS detail,
+         (x.driver_id = inc.driver_id) AS is_incident_driver
+  FROM cand c
+  CROSS JOIN inc
+  JOIN order_assignments x ON x.order_id = c.id
+  JOIN drivers dr ON dr.id = x.driver_id
+  UNION ALL
+  SELECT c.order_number, 'COLLECTION_ASSIGNMENT', dr.driver_number,
+         x.assigned_at, x.ended_at, x.end_reason::text,
+         (x.driver_id = inc.driver_id)
+  FROM cand c
+  CROSS JOIN inc
+  JOIN parcel_collection_assignments x ON x.order_id = c.id
+  JOIN drivers dr ON dr.id = x.driver_id
+  UNION ALL
+  SELECT c.order_number, 'DELIVERY_ATTEMPT', dr.driver_number,
+         x.started_at, x.completed_at,
+         x.outcome::text || ' expected ' || x.expected_collection::text
+           || ' actual ' || coalesce(x.actual_collection::text, '-'),
+         (x.driver_id = inc.driver_id)
+  FROM cand c
+  CROSS JOIN inc
+  JOIN delivery_attempts x ON x.order_id = c.id
+  JOIN drivers dr ON dr.id = x.driver_id
+  UNION ALL
+  SELECT c.order_number, 'STATUS', NULL,
+         h.created_at, NULL,
+         coalesce(h.from_status::text, '-') || ' -> ' || h.to_status::text,
+         NULL
+  FROM cand c
+  JOIN order_status_history h ON h.order_id = c.id
+) e
+ORDER BY e.order_number, e.at, e.kind;
+
+-- E10 — Payouts to the potential matches' customers since the window start (wallet-level, not order-linked)
+WITH 
+
+inc AS (
+  SELECT
+    l.id AS audit_id,
+    l.created_at AS recorded_at,
+    l.metadata ->> 'orderType' AS order_type,
+    CASE WHEN (l.metadata ->> 'expectedAmount') ~ '^-?[0-9]+([.][0-9]+)?$'
+           THEN (l.metadata ->> 'expectedAmount')::numeric END AS expected_amount,
+    CASE WHEN (l.metadata ->> 'actualAmount') ~ '^-?[0-9]+([.][0-9]+)?$'
+           THEN (l.metadata ->> 'actualAmount')::numeric END AS actual_amount,
+    abs(CASE WHEN (l.metadata ->> 'difference') ~ '^-?[0-9]+([.][0-9]+)?$'
+           THEN (l.metadata ->> 'difference')::numeric END) AS difference_abs,
+    dr.id AS driver_id,
+    a.id AS account_id
+  FROM audit_logs l
+  LEFT JOIN drivers dr ON dr.user_id = l.actor_user_id
+  LEFT JOIN driver_cash_accounts a ON a.driver_id = dr.id
+  WHERE l.action = 'COLLECTION_DIFFERENCE_RECORDED'
+    AND l.entity_type = 'ORDER'
+    AND l.entity_id = '0c937fee-8ebd-4679-8113-5bad8b713f01'::text
+    AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.id::text = '0c937fee-8ebd-4679-8113-5bad8b713f01'::text)
+  ORDER BY l.created_at, l.id
+  LIMIT 1
+),
+win AS (
+  SELECT
+    recorded_at - make_interval(days => 7::int) AS from_at,
+    recorded_at + make_interval(days => 30::int) AS to_at
+  FROM inc
+),
+win_orders AS (
+  SELECT
+    o.*,
+    (EXISTS (SELECT 1 FROM order_assignments x WHERE x.order_id = o.id AND x.driver_id = inc.driver_id)
+      OR EXISTS (SELECT 1 FROM delivery_attempts x WHERE x.order_id = o.id AND x.driver_id = inc.driver_id))
+      AS s_incident_driver_delivery,
+    EXISTS (SELECT 1 FROM parcel_collection_assignments x
+            WHERE x.order_id = o.id AND x.driver_id = inc.driver_id)
+      AS s_incident_driver_collection,
+    (o.order_type::text = inc.order_type) AS s_same_order_type,
+    (o.amount_to_collect = inc.expected_amount
+      OR o.order_amount + o.delivery_fee = inc.expected_amount) AS s_expected_total,
+    (o.amount_to_collect = inc.actual_amount
+      OR o.actual_amount_collected = inc.actual_amount) AS s_actual_amount,
+    (o.amount_to_collect = inc.difference_abs
+      OR o.actual_amount_collected = inc.difference_abs) AS s_difference_amount,
+    (o.amount_to_collect = 0 OR o.payment_type = 'ALREADY_PAID') AS s_nothing_to_collect,
+    (o.delivered_at IS NOT NULL
+      AND o.delivered_at - o.created_at <= interval '30 minutes') AS s_back_entered,
+    (concat_ws(' ',
+        o.description, o.package_notes, o.receiver_instructions,
+        o.collection_difference_reason, o.parcel_collection_notes)
+        ILIKE '%' || left('0c937fee-8ebd-4679-8113-5bad8b713f01'::text, 8) || '%'
+      OR coalesce((SELECT string_agg(concat_ws(' ', h.reason, h.notes), ' ')
+        FROM order_status_history h WHERE h.order_id = o.id), '')
+        ILIKE '%' || left('0c937fee-8ebd-4679-8113-5bad8b713f01'::text, 8) || '%'
+      OR EXISTS (
+        SELECT 1 FROM audit_logs z
+        WHERE z.entity_type = 'ORDER' AND z.entity_id = o.id::text
+          AND concat_ws(' ', z.metadata::text, z.previous_values::text, z.new_values::text)
+            LIKE '%' || '0c937fee-8ebd-4679-8113-5bad8b713f01'::text || '%'))
+      AS s_mentions_deleted_reference,
+    (concat_ws(' ', concat_ws(' ',
+        o.description, o.package_notes, o.receiver_instructions,
+        o.collection_difference_reason, o.parcel_collection_notes),
+        (SELECT string_agg(concat_ws(' ', h.reason, h.notes), ' ')
+        FROM order_status_history h WHERE h.order_id = o.id))
+      ~* '(replac|re-?enter|re-?creat|duplicat|delet|resubmit)') AS s_replacement_wording
+  FROM orders o
+  CROSS JOIN inc
+  CROSS JOIN win
+  WHERE o.created_at >= win.from_at
+    AND o.created_at < win.to_at
+    AND o.id::text <> '0c937fee-8ebd-4679-8113-5bad8b713f01'::text
+),
+cand AS (
+  SELECT * FROM win_orders
+  WHERE s_expected_total OR s_actual_amount OR s_difference_amount
+     OR s_nothing_to_collect OR s_back_entered
+     OR s_mentions_deleted_reference OR s_replacement_wording
+)
+SELECT
+  p.payout_number,
+  cu.customer_number,
+  p.amount::text AS amount,
+  p.status::text AS status,
+  to_char((p.created_at) AT TIME ZONE 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at_utc,
+  w.balance_before::text AS wallet_balance_before,
+  w.balance_after::text AS wallet_balance_after
+FROM customer_payouts p
+CROSS JOIN win
+JOIN customers cu ON cu.id = p.customer_id
+LEFT JOIN wallet_transactions w ON w.payout_id = p.id AND w.type = 'PAYOUT'
+WHERE p.customer_id IN (SELECT customer_id FROM cand)
+  AND p.created_at >= win.from_at
+ORDER BY p.created_at, p.id;
+
+-- E11 — Incident driver's settlements from the window start
+WITH 
+inc AS (
+  SELECT
+    l.id AS audit_id,
+    l.created_at AS recorded_at,
+    l.metadata ->> 'orderType' AS order_type,
+    CASE WHEN (l.metadata ->> 'expectedAmount') ~ '^-?[0-9]+([.][0-9]+)?$'
+           THEN (l.metadata ->> 'expectedAmount')::numeric END AS expected_amount,
+    CASE WHEN (l.metadata ->> 'actualAmount') ~ '^-?[0-9]+([.][0-9]+)?$'
+           THEN (l.metadata ->> 'actualAmount')::numeric END AS actual_amount,
+    abs(CASE WHEN (l.metadata ->> 'difference') ~ '^-?[0-9]+([.][0-9]+)?$'
+           THEN (l.metadata ->> 'difference')::numeric END) AS difference_abs,
+    dr.id AS driver_id,
+    a.id AS account_id
+  FROM audit_logs l
+  LEFT JOIN drivers dr ON dr.user_id = l.actor_user_id
+  LEFT JOIN driver_cash_accounts a ON a.driver_id = dr.id
+  WHERE l.action = 'COLLECTION_DIFFERENCE_RECORDED'
+    AND l.entity_type = 'ORDER'
+    AND l.entity_id = '0c937fee-8ebd-4679-8113-5bad8b713f01'::text
+    AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.id::text = '0c937fee-8ebd-4679-8113-5bad8b713f01'::text)
+  ORDER BY l.created_at, l.id
+  LIMIT 1
+),
+win AS (
+  SELECT
+    recorded_at - make_interval(days => 7::int) AS from_at,
+    recorded_at + make_interval(days => 30::int) AS to_at
+  FROM inc
+)
+SELECT
+  s.settlement_number,
+  to_char((s.created_at) AT TIME ZONE 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at_utc,
+  s.balance_before::text AS balance_before,
+  s.amount_received::text AS amount_received,
+  s.balance_after::text AS balance_after,
+  s.allocated_total::text AS allocated_total,
+  s.unattributed_amount::text AS unattributed_amount,
+  (s.allocated_total IS NULL) AS amount_only_legacy_format
+FROM driver_settlements s
+CROSS JOIN inc
+CROSS JOIN win
+WHERE s.driver_id = inc.driver_id
+  AND s.created_at >= win.from_at
+ORDER BY s.created_at, s.id;
+
+-- E12 — Coverage: window orders, potential matches, incident-driver orders without a content signal
+WITH 
+
+inc AS (
+  SELECT
+    l.id AS audit_id,
+    l.created_at AS recorded_at,
+    l.metadata ->> 'orderType' AS order_type,
+    CASE WHEN (l.metadata ->> 'expectedAmount') ~ '^-?[0-9]+([.][0-9]+)?$'
+           THEN (l.metadata ->> 'expectedAmount')::numeric END AS expected_amount,
+    CASE WHEN (l.metadata ->> 'actualAmount') ~ '^-?[0-9]+([.][0-9]+)?$'
+           THEN (l.metadata ->> 'actualAmount')::numeric END AS actual_amount,
+    abs(CASE WHEN (l.metadata ->> 'difference') ~ '^-?[0-9]+([.][0-9]+)?$'
+           THEN (l.metadata ->> 'difference')::numeric END) AS difference_abs,
+    dr.id AS driver_id,
+    a.id AS account_id
+  FROM audit_logs l
+  LEFT JOIN drivers dr ON dr.user_id = l.actor_user_id
+  LEFT JOIN driver_cash_accounts a ON a.driver_id = dr.id
+  WHERE l.action = 'COLLECTION_DIFFERENCE_RECORDED'
+    AND l.entity_type = 'ORDER'
+    AND l.entity_id = '0c937fee-8ebd-4679-8113-5bad8b713f01'::text
+    AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.id::text = '0c937fee-8ebd-4679-8113-5bad8b713f01'::text)
+  ORDER BY l.created_at, l.id
+  LIMIT 1
+),
+win AS (
+  SELECT
+    recorded_at - make_interval(days => 7::int) AS from_at,
+    recorded_at + make_interval(days => 30::int) AS to_at
+  FROM inc
+),
+win_orders AS (
+  SELECT
+    o.*,
+    (EXISTS (SELECT 1 FROM order_assignments x WHERE x.order_id = o.id AND x.driver_id = inc.driver_id)
+      OR EXISTS (SELECT 1 FROM delivery_attempts x WHERE x.order_id = o.id AND x.driver_id = inc.driver_id))
+      AS s_incident_driver_delivery,
+    EXISTS (SELECT 1 FROM parcel_collection_assignments x
+            WHERE x.order_id = o.id AND x.driver_id = inc.driver_id)
+      AS s_incident_driver_collection,
+    (o.order_type::text = inc.order_type) AS s_same_order_type,
+    (o.amount_to_collect = inc.expected_amount
+      OR o.order_amount + o.delivery_fee = inc.expected_amount) AS s_expected_total,
+    (o.amount_to_collect = inc.actual_amount
+      OR o.actual_amount_collected = inc.actual_amount) AS s_actual_amount,
+    (o.amount_to_collect = inc.difference_abs
+      OR o.actual_amount_collected = inc.difference_abs) AS s_difference_amount,
+    (o.amount_to_collect = 0 OR o.payment_type = 'ALREADY_PAID') AS s_nothing_to_collect,
+    (o.delivered_at IS NOT NULL
+      AND o.delivered_at - o.created_at <= interval '30 minutes') AS s_back_entered,
+    (concat_ws(' ',
+        o.description, o.package_notes, o.receiver_instructions,
+        o.collection_difference_reason, o.parcel_collection_notes)
+        ILIKE '%' || left('0c937fee-8ebd-4679-8113-5bad8b713f01'::text, 8) || '%'
+      OR coalesce((SELECT string_agg(concat_ws(' ', h.reason, h.notes), ' ')
+        FROM order_status_history h WHERE h.order_id = o.id), '')
+        ILIKE '%' || left('0c937fee-8ebd-4679-8113-5bad8b713f01'::text, 8) || '%'
+      OR EXISTS (
+        SELECT 1 FROM audit_logs z
+        WHERE z.entity_type = 'ORDER' AND z.entity_id = o.id::text
+          AND concat_ws(' ', z.metadata::text, z.previous_values::text, z.new_values::text)
+            LIKE '%' || '0c937fee-8ebd-4679-8113-5bad8b713f01'::text || '%'))
+      AS s_mentions_deleted_reference,
+    (concat_ws(' ', concat_ws(' ',
+        o.description, o.package_notes, o.receiver_instructions,
+        o.collection_difference_reason, o.parcel_collection_notes),
+        (SELECT string_agg(concat_ws(' ', h.reason, h.notes), ' ')
+        FROM order_status_history h WHERE h.order_id = o.id))
+      ~* '(replac|re-?enter|re-?creat|duplicat|delet|resubmit)') AS s_replacement_wording
+  FROM orders o
+  CROSS JOIN inc
+  CROSS JOIN win
+  WHERE o.created_at >= win.from_at
+    AND o.created_at < win.to_at
+    AND o.id::text <> '0c937fee-8ebd-4679-8113-5bad8b713f01'::text
+),
+cand AS (
+  SELECT * FROM win_orders
+  WHERE s_expected_total OR s_actual_amount OR s_difference_amount
+     OR s_nothing_to_collect OR s_back_entered
+     OR s_mentions_deleted_reference OR s_replacement_wording
+)
+SELECT
+  (SELECT count(*) FROM win_orders)::int AS orders_in_window,
+  (SELECT count(*) FROM cand)::int AS potential_matches,
+  (SELECT count(*)
+   FROM win_orders w
+   WHERE (w.s_incident_driver_delivery OR w.s_incident_driver_collection)
+     AND w.id NOT IN (SELECT id FROM cand))::int AS incident_driver_orders_without_content_signal,
+  to_char((win.from_at) AT TIME ZONE 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS window_from_utc,
+  to_char((win.to_at) AT TIME ZONE 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS window_to_utc
+FROM (SELECT 1) AS one
+LEFT JOIN win ON true;
+
+ROLLBACK;
+```

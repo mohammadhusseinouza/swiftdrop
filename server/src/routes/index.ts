@@ -25,6 +25,7 @@ import {
 import { financeRouter } from "../modules/finance/finance.routes";
 import { financialReleaseActivationRouter } from "../modules/financial-release/financial-release-activation.routes";
 import { historicalReconciliationRouter } from "../modules/historical-reconciliation/historical-reconciliation.routes";
+import { historicalOwnershipRouter } from "../modules/historical-ownership/historical-ownership.routes";
 import { orderRouter } from "../modules/orders/order.routes";
 import { payoutRouter } from "../modules/payouts/payout.routes";
 import { referenceDataRouter } from "../modules/reference-data/reference-data.routes";
@@ -94,6 +95,8 @@ apiRouter.use("/wallet-transactions", walletTransactionRouter);
 // mounted before the permission-based /finance router. Writes stay disabled
 // unless DRIVER_CASH_HISTORICAL_RECONCILIATION_ENABLED=true.
 apiRouter.use("/finance/historical-reconciliations", historicalReconciliationRouter);
+// FR.12A.11 — historical ownership resolution / company-assumed liability (ADMIN + FINANCE only).
+apiRouter.use("/finance/historical-ownership", historicalOwnershipRouter);
 apiRouter.use("/finance", financeRouter);
 // Settlement-Based Financial Release activation (FR.11A, ADMIN role only).
 // Activation stays impossible unless FINANCIAL_RELEASE_ACTIVATION_AUTHORIZED=true.

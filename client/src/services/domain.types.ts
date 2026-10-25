@@ -1,3 +1,5 @@
+import type { HistoricalLiabilitySnapshot } from './historicalOwnership.types';
+
 /**
  * Frontend mirrors of the backend SAFE response DTOs (never Prisma models).
  * Source of truth: server/src/modules/<domain>/<domain>.types.ts.
@@ -956,6 +958,12 @@ export interface FinanceSummaryDto {
   settlementRelease: { current: SettlementReleaseSnapshot; activity: ReleaseActivity };
   /** FR.8 — present only when requested with basis=delivered. */
   deliveryDate: DeliveryDateSummary | null;
+  /**
+   * FR.12A.10 — company-assumed historical liabilities to unidentified
+   * beneficiaries (current snapshot). Separate from customer wallets, company
+   * revenue and driver cash; the tracked shortfall is never recognized.
+   */
+  historicalLiabilities?: HistoricalLiabilitySnapshot;
 }
 
 /* ============== Settlement-based financial release (FR.7 / FR.8) ============== */
