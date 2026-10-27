@@ -5,11 +5,23 @@ import { OrderTypeBadge } from '../../../components/orders/OrderTypeBadge';
 import { PaymentTypeBadge } from '../../../components/orders/PaymentTypeBadge';
 import { ParcelIntakeBadge } from '../../../components/orders/ParcelCollectionBadge';
 import { Button } from '../../../components/ui/Button';
+import { cn } from '../../../components/ui/cn';
 import { formatDate, formatDateTime, formatMoney } from '../../../lib/format';
 import type { OrderSummary } from '../../../services/domain.types';
 import { canMarkReadyOrder } from './detail/orderDetailActions';
 
 const DASH = '—';
+/** Right-aligned money: tabular figures + no wrapping so amounts line up. */
+const MONEY = 'whitespace-nowrap tabular-nums';
+
+/** Single-line cell text; the full value stays available as a tooltip. */
+function Truncate({ text, className }: { text: string; className?: string }) {
+  return (
+    <span title={text} className={cn('block max-w-[12rem] truncate', className)}>
+      {text}
+    </span>
+  );
+}
 
 function driverLabel(driver: OrderSummary['currentDriver']): string {
   if (!driver) return 'Unassigned';
@@ -24,6 +36,8 @@ export interface OrderRowActionsOptions {
   onPrintLabel: (order: OrderSummary) => void;
   /** Order id currently generating its A5 label (disables/loads only that row's button). */
   printingOrderId: string | null;
+  /** Optional column ids to show (see orderColumnVisibility.ts). Order + Actions always show. */
+  visibleColumnIds: ReadonlySet<string>;
 }
 
 /**
@@ -44,7 +58,7 @@ export const orderColumns: DataTableColumn<OrderSummary>[] = [
     cell: (o) => (
       <Link
         to={`/management/orders/${o.id}`}
-        className="font-medium text-brand-600 hover:underline"
+        className="whitespace-nowrap font-medium text-brand-600 hover:underline"
       >
         {o.orderNumber}
       </Link>
@@ -53,31 +67,29 @@ export const orderColumns: DataTableColumn<OrderSummary>[] = [
   {
     id: 'customer',
     header: 'Customer',
-    cell: (o) => o.customer.name,
-    hideBelow: 'lg',
+    cell: (o) => <Truncate text={o.customer.name} />,
   },
   {
     id: 'receiver',
     header: 'Receiver',
-    cell: (o) => o.receiverName,
+    cell: (o) => <Truncate text={o.receiverName} />,
   },
   {
     id: 'phone',
     header: 'Phone',
     cell: (o) => o.receiverPhone || DASH,
-    hideBelow: 'xl',
+    className: 'whitespace-nowrap',
   },
   {
     id: 'area',
     header: 'Area',
-    cell: (o) => o.receiverArea || DASH,
-    hideBelow: 'lg',
+    cell: (o) =>
+      o.receiverArea ? <Truncate text={o.receiverArea} className="max-w-[9rem]" /> : DASH,
   },
   {
     id: 'type',
     header: 'Type',
     cell: (o) => <OrderTypeBadge orderType={o.orderType} />,
-    hideBelow: 'md',
   },
   {
     id: 'intake',
@@ -88,13 +100,11 @@ export const orderColumns: DataTableColumn<OrderSummary>[] = [
         status={o.parcelCollectionStatus}
       />
     ),
-    hideBelow: 'lg',
   },
   {
     id: 'paymentType',
     header: 'Payment',
     cell: (o) => <PaymentTypeBadge paymentType={o.paymentType} />,
-    hideBelow: 'xl',
   },
   {
     id: 'orderAmount',
@@ -102,7 +112,7 @@ export const orderColumns: DataTableColumn<OrderSummary>[] = [
     sortable: true,
     cell: (o) => formatMoney(o.orderAmount),
     align: 'right',
-    hideBelow: 'xl',
+    className: MONEY,
   },
   {
     id: 'deliveryFee',
@@ -110,7 +120,7 @@ export const orderColumns: DataTableColumn<OrderSummary>[] = [
     sortable: true,
     cell: (o) => formatMoney(o.deliveryFee),
     align: 'right',
-    hideBelow: 'xl',
+    className: MONEY,
   },
   {
     id: 'collect',
@@ -120,26 +130,29 @@ export const orderColumns: DataTableColumn<OrderSummary>[] = [
       <span className="font-medium">{formatMoney(o.amountToCollect)}</span>
     ),
     align: 'right',
+    className: MONEY,
   },
   {
     id: 'collectionDriver',
     header: 'Collection Driver',
     cell: (o) => (
-      <span className={o.currentCollectionDriver ? undefined : 'text-ink-subtle'}>
-        {o.currentCollectionDriver ? driverLabel(o.currentCollectionDriver) : DASH}
-      </span>
+      o.currentCollectionDriver ? (
+        <Truncate text={driverLabel(o.currentCollectionDriver)} />
+      ) : (
+        <span className="text-ink-subtle">{DASH}</span>
+      )
     ),
-    hideBelow: 'lg',
   },
   {
     id: 'driver',
     header: 'Delivery Driver',
     cell: (o) => (
-      <span className={o.currentDriver ? undefined : 'text-ink-subtle'}>
-        {driverLabel(o.currentDriver)}
-      </span>
+      o.currentDriver ? (
+        <Truncate text={driverLabel(o.currentDriver)} />
+      ) : (
+        <span className="whitespace-nowrap text-ink-subtle">Unassigned</span>
+      )
     ),
-    hideBelow: 'md',
   },
   {
     id: 'status',
@@ -152,14 +165,14 @@ export const orderColumns: DataTableColumn<OrderSummary>[] = [
     header: 'Created',
     sortable: true,
     cell: (o) => formatDateTime(o.createdAt),
-    hideBelow: 'lg',
+    className: 'whitespace-nowrap',
   },
   {
     id: 'delivered',
     header: 'Delivered',
     sortable: true,
     cell: (o) => formatDate(o.deliveredAt),
-    hideBelow: 'xl',
+    className: 'whitespace-nowrap',
   },
 ];
 
@@ -180,12 +193,13 @@ export function buildOrderColumns({
   onMarkReady,
   onPrintLabel,
   printingOrderId,
+  visibleColumnIds,
 }: OrderRowActionsOptions): DataTableColumn<OrderSummary>[] {
   const actionsColumn: DataTableColumn<OrderSummary> = {
     id: 'actions',
     header: 'Actions',
     cell: (o) => (
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-1.5 whitespace-nowrap">
         {canMarkReadyOrder(o.status, permissions) && (
           <Button
             size="sm"
@@ -219,5 +233,9 @@ export function buildOrderColumns({
 
   // Positioned right after "Order" and before "Customer" per UI request.
   const [orderCol, ...rest] = orderColumns;
-  return [orderCol, actionsColumn, ...rest];
+  return [
+    orderCol,
+    actionsColumn,
+    ...rest.filter((col) => visibleColumnIds.has(col.id)),
+  ];
 }

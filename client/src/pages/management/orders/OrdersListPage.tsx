@@ -35,6 +35,8 @@ import { OrdersQuickTabs } from './OrdersQuickTabs';
 import { BulkAssignDialog } from './BulkAssignDialog';
 import { MarkReadyDialog } from './MarkReadyDialog';
 import { buildOrderColumns } from './orderColumns';
+import { OrderColumnsMenu } from './OrderColumnsMenu';
+import { useOrderColumnVisibility } from './orderColumnVisibility';
 import { canMarkReadyOrder } from './detail/orderDetailActions';
 import {
   EMPTY_ORDERS_STATE,
@@ -176,6 +178,7 @@ export default function OrdersListPage() {
     [printingOrderId, triggerGetOrder],
   );
 
+  const columnVisibility = useOrderColumnVisibility();
   const columns = useMemo(
     () =>
       buildOrderColumns({
@@ -186,8 +189,9 @@ export default function OrdersListPage() {
         },
         onPrintLabel: printLabel,
         printingOrderId,
+        visibleColumnIds: columnVisibility.visibleIds,
       }),
-    [permissions, printLabel, printingOrderId],
+    [permissions, printLabel, printingOrderId, columnVisibility.visibleIds],
   );
 
   const createOrderLink = (
@@ -333,6 +337,17 @@ export default function OrdersListPage() {
         </Card>
       ) : isDesktop ? (
         <Card flush>
+          <div className="flex items-center justify-between gap-3 border-b border-line px-3 py-2">
+            <span className="text-xs text-ink-muted">
+              {meta ? `${meta.total} order${meta.total === 1 ? '' : 's'}` : null}
+            </span>
+            <OrderColumnsMenu
+              visibleIds={columnVisibility.visibleIds}
+              onToggle={columnVisibility.toggle}
+              onReset={columnVisibility.reset}
+              isDefault={columnVisibility.isDefault}
+            />
+          </div>
           <DataTable
             columns={columns}
             rows={rows}
