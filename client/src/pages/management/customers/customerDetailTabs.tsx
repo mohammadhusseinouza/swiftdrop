@@ -1,4 +1,4 @@
-import { type ReactNode, useId, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useId, useState } from 'react';
 import { Printer } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
 
@@ -360,6 +360,14 @@ function localDayBoundary(ymd: string, end: boolean): string {
   return date.toISOString();
 }
 
+function invoiceCustomer(customer: CustomerDetail) {
+  return {
+    name: customer.name,
+    customerNumber: customer.customerNumber,
+    primaryPhone: customer.primaryPhone,
+  };
+}
+
 /**
  * Orders tab toolbar: From / To + "Print A5 Invoice". Read-only — it fetches
  * EVERY page of `GET /orders` for this customer and interval (not just the
@@ -416,13 +424,8 @@ function CustomerOrdersInvoiceControls({ customer }: { customer: CustomerDetail 
         );
       }
       printCustomerOrdersInvoice({
-        customer: {
-          name: customer.name,
-          customerNumber: customer.customerNumber,
-          primaryPhone: customer.primaryPhone,
-        },
-        from: range.from,
-        to: range.to,
+        customer: invoiceCustomer(customer),
+        scope: { kind: 'dateRange', from: range.from, to: range.to },
         orders,
       });
     } catch (e) {
@@ -467,20 +470,169 @@ function CustomerOrdersInvoiceControls({ customer }: { customer: CustomerDetail 
   );
 }
 
-export function OrdersTab({ customer }: { customer: CustomerDetail }) {
+/**
+ * Hand-picked orders for the selected-orders invoice, keyed by id. Holds the
+ * `GET /orders?customerId=` row each id was ticked from (refreshed whenever
+ * that row is displayed again), so a selection survives pagination without
+ * refetching — and can only ever contain this customer's orders.
+ */
+type OrderSelection = ReadonlyMap<string, OrderSummary>;
+
+function byCreatedAsc(a: OrderSummary, b: OrderSummary): number {
+  return a.createdAt === b.createdAt
+    ? a.orderNumber.localeCompare(b.orderNumber)
+    : a.createdAt < b.createdAt
+      ? -1
+      : 1;
+}
+
+/**
+ * "N selected" bar + "Print Selected Orders". Read-only: same template, same
+ * CANCELLED rule and same exact totals as the date invoice — only the order
+ * set differs (exactly the ticked orders, oldest first).
+ */
+function SelectedOrdersInvoiceBar({
+  customer,
+  selection,
+  onClear,
+}: {
+  customer: CustomerDetail;
+  selection: OrderSelection;
+  onClear: () => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const selected = [...selection.values()];
+  const cancelledCount = selected.filter((o) => o.status === 'CANCELLED').length;
+  const printableCount = selected.length - cancelledCount;
+
+  useEffect(() => setError(null), [selection]);
+
+  if (selected.length === 0) return null;
+
+  const handlePrint = () => {
+    setError(null);
+    try {
+      if (selected.some((o) => o.customer.id !== customer.id)) {
+        throw new Error('The selection contains another customer’s order. Clear it and try again.');
+      }
+      printCustomerOrdersInvoice({
+        customer: invoiceCustomer(customer),
+        scope: { kind: 'selected' },
+        orders: [...selected].sort(byCreatedAsc),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'The invoice could not be printed.');
+    }
+  };
+
   return (
-    <div className="space-y-4">
-      <CustomerOrdersInvoiceControls customer={customer} />
-      <CustomerOrdersTable customerId={customer.id} />
+    <div
+      role="region"
+      aria-label="Selected orders"
+      className="rounded-card border border-brand-100 bg-brand-50 px-3 py-2 text-sm"
+    >
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="font-medium text-brand-700" aria-live="polite">
+          {selected.length} order{selected.length === 1 ? '' : 's'} selected
+        </span>
+        <Button
+          size="sm"
+          icon={<Printer />}
+          disabled={printableCount === 0}
+          onClick={handlePrint}
+        >
+          Print Selected Orders
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onClear}>
+          Clear selection
+        </Button>
+      </div>
+      <p className="mt-1 text-xs text-ink-muted">
+        Selections are kept across pages. The header checkbox selects or clears
+        this page only.
+        {cancelledCount > 0 &&
+          (printableCount === 0
+            ? ' All selected orders are cancelled — cancelled orders are never included on an invoice.'
+            : ` ${cancelledCount} cancelled order${cancelledCount === 1 ? '' : 's'} will be left off the invoice.`)}
+      </p>
+      {error && (
+        <p role="alert" className="mt-1 text-sm text-danger-700">
+          {error}
+        </p>
+      )}
     </div>
   );
 }
 
-function CustomerOrdersTable({ customerId }: { customerId: string }) {
+export function OrdersTab({ customer }: { customer: CustomerDetail }) {
+  const [selection, setSelection] = useState<OrderSelection>(() => new Map());
+  // A selection never carries over to another customer.
+  useEffect(() => setSelection(new Map()), [customer.id]);
+
+  /** Apply the table's page-level selection; other pages' picks are kept. */
+  const applyPageSelection = useCallback(
+    (pageRows: OrderSummary[], pageSelectedIds: string[]) => {
+      const keep = new Set(pageSelectedIds);
+      setSelection((prev) => {
+        const next = new Map(prev);
+        for (const row of pageRows) {
+          if (keep.has(row.id)) next.set(row.id, row);
+          else next.delete(row.id);
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
+  /** Keep selected snapshots current with the latest fetched rows. */
+  const refreshSelected = useCallback((pageRows: OrderSummary[]) => {
+    setSelection((prev) => {
+      if (!pageRows.some((r) => prev.has(r.id) && prev.get(r.id) !== r)) return prev;
+      const next = new Map(prev);
+      for (const row of pageRows) if (next.has(row.id)) next.set(row.id, row);
+      return next;
+    });
+  }, []);
+
+  return (
+    <div className="space-y-4">
+      <CustomerOrdersInvoiceControls customer={customer} />
+      <SelectedOrdersInvoiceBar
+        customer={customer}
+        selection={selection}
+        onClear={() => setSelection(new Map())}
+      />
+      <CustomerOrdersTable
+        customerId={customer.id}
+        selection={selection}
+        onPageSelectionChange={applyPageSelection}
+        onRowsLoaded={refreshSelected}
+      />
+    </div>
+  );
+}
+
+function CustomerOrdersTable({
+  customerId,
+  selection,
+  onPageSelectionChange,
+  onRowsLoaded,
+}: {
+  customerId: string;
+  selection: OrderSelection;
+  onPageSelectionChange: (pageRows: OrderSummary[], pageSelectedIds: string[]) => void;
+  onRowsLoaded: (pageRows: OrderSummary[]) => void;
+}) {
   const [page, setPage] = usePageParam('ordersPage');
   const query = useGetOrdersQuery({ customerId, page, limit: PAGE_SIZE });
-  const rows = query.data?.items ?? [];
+  const items = query.data?.items;
+  const rows = items ?? [];
   const meta = query.data?.meta;
+
+  useEffect(() => {
+    if (items) onRowsLoaded(items);
+  }, [items, onRowsLoaded]);
 
   if (query.isLoading) {
     return (
@@ -520,6 +672,8 @@ function CustomerOrdersTable({ customerId }: { customerId: string }) {
           rows={rows}
           getRowId={(o) => o.id}
           caption="Customer orders"
+          selectedIds={rows.filter((o) => selection.has(o.id)).map((o) => o.id)}
+          onSelectionChange={(ids) => onPageSelectionChange(rows, ids)}
         />
       </Card>
       {meta && meta.totalPages > 1 && (

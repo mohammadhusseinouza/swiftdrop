@@ -4,8 +4,10 @@ import { formatCents, parseMoneyToCents } from './money';
 import { escapeHtml, printHtmlDocument } from './printHtmlDocument';
 
 /**
- * A5 LANDSCAPE Customer Orders Invoice — a statement of every Order created
- * for one Customer within a date interval.
+ * A5 LANDSCAPE Customer Orders Invoice — a statement of one Customer's
+ * Orders: either every Order created within a date interval, or exactly the
+ * Orders Management selected by hand (`scope`). Both use this one template,
+ * the same columns, the same CANCELLED rule and the same totals.
  *
  * Read-only: built from `OrderSummary` rows the caller already fetched with
  * `GET /orders` (every page), printed through the shared hidden-iframe
@@ -36,12 +38,19 @@ export interface CustomerOrdersInvoiceCustomer {
   primaryPhone: string | null;
 }
 
+export type CustomerOrdersInvoiceScope =
+  /** Inclusive interval as selected, `YYYY-MM-DD`. */
+  | { kind: 'dateRange'; from: string; to: string }
+  /** Exactly the orders the user ticked — nothing else is added. */
+  | { kind: 'selected' };
+
 export interface CustomerOrdersInvoiceInput {
   customer: CustomerOrdersInvoiceCustomer;
-  /** Inclusive interval as selected, `YYYY-MM-DD`. */
-  from: string;
-  to: string;
-  /** ALL fetched orders (every page), in print order. CANCELLED ones are dropped here. */
+  scope: CustomerOrdersInvoiceScope;
+  /**
+   * The orders to list, in print order: every fetched page for `dateRange`,
+   * exactly the selected orders for `selected`. CANCELLED ones are dropped here.
+   */
   orders: OrderSummary[];
 }
 
@@ -108,11 +117,21 @@ function formatCalendarDate(ymd: string): string {
 
 export function getCustomerOrdersInvoiceDocumentName(
   customerNumber: string,
-  from: string,
-  to: string,
+  scope: CustomerOrdersInvoiceScope,
+  generatedAt: Date = new Date(),
 ): string {
   const safe = customerNumber.trim().replace(/[^A-Za-z0-9._-]+/g, '-');
-  return `SpringDelivery-Orders-${safe || 'customer'}-${from}_${to}`;
+  const suffix =
+    scope.kind === 'dateRange'
+      ? `${scope.from}_${scope.to}`
+      : `selected-${toLocalYmd(generatedAt)}`;
+  return `SpringDelivery-Orders-${safe || 'customer'}-${suffix}`;
+}
+
+function toLocalYmd(d: Date): string {
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
 }
 
 // Same mark as the app's sidebar brand icon (lucide "truck").
@@ -207,15 +226,23 @@ export function buildCustomerOrdersInvoiceHtml(
   input: CustomerOrdersInvoiceInput,
   generatedAt: Date = new Date(),
 ): string {
-  const { customer, from, to } = input;
+  const { customer, scope } = input;
   const { rows, totals } = computeCustomerOrdersInvoice(
     getInvoiceableOrders(input.orders),
   );
-  const interval = `${formatCalendarDate(from)} – ${formatCalendarDate(to)}`;
+  const scopeLabel = scope.kind === 'dateRange' ? 'Period' : 'Orders';
+  const scopeValue =
+    scope.kind === 'dateRange'
+      ? `${formatCalendarDate(scope.from)} – ${formatCalendarDate(scope.to)}`
+      : 'Selected orders';
+  const emptyText =
+    scope.kind === 'dateRange'
+      ? 'No orders (excluding cancelled) for this customer in the selected period.'
+      : 'No orders (excluding cancelled) among the selected orders.';
 
   const body =
     rows.length === 0
-      ? `<tr><td colspan="6" class="empty">No orders (excluding cancelled) for this customer in the selected period.</td></tr>`
+      ? `<tr><td colspan="6" class="empty">${escapeHtml(emptyText)}</td></tr>`
       : rows
           .map(
             ({ order, total }) => `<tr>
@@ -233,7 +260,7 @@ export function buildCustomerOrdersInvoiceHtml(
 <html>
 <head>
 <meta charset="utf-8" />
-<title>${escapeHtml(getCustomerOrdersInvoiceDocumentName(customer.customerNumber, from, to))}</title>
+<title>${escapeHtml(getCustomerOrdersInvoiceDocumentName(customer.customerNumber, scope, generatedAt))}</title>
 <style>${INVOICE_CSS}</style>
 </head>
 <body>
@@ -259,8 +286,8 @@ export function buildCustomerOrdersInvoiceHtml(
         <div class="meta-sub">${escapeHtml(customer.customerNumber)}${customer.primaryPhone ? ` &nbsp;·&nbsp; ${escapeHtml(customer.primaryPhone)}` : ''}</div>
       </div>
       <div class="meta-block right">
-        <div class="meta-label">Period</div>
-        <div class="meta-value">${escapeHtml(interval)}</div>
+        <div class="meta-label">${scopeLabel}</div>
+        <div class="meta-value">${escapeHtml(scopeValue)}</div>
         <div class="meta-sub">${totals.orderCount} ${totals.orderCount === 1 ? 'order' : 'orders'} (excl. cancelled) &nbsp;·&nbsp; USD</div>
       </div>
     </div>
