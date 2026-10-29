@@ -18,6 +18,7 @@ model areas {
   orders     orders[]    @relation("orders_receiver_area")
 
   parcel_collection_orders orders[] @relation("orders_parcel_collection_area")
+  customer_receivers       customer_receivers[]
 
   @@index([is_active, sort_order])
 }
@@ -155,11 +156,42 @@ model customers {
   orders                                orders[]
   wallet_transactions                   wallet_transactions[]
   order_financial_releases              order_financial_releases[]
+  customer_receivers                    customer_receivers[]
 
   @@index([default_area_id])
   @@index([is_active])
   @@index([name])
   @@index([primary_phone])
+}
+
+/// Customer Receiver Memory — the latest reusable receiver details a customer
+/// has sent orders to, used ONLY for Create / Edit Order autocomplete.
+/// Identified by (customer_id, normalized_phone). Written only inside the
+/// order create / edit transactions; never backfilled. Orders keep their own
+/// receiver_* snapshot columns and never read from this table, so a change
+/// here never alters any order (CLAUDE.md §11).
+model customer_receivers {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customer_id       String    @db.Uuid
+  name              String    @db.VarChar(200)
+  /// The primary phone exactly as last entered (display value).
+  phone             String    @db.VarChar(30)
+  /// E.164-style matching key from normalizeReceiverPhone(); never displayed.
+  normalized_phone  String    @db.VarChar(20)
+  alternative_phone String?   @db.VarChar(30)
+  area_id           String?   @db.Uuid
+  address           String    @db.VarChar(500)
+  building_floor    String?   @db.VarChar(200)
+  map_link          String?   @db.VarChar(1000)
+  instructions      String?
+  created_at        DateTime  @default(now()) @db.Timestamptz(3)
+  updated_at        DateTime  @default(now()) @db.Timestamptz(3)
+  customers         customers @relation(fields: [customer_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  areas             areas?    @relation(fields: [area_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@unique([customer_id, normalized_phone])
+  @@index([customer_id, updated_at(sort: Desc)])
+  @@index([area_id])
 }
 
 model delivery_attempts {

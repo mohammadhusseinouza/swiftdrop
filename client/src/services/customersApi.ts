@@ -10,6 +10,7 @@ import type {
 import type {
   CustomerDetail,
   CustomerOrderTotals,
+  CustomerReceiverSuggestion,
   CustomerSummary,
 } from './domain.types';
 
@@ -55,6 +56,13 @@ export interface UpdateCustomerRequest {
   portalPassword?: string;
 }
 
+export interface ListCustomerReceiversParams {
+  customerId: string;
+  search?: string;
+  /** Server default 8, max 20. */
+  limit?: number;
+}
+
 export const customersApi = api.injectEndpoints({
   endpoints: (builder) => ({
     getCustomers: builder.query<
@@ -91,6 +99,26 @@ export const customersApi = api.injectEndpoints({
       ],
     }),
 
+    /**
+     * Saved receivers of ONE customer for the Create / Edit Order receiver
+     * autocomplete — filtered and bounded server-side. Receivers are saved
+     * only by order create / edit, which invalidate this tag.
+     */
+    getCustomerReceivers: builder.query<
+      CustomerReceiverSuggestion[],
+      ListCustomerReceiversParams
+    >({
+      query: ({ customerId, ...params }) => ({
+        url: `/customers/${customerId}/receivers`,
+        params: cleanParams({ ...params }),
+      }),
+      transformResponse: (r: ApiListResponse<CustomerReceiverSuggestion>) =>
+        unwrapList(r).items,
+      providesTags: (_res, _err, { customerId }) => [
+        { type: 'CustomerReceiver', id: customerId },
+      ],
+    }),
+
     createCustomer: builder.mutation<CustomerDetail, CreateCustomerRequest>({
       query: (body) => ({ url: '/customers', method: 'POST', body }),
       transformResponse: (r: ApiSuccessResponse<CustomerDetail>) =>
@@ -121,6 +149,7 @@ export const {
   useGetCustomersQuery,
   useGetCustomerQuery,
   useGetCustomerOrderTotalsQuery,
+  useGetCustomerReceiversQuery,
   useCreateCustomerMutation,
   useUpdateCustomerMutation,
 } = customersApi;

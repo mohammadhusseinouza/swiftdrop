@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { OrderTypeSchema, PaymentTypeSchema, moneySchema, optionalMoneySchema } from "./order-financial.schema";
 import { projectAmountToCollect } from "./order-financial.service";
+import { receiverPhoneSchema } from "../../shared/phone/phone-format";
 
 // Reusable foundation for the future POST /api/v1/orders body (Phase 6.2).
 // NOT wired to any route yet — no HTTP layer exists for Orders in this
@@ -57,8 +58,9 @@ export const OrderCreateFoundationSchema = z
 
     // Receiver snapshot — NOT a Customer relationship (CLAUDE.md §11).
     receiverName: z.string().trim().min(1, "Receiver name is required").max(200),
-    receiverPhone: z.string().trim().min(1, "Receiver phone is required").max(30),
-    receiverAltPhone: z.string().trim().min(1).max(30).optional(),
+    // Format rule + Arabic-Indic digit conversion: shared/phone/phone-format.ts.
+    receiverPhone: receiverPhoneSchema("Receiver phone is required"),
+    receiverAltPhone: receiverPhoneSchema().optional(),
     receiverAreaId: z.string().uuid("Receiver area is required"),
     receiverAddress: z.string().trim().min(1, "Receiver address is required").max(500),
     receiverBuildingFloor: z.string().trim().min(1).max(200).optional(),

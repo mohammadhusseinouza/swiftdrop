@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { UpdateOrderRequest } from '../../../../services/ordersApi';
 import type { OrderDetail } from '../../../../services/domain.types';
 import { parseMoneyToCents } from '../create/createOrderFinancialPreview';
+import { PHONE_MAX_LENGTH, phoneFormatIssue } from '../../../../lib/phoneFormat';
 
 /**
  * Frontend Edit Order validation — mirrors the live backend PATCH contract
@@ -53,8 +54,13 @@ export const editOrderSchema = z
     paymentType: z.enum(PAYMENT_TYPES),
 
     receiverName: z.string().trim().min(1, 'Receiver name is required').max(200),
-    receiverPhone: z.string().trim().min(1, 'Primary phone is required').max(30),
-    receiverAltPhone: z.string().trim().max(30, 'At most 30 characters'),
+    // Format is checked by buildEditOrderSchema (it needs the stored values).
+    receiverPhone: z
+      .string()
+      .trim()
+      .min(1, 'Primary phone is required')
+      .max(PHONE_MAX_LENGTH, 'At most 30 characters'),
+    receiverAltPhone: z.string().trim().max(PHONE_MAX_LENGTH, 'At most 30 characters'),
     receiverAreaId: z
       .string()
       .min(1, 'Select an area')
@@ -196,6 +202,46 @@ export const editOrderSchema = z
 
 export type EditOrderFormValues = z.infer<typeof editOrderSchema>;
 
+/** The order's stored receiver phones, trimmed (alternative: '' when none). */
+export function storedReceiverPhones(order: OrderDetail) {
+  return {
+    receiverPhone: order.receiver.phone.trim(),
+    receiverAltPhone: (order.receiver.altPhone ?? '').trim(),
+  };
+}
+
+/**
+ * True when a phone field still holds the order's stored value AND that value
+ * predates the phone format rule. Such a value is kept as-is: it does not
+ * block saving unrelated fields and is never sent (see toUpdateOrderRequest).
+ */
+export function isUnchangedLegacyPhone(
+  field: 'receiverPhone' | 'receiverAltPhone',
+  value: string,
+  order: OrderDetail,
+): boolean {
+  const stored = storedReceiverPhones(order)[field];
+  return stored !== '' && value.trim() === stored && phoneFormatIssue(stored) !== null;
+}
+
+/**
+ * Edit Order schema for one order: the base rules plus the receiver phone
+ * format, which applies to every phone the employee CHANGES. An unchanged
+ * stored phone is exempt — historical values are never forced through the
+ * new rule or rewritten.
+ */
+export function buildEditOrderSchema(order: OrderDetail) {
+  const stored = storedReceiverPhones(order);
+  return editOrderSchema.superRefine((v, ctx) => {
+    for (const field of ['receiverPhone', 'receiverAltPhone'] as const) {
+      const value = v[field].trim();
+      if (value === '' || value === stored[field]) continue;
+      const issue = phoneFormatIssue(value);
+      if (issue) ctx.addIssue({ code: 'custom', path: [field], message: issue });
+    }
+  });
+}
+
 /** Seed the edit form from the current authoritative Order. */
 export function orderToEditValues(order: OrderDetail): EditOrderFormValues {
   const f = order.financial;
@@ -242,21 +288,29 @@ function toWholeNumber(value: string): number {
 }
 
 /**
- * Build the PATCH /api/v1/orders/:id body. The full editable field set is sent
- * every time: the backend no-ops an unchanged customer/area and recomputes all
- * derived totals. `null` is used to CLEAR an optional field (empty input);
- * money stays a string end-to-end.
+ * Build the PATCH /api/v1/orders/:id body. The editable field set is sent
+ * every time (the backend no-ops an unchanged customer/area and recomputes all
+ * derived totals) EXCEPT the receiver phones, which are sent only when changed:
+ * the backend validates every phone it receives, so an untouched historical
+ * phone that predates the format rule must not be resent. Omitting an
+ * unchanged phone keeps the stored value exactly (never turns it into null).
+ * `null` is used to CLEAR an optional field (empty input); money stays a
+ * string end-to-end.
  */
 export function toUpdateOrderRequest(
   values: EditOrderFormValues,
+  order: OrderDetail,
 ): UpdateOrderRequest {
+  const stored = storedReceiverPhones(order);
+  const phone = values.receiverPhone.trim();
+  const altPhone = trimmedOrNull(values.receiverAltPhone);
   return {
+    ...(phone !== stored.receiverPhone ? { receiverPhone: phone } : {}),
+    ...(altPhone !== (stored.receiverAltPhone || null) ? { receiverAltPhone: altPhone } : {}),
     customerId: values.customerId,
     paymentType: values.paymentType,
 
     receiverName: values.receiverName.trim(),
-    receiverPhone: values.receiverPhone.trim(),
-    receiverAltPhone: trimmedOrNull(values.receiverAltPhone),
     receiverAreaId: values.receiverAreaId,
     receiverAddress: values.receiverAddress.trim(),
     receiverBuildingFloor: trimmedOrNull(values.receiverBuildingFloor),

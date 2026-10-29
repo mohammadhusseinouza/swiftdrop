@@ -2408,3 +2408,61 @@ deleted.
   driver cash, and settlement allocations.
 - A read-only reconciliation verifies that driver cash, allocations, releases, wallet credits
   and company revenue agree.
+
+---
+
+# 56. Customer Receiver Memory (Receiver Autocomplete)
+
+Employees can reuse receiver details previously entered for the **same customer** when creating
+or editing an order. Approved rules:
+
+## 56.1 Identity and isolation
+
+- A saved receiver is identified by **customer + normalized primary phone**. One customer has at
+  most one saved receiver per normalized phone (enforced by a database unique constraint).
+- A receiver saved under one customer never appears in another customer's suggestions. Two
+  customers may each save the same phone independently.
+- Phone normalization is used for matching only: spaces and formatting are ignored, Lebanese
+  local and international forms of the same number match (e.g. `03 123 456` = `+961 3 123456`),
+  other countries keep their country code. A phone that cannot be normalized unambiguously
+  creates no saved receiver (the order is still created). The phone as typed is what is stored
+  and displayed.
+
+## 56.2 Saving
+
+- There is no Save Receiver action, receiver page or receiver management screen. Receivers are
+  saved only through a successful order creation or order edit, in the same transaction.
+- Existing orders are **not** backfilled. A pre-existing order gets a saved receiver only if its
+  receiver (or customer) is later edited.
+- Creating an order saves a new receiver or refreshes the existing one with the latest details.
+  Name, phone, address and area always take the latest value; an optional field left empty keeps
+  the saved value.
+- Editing an order's receiver (or customer) refreshes the saved receiver of the order's **final**
+  customer and **final** phone. An optional field cleared on the order clears the saved value
+  only when the customer and normalized phone are unchanged and the order previously had a value.
+  When the phone changes to another identity, that identity's saved receiver is found or created
+  and the previous one is left unchanged (never renamed or merged). An edit that changes neither
+  the receiver nor the customer does not touch saved receivers.
+
+## 56.3 Order snapshots stay authoritative
+
+- Every order keeps its own receiver snapshot (§4). Saved receivers are suggestion data only:
+  updating one never changes any order, and every order screen, label, portal, report and the
+  public tracking page keeps reading the order's own receiver fields.
+- Choosing a suggestion only prefills the form; every field stays editable. A saved area that is
+  no longer active is not prefilled, and the existing active-area validation still applies.
+
+## 56.4 Receiver phone format
+
+Applies to the receiver **primary** and **alternative** phone on Create Order and Edit Order
+(not to customer or parcel-collection phones):
+
+- Allowed: digits 0–9, spaces, dots, hyphens, parentheses, and a single leading `+`. At least one
+  digit. At most 30 characters. No fixed digit count (international numbers vary).
+- Letters of any language and every other symbol are rejected (frontend and backend).
+- Arabic-Indic (٠–٩) and Eastern Arabic-Indic (۰–۹) digits are converted to 0–9 when entered.
+  Nothing else is changed automatically: invalid pasted or autofilled text is kept and shown with
+  a validation error.
+- Historical orders keep phones saved before this rule. An unchanged historical phone never
+  blocks editing other fields and is not resent; a phone the employee changes must follow the
+  rule.

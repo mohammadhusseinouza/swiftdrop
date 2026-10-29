@@ -157,6 +157,8 @@ export const API_TAG_TYPES = [
   'CustomerWalletTransaction',
   'CustomerPayout',
   'CustomerProfile',
+  // Customer Receiver Memory (Create / Edit Order autocomplete).
+  'CustomerReceiver',
   'Finance',
   'Report',
   'Settings',

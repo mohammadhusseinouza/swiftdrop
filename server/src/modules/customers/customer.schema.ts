@@ -79,3 +79,21 @@ export const ListCustomersQuerySchema = z.object({
 });
 
 export type ListCustomersQuery = z.infer<typeof ListCustomersQuerySchema>;
+
+// Customer Receiver Memory autocomplete (GET /customers/:id/receivers).
+// Bounded on purpose: autocomplete only ever needs a handful of rows.
+export const CUSTOMER_RECEIVERS_DEFAULT_LIMIT = 8;
+export const CUSTOMER_RECEIVERS_MAX_LIMIT = 20;
+
+export const ListCustomerReceiversQuerySchema = z.object({
+  search: z.string().trim().min(1).max(200).optional(),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(CUSTOMER_RECEIVERS_MAX_LIMIT)
+    .optional()
+    .default(CUSTOMER_RECEIVERS_DEFAULT_LIMIT),
+});
+
+export type ListCustomerReceiversQuery = z.infer<typeof ListCustomerReceiversQuerySchema>;

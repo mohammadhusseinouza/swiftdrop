@@ -2,6 +2,7 @@ import { z } from "zod";
 import { OrderTypeSchema, PaymentTypeSchema, moneySchema } from "./order-financial.schema";
 import { WORKFLOW_QUEUE_VALUES } from "./order-workflow-queue";
 import { OrderFinancialStatus } from "../../generated/prisma/enums";
+import { receiverPhoneSchema } from "../../shared/phone/phone-format";
 
 export const OrderIdParamSchema = z.object({
   id: z.string().uuid(),
@@ -207,8 +208,10 @@ export const OrderUpdateSchema = z
     customerId: z.string().uuid().optional(),
 
     receiverName: z.string().trim().min(1, "Receiver name is required").max(200).optional(),
-    receiverPhone: z.string().trim().min(1, "Receiver phone is required").max(30).optional(),
-    receiverAltPhone: z.string().trim().min(1).max(30).nullable().optional(),
+    // Validated only when SENT: an omitted phone keeps the stored value, so a
+    // historical order whose phone predates the format rule stays editable.
+    receiverPhone: receiverPhoneSchema("Receiver phone is required").optional(),
+    receiverAltPhone: receiverPhoneSchema().nullable().optional(),
     // Required V1 field on create, but naturally optional on PATCH — see
     // the AREA CHANGE / SNAPSHOT handling in order.service.ts: omitting it
     // preserves the existing receiver_area_id/receiver_area snapshot

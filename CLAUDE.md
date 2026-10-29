@@ -2597,3 +2597,27 @@ Code: `server/src/modules/historical-ownership/` (`/api/v1/finance/historical-ow
   identifiers or amounts in gate logic.
 - Writes need `HISTORICAL_OWNERSHIP_RESOLUTION_ENABLED=true` (unset by default; set only for an authorized window).
   Never apply a liability to a production incident without explicit authorization.
+
+---
+
+# 77. Customer Receiver Memory (receiver autocomplete)
+
+Business rules: `docs/requirements.md` §56. Migration `20261029000000_customer_receiver_memory`
+(additive, no backfill). Code: `server/src/modules/customers/customer-receiver.service.ts`,
+`server/src/shared/phone/receiver-phone.ts`, `client/src/components/orders/ReceiverSuggestions.tsx`.
+
+- `customer_receivers` is identified by `(customer_id, normalized_phone)` (unique index). Rows are
+  written ONLY by `rememberCustomerReceiverTx()` (one `INSERT … ON CONFLICT`) inside the
+  `createOrder` / `updateOrder` transactions — no receiver CRUD API, no backfill.
+- Orders have no link column to it on purpose. Order receiver consumers (detail, list, labels,
+  invoice, Driver / Customer portals, reports, tracking) must keep reading `orders.receiver_*`;
+  never read an order's receiver from `customer_receivers` (Section 11).
+- `GET /api/v1/customers/:id/receivers` (autocomplete): `customers.read` plus `orders.create` or
+  `orders.update`, server-side customer filter, bounded `limit` (default 8, max 20).
+- `normalizeReceiverPhone()` returns null for anything ambiguous; null means "skip receiver
+  memory", never a guessed match.
+- Receiver phone FORMAT (requirements §56.4): `server/src/shared/phone/phone-format.ts`
+  (`receiverPhoneSchema`) mirrored by `client/src/lib/phoneFormat.ts` — keep them identical (a
+  server test compares the client source). The normalizer stays wider than the format rule so
+  historical phones keep matching. Edit Order sends a receiver phone only when it changed, so an
+  untouched historical phone that predates the rule never fails validation.

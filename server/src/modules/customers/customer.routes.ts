@@ -5,6 +5,7 @@ import { validate } from "../../middleware/validate";
 import {
   CreateCustomerSchema,
   CustomerIdParamSchema,
+  ListCustomerReceiversQuerySchema,
   ListCustomersQuerySchema,
   UpdateCustomerSchema,
 } from "./customer.schema";
@@ -12,6 +13,7 @@ import {
   createCustomerController,
   getCustomerController,
   getCustomerOrderTotalsController,
+  listCustomerReceiversController,
   listCustomersController,
   updateCustomerController,
 } from "./customer.controller";
@@ -44,6 +46,16 @@ customerRouter.get(
   authorize("customers.read"),
   validate({ params: CustomerIdParamSchema }),
   getCustomerController
+);
+
+// Customer Receiver Memory autocomplete — see listCustomerReceiversController
+// for the additional orders.create / orders.update requirement.
+customerRouter.get(
+  "/:id/receivers",
+  authenticate,
+  authorize("customers.read"),
+  validate({ params: CustomerIdParamSchema, query: ListCustomerReceiversQuerySchema }),
+  listCustomerReceiversController
 );
 
 customerRouter.patch(

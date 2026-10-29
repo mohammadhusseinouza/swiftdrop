@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { CreateOrderRequest } from '../../../../services/ordersApi';
 import { parseMoneyToCents } from './createOrderFinancialPreview';
+import { PHONE_MAX_LENGTH, phoneFormatIssue } from '../../../../lib/phoneFormat';
 
 /**
  * Frontend Create Order validation — mirrors the live backend contract
@@ -51,6 +52,13 @@ const optionalMoney = z
 
 const optionalUuid = z.union([z.literal(''), z.uuid()]);
 
+/** Receiver phone format (lib/phoneFormat.ts); an empty optional phone is skipped. */
+const checkPhoneFormat = (value: string, ctx: z.RefinementCtx) => {
+  if (value === '') return;
+  const issue = phoneFormatIssue(value);
+  if (issue) ctx.addIssue({ code: 'custom', message: issue });
+};
+
 export const createOrderSchema = z
   .object({
     customerId: z.string().min(1, 'Select a customer').pipe(z.uuid('Select a customer')),
@@ -59,8 +67,17 @@ export const createOrderSchema = z
 
     // Receiver snapshot (belongs to the order, not the customer).
     receiverName: z.string().trim().min(1, 'Receiver name is required').max(200),
-    receiverPhone: z.string().trim().min(1, 'Primary phone is required').max(30),
-    receiverAltPhone: z.string().trim().max(30, 'At most 30 characters'),
+    receiverPhone: z
+      .string()
+      .trim()
+      .min(1, 'Primary phone is required')
+      .max(PHONE_MAX_LENGTH, 'At most 30 characters')
+      .superRefine(checkPhoneFormat),
+    receiverAltPhone: z
+      .string()
+      .trim()
+      .max(PHONE_MAX_LENGTH, 'At most 30 characters')
+      .superRefine(checkPhoneFormat),
     receiverAreaId: z.string().min(1, 'Select an area').pipe(z.uuid('Select an area')),
     receiverAddress: z.string().trim().min(1, 'Full address is required').max(500),
     receiverBuildingFloor: z.string().trim().max(200, 'At most 200 characters'),

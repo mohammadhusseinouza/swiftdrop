@@ -148,6 +148,9 @@ export async function cleanupTestCustomerRecord(customerId: string): Promise<voi
     // Phase 8.5 is the first suite to create real customer_payouts rows.
     prisma.customer_payouts.deleteMany({ where: { customer_id: customerId } }),
     prisma.customer_wallets.deleteMany({ where: { customer_id: customerId } }),
+    // Customer Receiver Memory — customer_receivers.customer_id is RESTRICT;
+    // every order created through POST /orders saves one.
+    prisma.customer_receivers.deleteMany({ where: { customer_id: customerId } }),
     prisma.customers.deleteMany({ where: { id: customerId } }),
     // Phase 11.6 correction — customer mutations now emit CUSTOMER audit rows
     // (polymorphic entity_type/entity_id, no FK) — clear them or they orphan.
@@ -319,6 +322,7 @@ export async function cleanupTestDriverRecord(driverId: string): Promise<void> {
 // FK-safe order. Safe to call even if some rows were never created.
 export async function cleanupTestUser(userId: string): Promise<void> {
   await prisma.auth_sessions.deleteMany({ where: { user_id: userId } });
+  await prisma.customer_receivers.deleteMany({ where: { customers: { portal_user_id: userId } } });
   await prisma.customers.deleteMany({ where: { portal_user_id: userId } });
   const driver = await prisma.drivers.findUnique({ where: { user_id: userId } });
   if (driver) {

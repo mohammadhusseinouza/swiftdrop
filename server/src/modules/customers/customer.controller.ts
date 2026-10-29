@@ -7,8 +7,19 @@ import {
   listCustomers,
   updateCustomer,
 } from "./customer.service";
-import type { CreateCustomerInput, ListCustomersQuery, UpdateCustomerInput } from "./customer.schema";
-import type { CustomerDetail, CustomerOrderTotals, CustomerSummary } from "./customer.types";
+import { listCustomerReceivers } from "./customer-receiver.service";
+import type {
+  CreateCustomerInput,
+  ListCustomerReceiversQuery,
+  ListCustomersQuery,
+  UpdateCustomerInput,
+} from "./customer.schema";
+import type {
+  CustomerDetail,
+  CustomerOrderTotals,
+  CustomerReceiverSuggestion,
+  CustomerSummary,
+} from "./customer.types";
 import type { ApiListResponse, ApiSuccessResponse } from "../../shared/types/api-response";
 
 export const listCustomersController: RequestHandler<
@@ -86,6 +97,38 @@ export const updateCustomerController: RequestHandler<
     }
     const customer = await updateCustomer(req.params.id, req.body, req.actor.userId);
     res.json({ success: true, data: customer });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Customer Receiver Memory autocomplete. Receiver memory only serves the
+// Create / Edit Order forms, so on top of customers.read (enforced by the
+// route) the actor must be able to create or edit orders.
+export const listCustomerReceiversController: RequestHandler<
+  { id: string },
+  ApiListResponse<CustomerReceiverSuggestion>
+> = async (req, res, next) => {
+  try {
+    if (!req.actor) {
+      throw new AppError({ statusCode: 401, code: "UNAUTHORIZED", message: "Authentication required" });
+    }
+    if (!req.actor.permissions.includes("orders.create") && !req.actor.permissions.includes("orders.update")) {
+      throw new AppError({
+        statusCode: 403,
+        code: "FORBIDDEN",
+        message: "You do not have permission to perform this action",
+      });
+    }
+
+    const query = req.query as unknown as ListCustomerReceiversQuery;
+    const { items, total } = await listCustomerReceivers(req.params.id, query);
+
+    res.json({
+      success: true,
+      data: items,
+      meta: { page: 1, limit: query.limit, total, totalPages: Math.ceil(total / query.limit) },
+    });
   } catch (error) {
     next(error);
   }

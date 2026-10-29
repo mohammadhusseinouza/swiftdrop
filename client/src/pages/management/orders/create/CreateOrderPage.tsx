@@ -8,6 +8,7 @@ import { paths } from '../../../../routes/paths';
 import { useHasPermission } from '../../../../features/auth/usePermissions';
 import { PERMISSIONS } from '../../../../features/auth/permissions';
 import { useDebouncedValue } from '../../../../lib/useDebouncedValue';
+import { phoneInput } from '../../../../lib/phoneFormat';
 import { useCreateOrderMutation } from '../../../../services/ordersApi';
 import type { OrderDetail } from '../../../../services/domain.types';
 import { useGetCustomersQuery, useGetCustomerQuery } from '../../../../services/customersApi';
@@ -31,6 +32,11 @@ import {
 import { MoneyInput } from '../../../../components/forms/MoneyInput';
 import { CalculatedField } from '../../../../components/forms/CalculatedField';
 import { ServerSearchSelect } from '../../../../components/forms/ServerSearchSelect';
+import {
+  ReceiverMemoryNote,
+  ReceiverSuggestionList,
+  useReceiverMemory,
+} from '../../../../components/orders/ReceiverSuggestions';
 import { Button } from '../../../../components/ui/Button';
 import { ConfirmationModal } from '../../../../components/feedback/ConfirmationModal';
 import { formatMoney } from '../../../../lib/format';
@@ -287,6 +293,20 @@ export default function CreateOrderPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [driverCollection, cust?.id]);
 
+  /* ---------- Customer Receiver Memory (autocomplete) ---------- */
+  // Suggestions are the SELECTED customer's saved receivers only; choosing one
+  // prefills the editable fields below. The receiver is saved by the backend
+  // as part of the create itself — there is no separate save action.
+  const receiverMemory = useReceiverMemory({
+    customerId: values.customerId,
+    name: values.receiverName,
+    phone: values.receiverPhone,
+    getValue: (field) => getValues(field),
+    setValue: (field, value) =>
+      setValue(field, value, { shouldDirty: true, shouldValidate: value !== '' }),
+    disabled: created !== null,
+  });
+
   /* -------------------- submit -------------------- */
   const goToOrder = (order: OrderDetail, assigned: boolean) => {
     navigate(paths.management.orderDetail(order.id), {
@@ -465,28 +485,39 @@ export default function CreateOrderPage() {
             title="Receiver"
             description="Delivery contact and address. Stored as a snapshot on the order — it does not change if the customer's details change later."
           >
+            <div className="relative">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <TextField
+                  label="Receiver name"
+                  required
+                  autoComplete="off"
+                  hint={
+                    values.customerId
+                      ? 'Type a name or phone to reuse a saved receiver.'
+                      : undefined
+                  }
+                  error={errors.receiverName?.message}
+                  {...receiverMemory.bind('receiverName', register('receiverName'))}
+                />
+                <TextField
+                  label="Primary phone"
+                  required
+                  inputMode="tel"
+                  autoComplete="off"
+                  error={errors.receiverPhone?.message}
+                  {...receiverMemory.bind('receiverPhone', phoneInput(register('receiverPhone')))}
+                />
+              </div>
+              <ReceiverSuggestionList memory={receiverMemory} />
+            </div>
+            <ReceiverMemoryNote memory={receiverMemory} />
             <div className="grid gap-4 sm:grid-cols-2">
-              <TextField
-                label="Receiver name"
-                required
-                autoComplete="off"
-                error={errors.receiverName?.message}
-                {...register('receiverName')}
-              />
-              <TextField
-                label="Primary phone"
-                required
-                inputMode="tel"
-                autoComplete="off"
-                error={errors.receiverPhone?.message}
-                {...register('receiverPhone')}
-              />
               <TextField
                 label="Alternative phone"
                 inputMode="tel"
                 autoComplete="off"
                 error={errors.receiverAltPhone?.message}
-                {...register('receiverAltPhone')}
+                {...phoneInput(register('receiverAltPhone'))}
               />
               <SelectField
                 label="Area"

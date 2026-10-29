@@ -48,3 +48,20 @@ export interface CustomerDetail extends CustomerSummary {
   notes: string | null;
   orderSummary: CustomerOrderSummary;
 }
+
+// GET /customers/:id/receivers — Customer Receiver Memory autocomplete row.
+// Only what the Create / Edit Order receiver section needs to prefill; the
+// normalized matching key is internal and never returned. `area.isActive`
+// lets the form refuse to prefill an area that can no longer take orders.
+export interface CustomerReceiverSuggestion {
+  id: string;
+  name: string;
+  phone: string;
+  alternativePhone: string | null;
+  area: { id: string; name: string; isActive: boolean } | null;
+  address: string;
+  buildingFloor: string | null;
+  mapLink: string | null;
+  instructions: string | null;
+  updatedAt: string;
+}

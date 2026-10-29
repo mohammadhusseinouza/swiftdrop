@@ -32,6 +32,8 @@ import {
   isParcelReadyForDelivery,
 } from "./order-lifecycle";
 import { buildWorkflowQueueWhere } from "./order-workflow-queue";
+import { rememberCustomerReceiverTx, type RememberCustomerReceiverInput } from "../customers/customer-receiver.service";
+import { normalizeReceiverPhone } from "../../shared/phone/receiver-phone";
 import type { OrderCreateFoundationInput } from "./order-create.schema";
 import type { ListOrdersQuery, OrderUpdateInput, ResolveCollectionDifferenceInput } from "./order.schema";
 import type {
@@ -961,6 +963,22 @@ export async function createOrder(input: OrderCreateFoundationInput, actorUserId
           include: statusHistoryInclude,
         });
 
+        // Customer Receiver Memory — save / refresh this customer's receiver
+        // (one ON CONFLICT statement). Inside the transaction so a failed
+        // create never leaves a saved receiver behind; the order's own
+        // receiver_* snapshot above is unaffected by it.
+        await rememberCustomerReceiverTx(tx, {
+          customerId: input.customerId,
+          name: input.receiverName,
+          phone: input.receiverPhone,
+          alternativePhone: input.receiverAltPhone ?? null,
+          areaId: area.id,
+          address: input.receiverAddress,
+          buildingFloor: input.receiverBuildingFloor ?? null,
+          mapLink: input.receiverMapLink ?? null,
+          instructions: input.receiverInstructions ?? null,
+        });
+
         // Optional initial Parcel Collection driver (DRIVER_COLLECTION) —
         // reuses the exact Phase 11.17.3 invariant, INCLUDING its in-`tx`
         // driver-eligibility re-check; a failure rolls back the whole create
@@ -1228,6 +1246,8 @@ export async function updateOrder(id: string, input: OrderUpdateInput): Promise<
   // architectural mistake already corrected in readyOrder() / assignOrder()
   // (Prisma P2028 — the transaction outliving its lifetime on the deployed
   // Vercel + Supabase stack), so it is reconstructed after commit instead.
+  const receiverMemory = receiverMemoryForEdit(existing, input, data);
+
   await prisma.$transaction(async (tx) => {
     const claim = await tx.orders.updateMany({
       where: { id, status: existing.status },
@@ -1244,6 +1264,10 @@ export async function updateOrder(id: string, input: OrderUpdateInput): Promise<
             : "Order was changed by another request — please retry",
       });
     }
+    // Customer Receiver Memory — only after the claim succeeded, in the same
+    // transaction, so a rejected / conflicting edit never touches it. Lock
+    // order matches createOrder (order row, then receiver row).
+    if (receiverMemory) await rememberCustomerReceiverTx(tx, receiverMemory);
   });
 
   // No order_status_history row is written — status is not changing, and
@@ -1253,6 +1277,72 @@ export async function updateOrder(id: string, input: OrderUpdateInput): Promise<
   // editable Order is pre-DELIVERED, so its financialAllocation is "0" and
   // financialEvents is empty) but the full DTO is still assembled.
   return getOrderById(id);
+}
+
+/**
+ * Customer Receiver Memory input for an order edit, or null when the edit
+ * leaves the receiver (and the customer) unchanged — an unrelated edit, e.g.
+ * a description change on a historical order, never creates or touches a
+ * saved receiver.
+ *
+ * Matching always uses the order's FINAL customer and FINAL phone. When the
+ * phone changes to a different normalized identity, the saved receiver of the
+ * NEW phone is found or created and the old one is left untouched (never
+ * renamed or merged). A cleared optional field clears the saved value only
+ * when the identity is unchanged and the field really went from a value to
+ * empty on this order; otherwise an empty field keeps the saved value.
+ */
+function receiverMemoryForEdit(
+  existing: orders,
+  input: OrderUpdateInput,
+  data: Prisma.ordersUncheckedUpdateInput
+): RememberCustomerReceiverInput | null {
+  const customerId = typeof data.customer_id === "string" ? data.customer_id : existing.customer_id;
+  const areaId = typeof data.receiver_area_id === "string" ? data.receiver_area_id : existing.receiver_area_id;
+
+  const name = input.receiverName ?? existing.receiver_name;
+  const phone = input.receiverPhone ?? existing.receiver_phone;
+  const address = input.receiverAddress ?? existing.receiver_address;
+  const pick = (value: string | null | undefined, current: string | null) => (value !== undefined ? value : current);
+  const alternativePhone = pick(input.receiverAltPhone, existing.receiver_alt_phone);
+  const buildingFloor = pick(input.receiverBuildingFloor, existing.receiver_building_floor);
+  const mapLink = pick(input.receiverMapLink, existing.receiver_map_link);
+  const instructions = pick(input.receiverInstructions, existing.receiver_instructions);
+
+  const changed =
+    customerId !== existing.customer_id ||
+    areaId !== existing.receiver_area_id ||
+    name !== existing.receiver_name ||
+    phone !== existing.receiver_phone ||
+    address !== existing.receiver_address ||
+    alternativePhone !== existing.receiver_alt_phone ||
+    buildingFloor !== existing.receiver_building_floor ||
+    mapLink !== existing.receiver_map_link ||
+    instructions !== existing.receiver_instructions;
+  if (!changed) return null;
+
+  const sameIdentity =
+    customerId === existing.customer_id &&
+    normalizeReceiverPhone(phone) === normalizeReceiverPhone(existing.receiver_phone);
+  const wasCleared = (value: string | null, current: string | null) => sameIdentity && value === null && current !== null;
+
+  return {
+    customerId,
+    name,
+    phone,
+    alternativePhone,
+    areaId,
+    address,
+    buildingFloor,
+    mapLink,
+    instructions,
+    cleared: {
+      alternativePhone: wasCleared(alternativePhone, existing.receiver_alt_phone),
+      buildingFloor: wasCleared(buildingFloor, existing.receiver_building_floor),
+      mapLink: wasCleared(mapLink, existing.receiver_map_link),
+      instructions: wasCleared(instructions, existing.receiver_instructions),
+    },
+  };
 }
 
 // ============================================================

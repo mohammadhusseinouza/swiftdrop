@@ -481,11 +481,11 @@ describe("Phase 6.1 — OrderCreateFoundationSchema", () => {
     assert.equal(OrderCreateFoundationSchema.safeParse(validBody({ receiverName: "x".repeat(200) })).success, true);
     assert.equal(OrderCreateFoundationSchema.safeParse(validBody({ receiverName: "x".repeat(201) })).success, false);
 
-    assert.equal(OrderCreateFoundationSchema.safeParse(validBody({ receiverPhone: "x".repeat(30) })).success, true);
-    assert.equal(OrderCreateFoundationSchema.safeParse(validBody({ receiverPhone: "x".repeat(31) })).success, false);
+    assert.equal(OrderCreateFoundationSchema.safeParse(validBody({ receiverPhone: "1".repeat(30) })).success, true);
+    assert.equal(OrderCreateFoundationSchema.safeParse(validBody({ receiverPhone: "1".repeat(31) })).success, false);
 
-    assert.equal(OrderCreateFoundationSchema.safeParse(validBody({ receiverAltPhone: "x".repeat(30) })).success, true);
-    assert.equal(OrderCreateFoundationSchema.safeParse(validBody({ receiverAltPhone: "x".repeat(31) })).success, false);
+    assert.equal(OrderCreateFoundationSchema.safeParse(validBody({ receiverAltPhone: "1".repeat(30) })).success, true);
+    assert.equal(OrderCreateFoundationSchema.safeParse(validBody({ receiverAltPhone: "1".repeat(31) })).success, false);
 
     assert.equal(OrderCreateFoundationSchema.safeParse(validBody({ receiverAddress: "x".repeat(500) })).success, true);
     assert.equal(OrderCreateFoundationSchema.safeParse(validBody({ receiverAddress: "x".repeat(501) })).success, false);

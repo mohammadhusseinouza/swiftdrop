@@ -662,6 +662,25 @@ export interface CustomerOrderTotals {
   deliveredOrders: number;
 }
 /**
+ * GET /customers/:id/receivers — a saved receiver for Create / Edit Order
+ * autocomplete (Customer Receiver Memory). Suggestion data only: an order's
+ * receiver is always read from its own snapshot (`OrderReceiverSnapshot`).
+ * `area.isActive === false` means the saved area can no longer take orders,
+ * so the form must not prefill it.
+ */
+export interface CustomerReceiverSuggestion {
+  id: string;
+  name: string;
+  phone: string;
+  alternativePhone: string | null;
+  area: { id: string; name: string; isActive: boolean } | null;
+  address: string;
+  buildingFloor: string | null;
+  mapLink: string | null;
+  instructions: string | null;
+  updatedAt: string;
+}
+/**
  * Management-safe OPERATIONAL data only. Wallet balance / pending / ledger
  * data is NOT here (Phase 11.6 correction) — it comes exclusively from the
  * `wallets.read`-gated `GET /wallets/:customerId`.

@@ -14,8 +14,14 @@ import {
 import { MoneyInput } from '../../../../components/forms/MoneyInput';
 import { CalculatedField } from '../../../../components/forms/CalculatedField';
 import { ServerSearchSelect } from '../../../../components/forms/ServerSearchSelect';
+import {
+  ReceiverMemoryNote,
+  ReceiverSuggestionList,
+  useReceiverMemory,
+} from '../../../../components/orders/ReceiverSuggestions';
 
 import { useDebouncedValue } from '../../../../lib/useDebouncedValue';
+import { phoneInput } from '../../../../lib/phoneFormat';
 import { formatMoney } from '../../../../lib/format';
 import {
   useGetCustomersQuery,
@@ -41,11 +47,15 @@ import {
 } from '../create/createOrderFinancialPreview';
 import {
   EDIT_ORDER_FIELDS,
-  editOrderSchema,
+  buildEditOrderSchema,
+  isUnchangedLegacyPhone,
   orderToEditValues,
   toUpdateOrderRequest,
   type EditOrderFormValues,
 } from './editOrder.schema';
+
+const LEGACY_PHONE_HINT =
+  'Saved before phone format rules — kept unchanged unless you edit it.';
 
 /** Exact backend message for an edit rejected because the order is DELIVERED. */
 const DELIVERED_ORDER_NOT_EDITABLE_MESSAGE = 'Delivered orders cannot be edited.';
@@ -102,6 +112,11 @@ export function EditOrderDialog({
   const [updateOrder, { isLoading: saving }] = useUpdateOrderMutation();
   const [formError, setFormError] = useState<string | null>(null);
 
+  // The order exactly as the form was seeded from it (re-captured on every
+  // open). Phone validation exempts, and the PATCH omits, phones still equal to
+  // THESE stored values — a background refetch must not shift that baseline.
+  const seededOrder = useRef(order);
+
   const {
     register,
     control,
@@ -113,7 +128,8 @@ export function EditOrderDialog({
     setError,
     formState: { errors, isDirty },
   } = useForm<EditOrderFormValues>({
-    resolver: zodResolver(editOrderSchema),
+    resolver: (values, context, options) =>
+      zodResolver(buildEditOrderSchema(seededOrder.current))(values, context, options),
     mode: 'onTouched',
     defaultValues: orderToEditValues(order),
   });
@@ -123,6 +139,7 @@ export function EditOrderDialog({
   const wasOpen = useRef(false);
   useEffect(() => {
     if (open && !wasOpen.current) {
+      seededOrder.current = order;
       reset(orderToEditValues(order));
       setFormError(null);
     }
@@ -145,6 +162,23 @@ export function EditOrderDialog({
     preview.amountToCollect !== null && moneyIsPositive(preview.amountToCollect);
   const cod = values.paymentType === 'CASH_ON_DELIVERY';
   const alreadyPaid = values.paymentType === 'ALREADY_PAID';
+
+  /* Customer Receiver Memory — suggestions follow the selected (final)
+     customer; saving the edit refreshes that customer's saved receiver. */
+  const receiverMemory = useReceiverMemory({
+    customerId: values.customerId,
+    name: values.receiverName,
+    phone: values.receiverPhone,
+    getValue: (field) => getValues(field),
+    setValue: (field, value) =>
+      setValue(field, value, { shouldDirty: true, shouldValidate: value !== '' }),
+    disabled: !open,
+  });
+  const resetReceiverMemory = receiverMemory.reset;
+  useEffect(() => {
+    if (open) resetReceiverMemory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   /* reference data — only once the dialog is actually opened */
   const areas = useGetAreasQuery({ isActive: true, limit: 100 }, { skip: !open });
@@ -222,7 +256,7 @@ export function EditOrderDialog({
     try {
       await updateOrder({
         id: order.id,
-        body: toUpdateOrderRequest(formValues),
+        body: toUpdateOrderRequest(formValues, seededOrder.current),
       }).unwrap();
       onSaved();
     } catch (e) {
@@ -341,29 +375,49 @@ export function EditOrderDialog({
           />
           <p className="text-xs text-ink-muted">
             Changing the customer does not rewrite the receiver snapshot below.
+            Receiver suggestions always belong to the selected customer.
           </p>
         </FormSection>
 
         <FormSection title="Receiver">
+          <div className="relative">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <TextField
+                label="Receiver name"
+                required
+                autoComplete="off"
+                error={errors.receiverName?.message}
+                {...receiverMemory.bind('receiverName', register('receiverName'))}
+              />
+              <TextField
+                label="Primary phone"
+                required
+                inputMode="tel"
+                autoComplete="off"
+                hint={
+                  isUnchangedLegacyPhone('receiverPhone', values.receiverPhone, seededOrder.current)
+                    ? LEGACY_PHONE_HINT
+                    : undefined
+                }
+                error={errors.receiverPhone?.message}
+                {...receiverMemory.bind('receiverPhone', phoneInput(register('receiverPhone')))}
+              />
+            </div>
+            <ReceiverSuggestionList memory={receiverMemory} />
+          </div>
+          <ReceiverMemoryNote memory={receiverMemory} />
           <div className="grid gap-4 sm:grid-cols-2">
-            <TextField
-              label="Receiver name"
-              required
-              error={errors.receiverName?.message}
-              {...register('receiverName')}
-            />
-            <TextField
-              label="Primary phone"
-              required
-              inputMode="tel"
-              error={errors.receiverPhone?.message}
-              {...register('receiverPhone')}
-            />
             <TextField
               label="Alternative phone"
               inputMode="tel"
+              autoComplete="off"
+              hint={
+                isUnchangedLegacyPhone('receiverAltPhone', values.receiverAltPhone, seededOrder.current)
+                  ? LEGACY_PHONE_HINT
+                  : undefined
+              }
               error={errors.receiverAltPhone?.message}
-              {...register('receiverAltPhone')}
+              {...phoneInput(register('receiverAltPhone'))}
             />
             <SelectField
               label="Area"

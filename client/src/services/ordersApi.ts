@@ -320,6 +320,8 @@ export const ordersApi = api.injectEndpoints({
         { type: 'DriverOrder', id: 'LIST' },
         { type: 'Dashboard', id: 'ROOT' },
         { type: 'Report', id: 'LIST' },
+        // The create saves / refreshes the customer's receiver memory.
+        'CustomerReceiver',
       ],
     }),
 
@@ -334,6 +336,8 @@ export const ordersApi = api.injectEndpoints({
         { type: 'Order', id: 'LIST' },
         { type: 'Dashboard', id: 'ROOT' },
         { type: 'Report', id: 'LIST' },
+        // A receiver / customer edit refreshes that customer's receiver memory.
+        'CustomerReceiver',
       ],
     }),
 
