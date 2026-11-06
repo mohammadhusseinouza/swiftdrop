@@ -16,6 +16,14 @@ export interface UserMenuProps {
   onSignOut: () => void;
   signingOut?: boolean;
   signOutError?: string | null;
+  /**
+   * Optional second line under the name in the trigger (e.g. the Customer
+   * number in the Customer shell). Omitted → the trigger renders exactly as
+   * before for every other portal.
+   */
+  subtitle?: string | null;
+  /** Optional avatar size + text-size classes; replaces `size-8 text-xs`. */
+  avatarClassName?: string;
 }
 
 export function UserMenu({
@@ -25,6 +33,8 @@ export function UserMenu({
   onSignOut,
   signingOut = false,
   signOutError = null,
+  subtitle = null,
+  avatarClassName,
 }: UserMenuProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -69,14 +79,25 @@ export function UserMenu({
         className="flex items-center gap-2 rounded-control py-1 pr-1.5 pl-1 text-sm hover:bg-neutral-50"
       >
         <span
-          className="flex size-8 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-700"
+          className={cn(
+            'flex items-center justify-center rounded-full bg-brand-50 font-semibold text-brand-700',
+            // Replaces the default size/text classes (cn is clsx — no merge).
+            avatarClassName ?? 'size-8 text-xs',
+          )}
           aria-hidden="true"
         >
           {getInitials(name)}
         </span>
-        <span className="hidden max-w-[10rem] truncate font-medium text-ink sm:block">
-          {name}
-        </span>
+        {subtitle ? (
+          <span className="hidden min-w-0 max-w-[12rem] text-left leading-tight sm:block">
+            <span className="block truncate font-semibold text-ink">{name}</span>
+            <span className="block truncate text-xs text-ink-muted">{subtitle}</span>
+          </span>
+        ) : (
+          <span className="hidden max-w-[10rem] truncate font-medium text-ink sm:block">
+            {name}
+          </span>
+        )}
         <ChevronDown className="size-4 text-ink-subtle" aria-hidden="true" />
       </button>
 

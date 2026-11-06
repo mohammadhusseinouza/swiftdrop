@@ -1,10 +1,13 @@
 import { api } from './api';
 import { unwrapList } from './unwrap';
-import { cleanParams } from './queryParams';
-import type { ApiListResponse, Paginated, PaginationParams } from './apiTypes';
+import type { ApiListResponse, Paginated } from './apiTypes';
 import type { CustomerPayoutSummary } from './domain.types';
+import {
+  customerPayoutsRequest,
+  type ListCustomerPayoutsParams,
+} from './customerPortalQueryArgs';
 
-export type ListCustomerPayoutsParams = PaginationParams;
+export type { ListCustomerPayoutsParams };
 
 /**
  * Customer Portal — Payout History (Phase 13.6). Backend:
@@ -23,10 +26,8 @@ export const customerPayoutsApi = api.injectEndpoints({
       Paginated<CustomerPayoutSummary>,
       ListCustomerPayoutsParams | void
     >({
-      query: (params) => ({
-        url: '/customer/me/payouts',
-        params: cleanParams({ ...(params ?? {}) }),
-      }),
+      // page / optional limit (Redesign Step 2) — see customerPortalQueryArgs.
+      query: (params) => customerPayoutsRequest(params),
       transformResponse: (r: ApiListResponse<CustomerPayoutSummary>) =>
         unwrapList(r),
       providesTags: [{ type: 'CustomerPayout', id: 'LIST' }],

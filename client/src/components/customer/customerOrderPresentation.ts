@@ -34,3 +34,35 @@ const COLLECTION_STAGE_TONE: Record<CustomerCollectionStageCode, BadgeTone> = {
 export function getCollectionStageTone(code: string): BadgeTone {
   return (COLLECTION_STAGE_TONE as Record<string, BadgeTone>)[code] ?? 'neutral';
 }
+
+/* ------------------------------ My Orders tabs ----------------------------- */
+
+export interface CustomerOrderTabCountsInput {
+  /** The tab currently shown. */
+  view: 'all' | 'active' | 'delivered';
+  /**
+   * `meta.total` of the list result for the CURRENT args (RTK `currentData`),
+   * or undefined while that result is not loaded. Never a page-length count.
+   */
+  currentTotal: number | undefined;
+  /** Server counts from the self-scoped dashboard summary, when loaded. */
+  summary: { activeOrders: number; deliveredOrders: number } | undefined;
+}
+
+/**
+ * Count chips for All / Active / Delivered (handoff §3.2). Active / Delivered
+ * come only from the server summary; All is the list's `meta.total` and only
+ * while the All tab's own result is loaded. `null` hides a chip — counts are
+ * never computed from the items on the current page.
+ */
+export function getCustomerOrderTabCounts({
+  view,
+  currentTotal,
+  summary,
+}: CustomerOrderTabCountsInput): Record<'all' | 'active' | 'delivered', number | null> {
+  return {
+    all: view === 'all' && currentTotal !== undefined ? currentTotal : null,
+    active: summary ? summary.activeOrders : null,
+    delivered: summary ? summary.deliveredOrders : null,
+  };
+}

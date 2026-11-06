@@ -11,6 +11,15 @@ export interface PaginationProps {
 }
 
 /**
+ * Shared pager state (also used by the Customer Portal pager). Pure: the
+ * server stays the authoritative source of the page of data.
+ */
+export function getPaginationState(page: number, totalPages: number) {
+  const totalPagesSafe = Math.max(totalPages, 1);
+  return { totalPages: totalPagesSafe, canPrev: page > 1, canNext: page < totalPagesSafe };
+}
+
+/**
  * Controlled pager. Reports the requested page only — the server remains the
  * authoritative source of the current page of data. Never slices data locally.
  */
@@ -21,9 +30,7 @@ export function Pagination({
   total,
   className,
 }: PaginationProps) {
-  const safeTotal = Math.max(totalPages, 1);
-  const canPrev = page > 1;
-  const canNext = page < safeTotal;
+  const { totalPages: safeTotal, canPrev, canNext } = getPaginationState(page, totalPages);
 
   return (
     <nav

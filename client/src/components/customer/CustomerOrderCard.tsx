@@ -1,9 +1,10 @@
 import { Link } from 'react-router-dom';
-import { ChevronRight } from 'lucide-react';
+import { Calendar, ChevronRight, MapPin, Package } from 'lucide-react';
 import { paths } from '../../routes/paths';
 import { Badge } from '../ui/Badge';
-import { StatusBadge } from '../orders/StatusBadge';
 import { getOrderTypeLabel } from '../orders/orderStatus';
+import { StatusPill } from './StatusPill';
+import { StageProgress } from './StageProgress';
 import {
   getCollectionStageTone,
   getCustomerParcelIntakeLabel,
@@ -12,87 +13,75 @@ import { formatDate, formatMoney } from '../../lib/format';
 import type { CustomerOrderSummary } from '../../services/domain.types';
 
 /**
- * Phase 13.2 — one Customer "My Orders" row.
+ * One Customer "My Orders" card (Customer Portal Redesign Step 3, handoff §3.2).
  *
- * READ-ONLY. No mutation controls. "View order" links to the Phase 13.3
- * Customer Order Detail route for EVERY owned order (active + terminal alike
- * — task §42). Delivery status uses the shared Customer-safe StatusBadge
- * (audience="customer"); the collection stage label is the server's already
- * Customer-safe wording.
+ * READ-ONLY. "View order" links to Customer Order Detail for every owned
+ * order. Status wording + stage come from the canonical customer-safe mapping
+ * (StatusPill / StageProgress). For an exception status (failed, rescheduled,
+ * returned, cancelled) no stage is drawn: the list DTO carries no reached
+ * stage, and one is never guessed. The collection-stage label is the server's
+ * already Customer-safe wording. Money is server strings via formatMoney.
+ * No driver identity, ETA or financial-review data.
  */
 export function CustomerOrderCard({ order }: { order: CustomerOrderSummary }) {
   const isDelivered = order.status === 'DELIVERED';
 
   return (
     <article
-      className="rounded-card border border-line bg-card p-4 shadow-card"
+      className="flex h-full flex-col gap-5 rounded-panel border border-line bg-card p-5 sm:p-6"
       aria-label={`Order ${order.orderNumber}`}
     >
-      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
-        <div className="min-w-0">
-          <h3 className="truncate text-sm font-semibold text-ink">
-            {order.orderNumber}
-          </h3>
-          <p className="mt-0.5 break-all text-xs text-ink-subtle">
-            Tracking {order.trackingCode}
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
+        <div className="min-w-0 flex-[1_1_200px]">
+          <h2 className="truncate text-lg font-bold tracking-[-0.02em] text-ink">{order.receiverName}</h2>
+          {/* Wraps between the two parts first; a single over-long code may still break. */}
+          <p className="mt-0.5 text-[0.8125rem] text-ink-muted [overflow-wrap:anywhere]">
+            <span className="inline-block max-w-full">{order.orderNumber} ·</span>{' '}
+            <span className="inline-block max-w-full">Tracking {order.trackingCode}</span>
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-1.5">
-          <Badge tone={order.orderType === 'COMPANY_ORDER' ? 'brand' : 'neutral'}>
+          <span className="inline-flex h-[26px] items-center whitespace-nowrap rounded-full bg-canvas px-2.5 text-xs font-semibold text-ink-secondary">
             {getOrderTypeLabel(order.orderType)}
-          </Badge>
-          <StatusBadge status={order.status} audience="customer" />
+          </span>
+          <StatusPill status={order.status} />
         </div>
       </div>
 
-      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
-        <div className="min-w-0">
-          <dt className="text-xs text-ink-muted">Receiver</dt>
-          <dd className="truncate text-ink">{order.receiverName}</dd>
-        </div>
-        <div className="min-w-0">
-          <dt className="text-xs text-ink-muted">Area</dt>
-          <dd className="truncate text-ink">{order.receiverArea}</dd>
-        </div>
-        <div className="min-w-0">
-          <dt className="text-xs text-ink-muted">Created</dt>
-          <dd className="text-ink">{formatDate(order.createdAt)}</dd>
-        </div>
-        <div className="min-w-0">
-          <dt className="text-xs text-ink-muted">Order Amount</dt>
-          <dd className="text-ink tabular-nums">{formatMoney(order.orderAmount)}</dd>
-        </div>
-        <div className="min-w-0">
-          <dt className="text-xs text-ink-muted">Delivery Fee</dt>
-          <dd className="text-ink tabular-nums">{formatMoney(order.deliveryFee)}</dd>
-        </div>
-        <div className="min-w-0">
-          <dt className="text-xs text-ink-muted">Amount to Collect</dt>
-          <dd className="text-ink tabular-nums">{formatMoney(order.amountToCollect)}</dd>
-        </div>
-        {isDelivered && order.deliveredAt && (
-          <div className="min-w-0">
-            <dt className="text-xs text-ink-muted">Delivered</dt>
-            <dd className="text-ink">{formatDate(order.deliveredAt)}</dd>
-          </div>
-        )}
+      <StageProgress status={order.status} variant="labelled" />
+
+      <dl className="grid grid-cols-3 divide-x divide-line rounded-[14px] bg-sunken py-3.5">
+        <AmountCell label="Order amount" value={formatMoney(order.orderAmount)} />
+        <AmountCell label="Delivery fee" value={formatMoney(order.deliveryFee)} />
+        <AmountCell label="To collect" value={formatMoney(order.amountToCollect)} strong />
       </dl>
 
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-ink-muted">Parcel intake:</span>
-          <span className="text-xs font-medium text-ink-secondary">
-            {getCustomerParcelIntakeLabel(order.parcelIntakeMethod)}
-          </span>
-          {order.collectionStage && (
-            <Badge tone={getCollectionStageTone(order.collectionStage.code)}>
-              {order.collectionStage.label}
-            </Badge>
-          )}
-        </div>
+      <div className="mt-auto flex flex-wrap items-center gap-x-4 gap-y-2.5 border-t border-line-subtle pt-4 text-[0.8125rem] text-ink-muted">
+        <span className="inline-flex min-w-0 items-center gap-1.5">
+          <MapPin className="size-3.5 shrink-0" aria-hidden="true" />
+          <span className="sr-only">Area:</span>
+          <span className="truncate">{order.receiverArea}</span>
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <Calendar className="size-3.5 shrink-0" aria-hidden="true" />
+          Created {formatDate(order.createdAt)}
+        </span>
+        {isDelivered && order.deliveredAt && (
+          <span className="font-medium text-success-700">Delivered {formatDate(order.deliveredAt)}</span>
+        )}
+        <span className="inline-flex items-center gap-1.5">
+          <Package className="size-3.5 shrink-0" aria-hidden="true" />
+          <span className="sr-only">Parcel intake:</span>
+          {getCustomerParcelIntakeLabel(order.parcelIntakeMethod)}
+        </span>
+        {order.collectionStage && (
+          <Badge tone={getCollectionStageTone(order.collectionStage.code)}>
+            {order.collectionStage.label}
+          </Badge>
+        )}
         <Link
           to={paths.customer.orderDetail(order.id)}
-          className="inline-flex items-center gap-1 rounded-control border border-line px-2.5 py-1 text-xs font-medium text-brand-700 hover:bg-sunken"
+          className="ml-auto inline-flex h-9 shrink-0 items-center gap-1 rounded-control border border-line bg-card px-3.5 text-[0.8125rem] font-semibold text-ink transition-colors hover:border-line-strong"
           aria-label={`View order ${order.orderNumber}`}
         >
           View order
@@ -100,5 +89,22 @@ export function CustomerOrderCard({ order }: { order: CustomerOrderSummary }) {
         </Link>
       </div>
     </article>
+  );
+}
+
+function AmountCell({ label, value, strong = false }: { label: string; value: string; strong?: boolean }) {
+  return (
+    <div className="min-w-0 px-3 sm:px-4">
+      <dt className="truncate text-xs text-ink-muted">{label}</dt>
+      <dd
+        className={
+          strong
+            ? 'mt-1 truncate text-[0.9375rem] font-bold tabular-nums text-ink'
+            : 'mt-1 truncate text-[0.9375rem] font-semibold tabular-nums text-ink-secondary'
+        }
+      >
+        {value}
+      </dd>
+    </div>
   );
 }

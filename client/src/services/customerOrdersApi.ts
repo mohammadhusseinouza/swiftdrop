@@ -1,21 +1,13 @@
 import { api } from './api';
 import { unwrapData, unwrapList } from './unwrap';
-import { cleanParams } from './queryParams';
-import type {
-  ApiListResponse,
-  ApiSuccessResponse,
-  Paginated,
-  PaginationParams,
-} from './apiTypes';
-import type {
-  CustomerOrderDetail,
-  CustomerOrderSummary,
-  CustomerOrderView,
-} from './domain.types';
+import type { ApiListResponse, ApiSuccessResponse, Paginated } from './apiTypes';
+import type { CustomerOrderDetail, CustomerOrderSummary } from './domain.types';
+import {
+  customerOrdersRequest,
+  type ListCustomerOrdersParams,
+} from './customerPortalQueryArgs';
 
-export interface ListCustomerOrdersParams extends PaginationParams {
-  view?: CustomerOrderView;
-}
+export type { ListCustomerOrdersParams };
 
 /**
  * Customer Portal — My Orders (Phase 13.2). Backend:
@@ -32,10 +24,8 @@ export const customerOrdersApi = api.injectEndpoints({
       Paginated<CustomerOrderSummary>,
       ListCustomerOrdersParams | void
     >({
-      query: (params) => ({
-        url: '/customer/me/orders',
-        params: cleanParams({ ...(params ?? {}) }),
-      }),
+      // page / view / optional limit (Redesign Step 2) — see customerPortalQueryArgs.
+      query: (params) => customerOrdersRequest(params),
       transformResponse: (r: ApiListResponse<CustomerOrderSummary>) =>
         unwrapList(r),
       // Read-only phase — the figures change only from Management-side

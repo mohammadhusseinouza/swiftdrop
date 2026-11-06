@@ -1,21 +1,16 @@
 import { api } from './api';
 import { unwrapData, unwrapList } from './unwrap';
-import { cleanParams } from './queryParams';
-import type {
-  ApiListResponse,
-  ApiSuccessResponse,
-  Paginated,
-  PaginationParams,
-} from './apiTypes';
+import type { ApiListResponse, ApiSuccessResponse, Paginated } from './apiTypes';
 import type {
   CustomerWalletSummary,
-  CustomerWalletTransactionFilter,
   CustomerWalletTransactionSummary,
 } from './domain.types';
+import {
+  customerWalletTransactionsRequest,
+  type ListCustomerWalletTransactionsParams,
+} from './customerPortalQueryArgs';
 
-export interface ListCustomerWalletTransactionsParams extends PaginationParams {
-  type?: CustomerWalletTransactionFilter;
-}
+export type { ListCustomerWalletTransactionsParams };
 
 /**
  * Customer Portal — Wallet summary (Phase 13.4). Backend:
@@ -43,10 +38,8 @@ export const customerWalletApi = api.injectEndpoints({
       Paginated<CustomerWalletTransactionSummary>,
       ListCustomerWalletTransactionsParams | void
     >({
-      query: (params) => ({
-        url: '/customer/me/wallet/transactions',
-        params: cleanParams({ ...(params ?? {}) }),
-      }),
+      // page / type / optional limit (Redesign Step 2) — see customerPortalQueryArgs.
+      query: (params) => customerWalletTransactionsRequest(params),
       transformResponse: (r: ApiListResponse<CustomerWalletTransactionSummary>) =>
         unwrapList(r),
       providesTags: [{ type: 'CustomerWalletTransaction', id: 'LIST' }],

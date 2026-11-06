@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Receipt } from 'lucide-react';
 
@@ -10,32 +10,28 @@ import type {
   CustomerWalletTransactionSummary,
 } from '../../services/domain.types';
 
-import { PageHeader } from '../../components/data-display/PageHeader';
-import { Pagination } from '../../components/data-display/Pagination';
 import { LoadingState } from '../../components/feedback/LoadingState';
 import { EmptyState } from '../../components/feedback/EmptyState';
 import { ErrorState } from '../../components/feedback/ErrorState';
-import { Card } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
 import { cn } from '../../components/ui/cn';
-import {
-  getDirectionPresentation,
-  getWalletTransactionTypeLabel,
-  getWalletTransactionTypeTone,
-} from '../../components/customer/customerWalletPresentation';
+import { CustomerPageHeader } from '../../components/customer/CustomerPageHeader';
+import { FilterChips } from '../../components/customer/FilterChips';
+import { CustomerPagination } from '../../components/customer/CustomerPagination';
+import { getTransactionRowView } from '../../components/customer/customerWalletPresentation';
 
-const TABS: ReadonlyArray<{ id: CustomerWalletTransactionFilter; label: string }> = [
-  { id: 'all', label: 'All' },
-  { id: 'order_credit', label: 'Order Credits' },
-  { id: 'payout', label: 'Payouts' },
-  { id: 'adjustment', label: 'Adjustments' },
-  { id: 'reversal', label: 'Reversals' },
+const FILTERS: ReadonlyArray<{ value: CustomerWalletTransactionFilter; label: string }> = [
+  { value: 'all', label: 'All' },
+  { value: 'order_credit', label: 'Order credits' },
+  { value: 'payout', label: 'Payouts' },
+  { value: 'adjustment', label: 'Adjustments' },
+  { value: 'reversal', label: 'Reversals' },
 ];
-const TAB_IDS = new Set<string>(TABS.map((t) => t.id));
+const FILTER_IDS = new Set<string>(FILTERS.map((f) => f.value));
 
 function parseType(sp: URLSearchParams): CustomerWalletTransactionFilter {
   const raw = sp.get('type');
-  return raw && TAB_IDS.has(raw) ? (raw as CustomerWalletTransactionFilter) : 'all';
+  return raw && FILTER_IDS.has(raw) ? (raw as CustomerWalletTransactionFilter) : 'all';
 }
 function parsePage(sp: URLSearchParams): number {
   const raw = Number(sp.get('page'));
@@ -43,11 +39,13 @@ function parsePage(sp: URLSearchParams): number {
 }
 
 /**
- * Phase 13.5 — /customer/transactions.
+ * /customer/transactions — Transactions (Customer Portal Redesign Step 5,
+ * handoff §3.4, D1-A standalone page).
  *
  * READ-ONLY view of the authenticated Customer's own append-only wallet
- * ledger (GET /api/v1/customer/me/wallet/transactions). Filter + page state
- * live in the URL. No mutation controls, no Request Payout / Withdraw.
+ * ledger (GET /customer/me/wallet/transactions). `type` + `page` live in the
+ * URL exactly as before (All drops `type`; changing the filter resets `page`).
+ * Direction is given in text (Added / Deducted); debits are ink, not red.
  */
 export default function CustomerTransactionsPage() {
   const [sp, setSp] = useSearchParams();
@@ -74,54 +72,25 @@ export default function CustomerTransactionsPage() {
   };
 
   return (
-    <div className="space-y-4">
-      <PageHeader
-        size="lg"
+    <div className="flex flex-col gap-7">
+      <CustomerPageHeader
+        eyebrow="Wallet"
         title="Transactions"
-        description="Changes to your wallet balance."
+        lead="Every change to your wallet balance, newest first."
       />
 
-      <div
-        role="tablist"
-        aria-label="Transaction type"
-        className="flex gap-1.5 overflow-x-auto pb-1"
-      >
-        {TABS.map((tab) => {
-          const active = tab.id === type;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              onClick={() => selectType(tab.id)}
-              className={cn(
-                'inline-flex h-9 shrink-0 items-center whitespace-nowrap rounded-[0.5rem] border px-3.5 text-sm transition-colors',
-                active
-                  ? 'border-brand-600 bg-brand-50 font-semibold text-brand-700'
-                  : 'border-line bg-card font-medium text-ink-secondary hover:bg-sunken',
-              )}
-            >
-              {tab.label}
-            </button>
-          );
-        })}
-      </div>
+      <section aria-label="Wallet transactions" className="flex flex-col gap-5 rounded-panel border border-line bg-card p-5 sm:p-8">
+        <FilterChips label="Transaction type" options={FILTERS} value={type} onChange={selectType} />
 
-      {query.isLoading ? (
-        <Card flush>
+        {query.isLoading ? (
           <LoadingState className="py-16" label="Loading transactions…" />
-        </Card>
-      ) : query.isError ? (
-        <Card flush>
+        ) : query.isError ? (
           <ErrorState
             className="py-16"
             message={getApiErrorMessage(query.error as UnknownApiError)}
             onRetry={() => void query.refetch()}
           />
-        </Card>
-      ) : rows.length === 0 ? (
-        <Card flush>
+        ) : rows.length === 0 ? (
           <EmptyState
             className="py-16"
             icon={<Receipt />}
@@ -129,64 +98,109 @@ export default function CustomerTransactionsPage() {
             description={
               type === 'all'
                 ? 'Credits from delivered orders, payouts, and adjustments will appear here.'
-                : 'Try the "All" tab.'
+                : 'Try the "All" filter.'
             }
           />
-        </Card>
-      ) : (
-        <>
-          <ul className="space-y-2.5">
-            {rows.map((tx) => (
-              <li key={tx.id}>
-                <TransactionRow tx={tx} />
-              </li>
-            ))}
-          </ul>
-          {meta && meta.totalPages > 1 && (
-            <Pagination
-              page={meta.page}
-              totalPages={meta.totalPages}
-              total={meta.total}
-              onPageChange={setPage}
-            />
-          )}
-        </>
-      )}
+        ) : (
+          <>
+            {/* Phone (below sm): stacked rows — no scrolling table (handoff §3.4). */}
+            <ul className="divide-y divide-line-subtle sm:hidden">
+              {rows.map((tx) => (
+                <TransactionStackedRow key={tx.id} tx={tx} />
+              ))}
+            </ul>
+
+            {/* sm and up: the table. */}
+            <div className="hidden overflow-x-auto rounded-[14px] border border-line-subtle sm:block">
+              <table className="w-full min-w-[640px] table-fixed border-collapse text-left text-sm">
+                <colgroup>
+                  <col className="w-[120px]" />
+                  <col />
+                  <col className="w-[150px]" />
+                  <col className="w-[150px]" />
+                </colgroup>
+                <thead className="bg-sunken">
+                  <tr className="text-xs font-bold uppercase tracking-[0.08em] text-ink-muted">
+                    <Th>Date</Th>
+                    <Th>Description</Th>
+                    <Th>Type</Th>
+                    <Th className="text-right">Amount</Th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-line-subtle">
+                  {rows.map((tx) => (
+                    <TransactionRow key={tx.id} tx={tx} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {meta && meta.totalPages > 1 && (
+              <CustomerPagination
+                page={meta.page}
+                totalPages={meta.totalPages}
+                total={meta.total}
+                noun={meta.total === 1 ? 'transaction' : 'transactions'}
+                onPageChange={setPage}
+              />
+            )}
+          </>
+        )}
+      </section>
     </div>
   );
 }
 
+function Th({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <th scope="col" className={cn('px-4 py-3', className)}>
+      {children}
+    </th>
+  );
+}
+
 function TransactionRow({ tx }: { tx: CustomerWalletTransactionSummary }) {
-  const dir = getDirectionPresentation(tx.direction);
-  const referenceNoun = tx.reference?.kind === 'ORDER' ? 'Order' : 'Payout';
+  const view = getTransactionRowView(tx, formatMoney);
 
   return (
-    <article className="rounded-card border border-line bg-card p-3.5 shadow-card">
-      <div className="flex flex-wrap items-start justify-between gap-2">
+    <tr className="align-top">
+      <td className="px-4 py-3.5 text-[0.8125rem] text-ink-secondary">
+        <time dateTime={tx.occurredAt}>{formatDateTime(tx.occurredAt)}</time>
+      </td>
+      <td className="px-4 py-3.5">
+        <p className="font-semibold text-ink [overflow-wrap:anywhere]">{view.description}</p>
+        <p className="mt-0.5 text-xs text-ink-muted tabular-nums">{view.balanceAfter}</p>
+      </td>
+      <td className="px-4 py-3.5">
+        <Badge tone={view.typeTone}>{view.typeLabel}</Badge>
+      </td>
+      <td className="px-4 py-3.5 text-right">
+        <p className={cn('font-bold tabular-nums', view.amountClass)}>{view.amount}</p>
+        {view.directionWord && <p className="text-xs text-ink-muted">{view.directionWord}</p>}
+      </td>
+    </tr>
+  );
+}
+
+function TransactionStackedRow({ tx }: { tx: CustomerWalletTransactionSummary }) {
+  const view = getTransactionRowView(tx, formatMoney);
+
+  return (
+    <li className="py-3.5 first:pt-0 last:pb-0">
+      <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <Badge tone={getWalletTransactionTypeTone(tx.type)}>
-            {getWalletTransactionTypeLabel(tx.type)}
-          </Badge>
-          {tx.reference && (
-            <p className="mt-1.5 truncate text-sm text-ink">
-              {referenceNoun} {tx.reference.label}
-            </p>
-          )}
-          <p className="mt-1 text-xs text-ink-subtle">{formatDateTime(tx.occurredAt)}</p>
+          <p className="text-sm font-semibold text-ink [overflow-wrap:anywhere]">{view.description}</p>
+          <p className="mt-0.5 text-xs text-ink-muted tabular-nums">{view.balanceAfter}</p>
         </div>
-        <div className="text-right">
-          <p className={cn('text-base font-semibold tabular-nums', dir.amountClass)}>
-            {dir.sign}
-            {formatMoney(tx.amount)}
-            {dir.word && (
-              <span className="ml-1 text-xs font-medium text-ink-subtle">({dir.word})</span>
-            )}
-          </p>
-          <p className="mt-0.5 text-xs text-ink-subtle tabular-nums">
-            Balance after {formatMoney(tx.balanceAfter)}
-          </p>
+        <div className="shrink-0 text-right">
+          <p className={cn('text-sm font-bold tabular-nums', view.amountClass)}>{view.amount}</p>
+          {view.directionWord && <p className="text-xs text-ink-muted">{view.directionWord}</p>}
         </div>
       </div>
-    </article>
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-ink-muted">
+        <time dateTime={tx.occurredAt}>{formatDateTime(tx.occurredAt)}</time>
+        <Badge tone={view.typeTone}>{view.typeLabel}</Badge>
+      </div>
+    </li>
   );
 }

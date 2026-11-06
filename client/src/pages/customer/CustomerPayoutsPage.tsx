@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Banknote } from 'lucide-react';
 
@@ -7,13 +7,12 @@ import { getApiErrorMessage, type UnknownApiError } from '../../services/apiErro
 import { formatDate, formatMoney } from '../../lib/format';
 import type { CustomerPayoutSummary } from '../../services/domain.types';
 
-import { PageHeader } from '../../components/data-display/PageHeader';
-import { Pagination } from '../../components/data-display/Pagination';
 import { LoadingState } from '../../components/feedback/LoadingState';
 import { EmptyState } from '../../components/feedback/EmptyState';
 import { ErrorState } from '../../components/feedback/ErrorState';
-import { Card } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
+import { CustomerPageHeader } from '../../components/customer/CustomerPageHeader';
+import { CustomerPagination } from '../../components/customer/CustomerPagination';
 import {
   getPayoutStatusLabel,
   getPayoutStatusTone,
@@ -25,13 +24,14 @@ function parsePage(sp: URLSearchParams): number {
 }
 
 /**
- * Phase 13.6 — /customer/payouts ("Payout History").
+ * /customer/payouts — Payout History (Customer Portal Redesign Step 5,
+ * handoff §3.4, D1-A standalone page).
  *
- * READ-ONLY self-scoped list from GET /api/v1/customer/me/payouts — the
- * customer_payouts business record (distinct from the wallet-debit ledger
- * row on /customer/transactions). Page state lives in the URL. No status
- * filter (every payout is Completed in V1). Deliberately NO Request Payout /
- * Withdraw / Create Payout control — V1 payouts are made by company staff.
+ * READ-ONLY self-scoped list from GET /customer/me/payouts (the
+ * customer_payouts business record). Page state lives in the URL. Status
+ * wording from getPayoutStatusLabel ("Completed", never "Paid"). No reference
+ * field exists, so none is shown. Deliberately NO Request Payout / Withdraw /
+ * Create Payout control — V1 payouts are made by company staff.
  */
 export default function CustomerPayoutsPage() {
   const [sp, setSp] = useSearchParams();
@@ -50,75 +50,80 @@ export default function CustomerPayoutsPage() {
   };
 
   return (
-    <div className="space-y-4">
-      <PageHeader
-        size="lg"
+    <div className="flex flex-col gap-7">
+      <CustomerPageHeader
+        eyebrow="Wallet"
         title="Payouts"
-        description="View payouts made to you by the company."
+        lead="Payouts Spring Delivery has made to you."
       />
 
       {query.isLoading ? (
-        <Card flush>
+        <StatePanel>
           <LoadingState className="py-16" label="Loading payouts…" />
-        </Card>
+        </StatePanel>
       ) : query.isError ? (
-        <Card flush>
+        <StatePanel>
           <ErrorState
             className="py-16"
             message={getApiErrorMessage(query.error as UnknownApiError)}
             onRetry={() => void query.refetch()}
           />
-        </Card>
+        </StatePanel>
       ) : rows.length === 0 ? (
-        <Card flush>
+        <StatePanel>
           <EmptyState
             className="py-16"
             icon={<Banknote />}
             title="No payouts yet."
             description="Payouts made to you by the company will appear here."
           />
-        </Card>
+        </StatePanel>
       ) : (
-        <>
-          <ul className="space-y-2.5">
+        <div className="flex flex-col gap-6">
+          <ul className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,340px),1fr))] gap-5">
             {rows.map((payout) => (
-              <li key={payout.id}>
-                <PayoutRow payout={payout} />
+              <li key={payout.id} className="min-w-0">
+                <PayoutCard payout={payout} />
               </li>
             ))}
           </ul>
           {meta && meta.totalPages > 1 && (
-            <Pagination
+            <CustomerPagination
               page={meta.page}
               totalPages={meta.totalPages}
               total={meta.total}
+              noun={meta.total === 1 ? 'payout' : 'payouts'}
               onPageChange={setPage}
             />
           )}
-        </>
+        </div>
       )}
     </div>
   );
 }
 
-function PayoutRow({ payout }: { payout: CustomerPayoutSummary }) {
+function StatePanel({ children }: { children: ReactNode }) {
+  return <div className="rounded-panel border border-line bg-card">{children}</div>;
+}
+
+function PayoutCard({ payout }: { payout: CustomerPayoutSummary }) {
   return (
-    <article className="rounded-card border border-line bg-card p-3.5 shadow-card">
+    <article
+      aria-label={`Payout ${payout.payoutNumber}`}
+      className="flex h-full flex-col gap-4 rounded-panel border border-line bg-card p-6"
+    >
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="break-all font-medium text-ink">{payout.payoutNumber}</p>
-          <p className="mt-1 text-sm text-ink-secondary">{payout.paymentMethod.name}</p>
-          <p className="mt-1 text-xs text-ink-subtle">{formatDate(payout.createdAt)}</p>
-        </div>
-        <div className="flex shrink-0 flex-col items-end gap-1.5">
-          <p className="text-base font-semibold tabular-nums text-ink">
-            {formatMoney(payout.amount, { fallback: '$0.00' })}
-          </p>
-          <Badge tone={getPayoutStatusTone(payout.status)}>
-            {getPayoutStatusLabel(payout.status)}
-          </Badge>
-        </div>
+        <p className="min-w-0 text-sm font-bold text-ink [overflow-wrap:anywhere]">{payout.payoutNumber}</p>
+        <Badge tone={getPayoutStatusTone(payout.status)} dot>
+          {getPayoutStatusLabel(payout.status)}
+        </Badge>
       </div>
+      <p className="text-[1.875rem] leading-none font-bold tracking-[-0.035em] tabular-nums text-ink">
+        {formatMoney(payout.amount, { fallback: '$0.00' })}
+      </p>
+      <p className="mt-auto text-[0.8125rem] text-ink-muted">
+        {formatDate(payout.createdAt)} · {payout.paymentMethod.name}
+      </p>
     </article>
   );
 }
