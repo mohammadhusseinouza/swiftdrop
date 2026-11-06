@@ -129,3 +129,12 @@ export function getTransactionRowView(
     typeTone: getWalletTransactionTypeTone(tx.type),
   };
 }
+
+/**
+ * Which Wallet history tab a route shows (handoff §3.4, D1-B):
+ * /customer/payouts → Payouts; /customer/wallet and /customer/transactions →
+ * Transactions.
+ */
+export function getWalletHistoryTab(pathname: string): 'transactions' | 'payouts' {
+  return /^\/customer\/payouts\/?$/.test(pathname) ? 'payouts' : 'transactions';
+}

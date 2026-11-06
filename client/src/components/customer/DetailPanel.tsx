@@ -32,7 +32,7 @@ export function DetailPanel({
       aria-labelledby={headingId}
       className={cn('min-w-0 rounded-panel border border-line bg-card p-6 sm:p-8', className)}
     >
-      <div className="mb-5 flex items-center justify-between gap-4">
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
         <h2
           id={headingId}
           className={

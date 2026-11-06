@@ -52,7 +52,7 @@ describe('pending bar weights (layout only)', () => {
   });
 
   test('Number() on money appears only inside the bar helper', () => {
-    const wallet = strip(read('../src/pages/customer/CustomerWalletPage.tsx'));
+    const wallet = strip(read('../src/pages/customer/CustomerWalletLayout.tsx'));
     assert.ok(!/Number\(|parseFloat|toFixed/.test(wallet));
     assert.ok(wallet.includes('getPendingBarWeights(breakdown)'));
     assert.ok(wallet.includes('<div className="flex h-2.5 gap-1" aria-hidden="true">'));
@@ -121,7 +121,7 @@ describe('payouts', () => {
 });
 
 describe('Step 5 guardrails', () => {
-  for (const file of ['CustomerWalletPage.tsx', 'CustomerTransactionsPage.tsx', 'CustomerPayoutsPage.tsx']) {
+  for (const file of ['CustomerWalletLayout.tsx', 'CustomerWalletPage.tsx', 'CustomerTransactionsPage.tsx', 'CustomerPayoutsPage.tsx']) {
     test(`${file}: no withdraw / request-payout control, driver cash or company revenue`, () => {
       const code = strip(read(`../src/pages/customer/${file}`));
       assert.ok(!/withdraw(?!able)|request payout|requestPayout|driver|revenue|underReviewCollectionAmount/i.test(code));
@@ -130,7 +130,7 @@ describe('Step 5 guardrails', () => {
   }
 
   test('wallet under-review is a count only; PendingBreakdownCard no longer used here', () => {
-    const code = strip(read('../src/pages/customer/CustomerWalletPage.tsx'));
+    const code = strip(read('../src/pages/customer/CustomerWalletLayout.tsx'));
     assert.ok(code.includes('{reviewCount > 0 && ('));
     assert.ok(!code.includes('PendingBreakdownCard'));
     const mgmt = read('../src/pages/management/wallets/WalletDetailPage.tsx');

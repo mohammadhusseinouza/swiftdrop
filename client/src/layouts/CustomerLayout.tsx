@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
+import { Link, Outlet, useLocation } from 'react-router-dom';
 import { Package } from 'lucide-react';
 import { useAppSelector } from '../app/hooks';
 import { selectCurrentUser } from '../features/auth/authSlice';
@@ -7,14 +7,16 @@ import { useLogout } from '../features/auth/useSession';
 import { useGetCustomerProfileQuery } from '../services/customerProfileApi';
 import { UserMenu } from '../components/navigation/UserMenu';
 import { cn } from '../components/ui/cn';
+import { CUSTOMER_NAV_ITEMS, isCustomerNavItemActive } from '../components/customer/customerNavigation';
 import { paths } from '../routes/paths';
 
 /**
  * Customer Portal shell — "CustomerShell" (Customer Portal Redesign, Step 1;
  * docs/customer-portal-redesign-handoff.md §2).
  *
- * White sticky header: logo tile, a pill nav with the SIX approved items
- * (page_structure §32 — decision D1-A), and the existing UserMenu sign-out
+ * White sticky header: logo tile, a pill nav with the FOUR approved items
+ * (page_structure §32 — decision D1-B: Transactions and Payouts are tabs inside
+ * Wallet, so Wallet is current on all three Wallet routes), and the existing UserMenu sign-out
  * behaviour (pending + error state unchanged). Plus Jakarta Sans is applied on
  * this root only (`font-customer`, decision D2-A); other portals keep Inter.
  *
@@ -25,15 +27,6 @@ import { paths } from '../routes/paths';
  * cache entry is shared with the Profile page). While it loads or if it fails,
  * the header falls back to the signed-in user's name and omits the number.
  */
-const CUSTOMER_NAV_ITEMS = [
-  { id: 'dashboard', label: 'Dashboard', to: paths.customer.dashboard, end: true },
-  { id: 'orders', label: 'My Orders', to: paths.customer.orders, end: false },
-  { id: 'wallet', label: 'Wallet', to: paths.customer.wallet, end: false },
-  { id: 'transactions', label: 'Transactions', to: paths.customer.transactions, end: false },
-  { id: 'payouts', label: 'Payouts', to: paths.customer.payouts, end: false },
-  { id: 'profile', label: 'Profile', to: paths.customer.profile, end: false },
-] as const;
-
 export default function CustomerLayout() {
   const user = useAppSelector(selectCurrentUser);
   const [signingOut, setSigningOut] = useState(false);
@@ -112,24 +105,25 @@ export default function CustomerLayout() {
             <ul
               ref={navTrackRef}
               className="flex w-full gap-1 overflow-x-auto rounded-full bg-canvas p-1 [scrollbar-width:none] lg:w-max [&::-webkit-scrollbar]:hidden">
-              {CUSTOMER_NAV_ITEMS.map((item) => (
-                <li key={item.id} className="shrink-0">
-                  <NavLink
-                    to={item.to}
-                    end={item.end}
-                    className={({ isActive }) =>
-                      cn(
-                        'inline-flex h-9 items-center whitespace-nowrap rounded-full px-[18px] text-sm transition-colors',
-                        isActive
+              {CUSTOMER_NAV_ITEMS.map((item) => {
+                const active = isCustomerNavItemActive(item, pathname);
+                return (
+                  <li key={item.id} className="flex-1 sm:flex-none">
+                    <Link
+                      to={item.to}
+                      aria-current={active ? 'page' : undefined}
+                      className={cn(
+                        'inline-flex h-9 w-full items-center justify-center whitespace-nowrap rounded-full px-3 text-sm transition-colors sm:px-[18px]',
+                        active
                           ? 'bg-card font-semibold text-ink shadow-[0_1px_2px_rgba(15,20,34,.08),0_0_0_1px_rgba(15,20,34,.04)]'
                           : 'font-medium text-ink-secondary hover:text-ink',
-                      )
-                    }
-                  >
-                    {item.label}
-                  </NavLink>
-                </li>
-              ))}
+                      )}
+                    >
+                      {item.label}
+                    </Link>
+                  </li>
+                );
+              })}
             </ul>
           </nav>
 

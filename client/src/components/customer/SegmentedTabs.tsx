@@ -1,5 +1,11 @@
 import { useRef, type KeyboardEvent } from 'react';
+import { Link } from 'react-router-dom';
 import { cn } from '../ui/cn';
+
+const TRACK = 'inline-flex max-w-full gap-1 overflow-x-auto rounded-[14px] bg-neutral-200 p-1';
+const SEGMENT = 'inline-flex h-10 shrink-0 items-center gap-2 whitespace-nowrap rounded-[11px] px-4 text-sm transition-colors';
+const SEGMENT_ON = 'bg-card font-semibold text-ink shadow-[0_1px_2px_rgba(15,20,34,.08),0_0_0_1px_rgba(15,20,34,.04)]';
+const SEGMENT_OFF = 'font-medium text-ink-secondary hover:text-ink';
 
 export interface SegmentedTabItem<T extends string> {
   value: T;
@@ -57,7 +63,7 @@ export function SegmentedTabs<T extends string>({
     <div
       role="tablist"
       aria-label={label}
-      className={cn('inline-flex max-w-full gap-1 overflow-x-auto rounded-[14px] bg-neutral-200 p-1', className)}
+      className={cn(TRACK, className)}
     >
       {items.map((item, index) => {
         const selected = item.value === value;
@@ -74,12 +80,7 @@ export function SegmentedTabs<T extends string>({
             tabIndex={selected ? 0 : -1}
             onClick={() => onChange(item.value)}
             onKeyDown={(e) => onKeyDown(e, index)}
-            className={cn(
-              'inline-flex h-10 shrink-0 items-center gap-2 whitespace-nowrap rounded-[11px] px-4 text-sm transition-colors',
-              selected
-                ? 'bg-card font-semibold text-ink shadow-[0_1px_2px_rgba(15,20,34,.08),0_0_0_1px_rgba(15,20,34,.04)]'
-                : 'font-medium text-ink-secondary hover:text-ink',
-            )}
+            className={cn(SEGMENT, selected ? SEGMENT_ON : SEGMENT_OFF)}
           >
             {item.label}
             {item.count != null && (
@@ -96,5 +97,44 @@ export function SegmentedTabs<T extends string>({
         );
       })}
     </div>
+  );
+}
+
+export interface SegmentedLinkItem {
+  to: string;
+  label: string;
+  /** Whether this link is the current page (decided by the caller from the route). */
+  current: boolean;
+}
+
+/**
+ * Same segmented look as `SegmentedTabs`, but each segment is a route LINK
+ * (e.g. the Wallet history Transactions / Payouts sub-pages, handoff §3.4
+ * D1-B). Link semantics, not tab semantics: a `nav` landmark and
+ * `aria-current="page"` on the current segment; ordinary Tab-key navigation.
+ */
+export function SegmentedLinkTabs({
+  items,
+  label,
+  className,
+}: {
+  items: readonly SegmentedLinkItem[];
+  /** Accessible name of the nav landmark. */
+  label: string;
+  className?: string;
+}) {
+  return (
+    <nav aria-label={label} className={cn(TRACK, className)}>
+      {items.map((item) => (
+        <Link
+          key={item.to}
+          to={item.to}
+          aria-current={item.current ? 'page' : undefined}
+          className={cn(SEGMENT, item.current ? SEGMENT_ON : SEGMENT_OFF)}
+        >
+          {item.label}
+        </Link>
+      ))}
+    </nav>
   );
 }

@@ -11,7 +11,6 @@ import { LoadingState } from '../../components/feedback/LoadingState';
 import { EmptyState } from '../../components/feedback/EmptyState';
 import { ErrorState } from '../../components/feedback/ErrorState';
 import { Badge } from '../../components/ui/Badge';
-import { CustomerPageHeader } from '../../components/customer/CustomerPageHeader';
 import { CustomerPagination } from '../../components/customer/CustomerPagination';
 import {
   getPayoutStatusLabel,
@@ -24,8 +23,8 @@ function parsePage(sp: URLSearchParams): number {
 }
 
 /**
- * /customer/payouts — Payout History (Customer Portal Redesign Step 5,
- * handoff §3.4, D1-A standalone page).
+ * Wallet history — Payouts tab (handoff §3.4, D1-B). Rendered inside
+ * CustomerWalletLayout's History panel for /customer/payouts.
  *
  * READ-ONLY self-scoped list from GET /customer/me/payouts (the
  * customer_payouts business record). Page state lives in the URL. Status
@@ -50,12 +49,8 @@ export default function CustomerPayoutsPage() {
   };
 
   return (
-    <div className="flex flex-col gap-7">
-      <CustomerPageHeader
-        eyebrow="Wallet"
-        title="Payouts"
-        lead="Payouts Spring Delivery has made to you."
-      />
+    <div className="flex flex-col gap-5">
+      <p className="-mt-2 text-sm text-ink-secondary">Payouts Spring Delivery has made to you.</p>
 
       {query.isLoading ? (
         <StatePanel>
@@ -102,15 +97,16 @@ export default function CustomerPayoutsPage() {
   );
 }
 
+/** Already inside the History panel — states need no second panel. */
 function StatePanel({ children }: { children: ReactNode }) {
-  return <div className="rounded-panel border border-line bg-card">{children}</div>;
+  return <div>{children}</div>;
 }
 
 function PayoutCard({ payout }: { payout: CustomerPayoutSummary }) {
   return (
     <article
       aria-label={`Payout ${payout.payoutNumber}`}
-      className="flex h-full flex-col gap-4 rounded-panel border border-line bg-card p-6"
+      className="flex h-full flex-col gap-4 rounded-[18px] border border-line bg-sunken p-5"
     >
       <div className="flex flex-wrap items-start justify-between gap-2">
         <p className="min-w-0 text-sm font-bold text-ink [overflow-wrap:anywhere]">{payout.payoutNumber}</p>

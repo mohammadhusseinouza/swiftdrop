@@ -15,7 +15,6 @@ import { EmptyState } from '../../components/feedback/EmptyState';
 import { ErrorState } from '../../components/feedback/ErrorState';
 import { Badge } from '../../components/ui/Badge';
 import { cn } from '../../components/ui/cn';
-import { CustomerPageHeader } from '../../components/customer/CustomerPageHeader';
 import { FilterChips } from '../../components/customer/FilterChips';
 import { CustomerPagination } from '../../components/customer/CustomerPagination';
 import { getTransactionRowView } from '../../components/customer/customerWalletPresentation';
@@ -39,8 +38,9 @@ function parsePage(sp: URLSearchParams): number {
 }
 
 /**
- * /customer/transactions — Transactions (Customer Portal Redesign Step 5,
- * handoff §3.4, D1-A standalone page).
+ * Wallet history — Transactions tab (handoff §3.4, D1-B). Rendered inside
+ * CustomerWalletLayout's History panel for /customer/transactions and
+ * /customer/wallet (the Wallet's default tab).
  *
  * READ-ONLY view of the authenticated Customer's own append-only wallet
  * ledger (GET /customer/me/wallet/transactions). `type` + `page` live in the
@@ -72,14 +72,8 @@ export default function CustomerTransactionsPage() {
   };
 
   return (
-    <div className="flex flex-col gap-7">
-      <CustomerPageHeader
-        eyebrow="Wallet"
-        title="Transactions"
-        lead="Every change to your wallet balance, newest first."
-      />
-
-      <section aria-label="Wallet transactions" className="flex flex-col gap-5 rounded-panel border border-line bg-card p-5 sm:p-8">
+    <div className="flex flex-col gap-5">
+      <p className="-mt-2 text-sm text-ink-secondary">Every change to your wallet balance, newest first.</p>
         <FilterChips label="Transaction type" options={FILTERS} value={type} onChange={selectType} />
 
         {query.isLoading ? (
@@ -146,7 +140,6 @@ export default function CustomerTransactionsPage() {
             )}
           </>
         )}
-      </section>
     </div>
   );
 }

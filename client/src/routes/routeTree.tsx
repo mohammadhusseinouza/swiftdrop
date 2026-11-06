@@ -53,6 +53,7 @@ import {
   CustomerOrdersPage,
   CustomerOrderDetailPage,
   CustomerWalletPage,
+  CustomerWalletLayout,
   CustomerTransactionsPage,
   CustomerPayoutsPage,
   CustomerProfilePage,
@@ -167,9 +168,16 @@ const customerChildren: RouteObject[] = [
   { path: 'dashboard', element: <CustomerDashboardPage /> },
   { path: 'orders', element: <CustomerOrdersPage /> },
   { path: 'orders/:id', element: <CustomerOrderDetailPage /> },
-  { path: 'wallet', element: <CustomerWalletPage /> },
-  { path: 'transactions', element: <CustomerTransactionsPage /> },
-  { path: 'payouts', element: <CustomerPayoutsPage /> },
+  // Wallet (handoff §3.4, D1-B): one Wallet page with Transactions / Payouts
+  // tabs. A pathless layout route — the three URLs are unchanged.
+  {
+    element: <CustomerWalletLayout />,
+    children: [
+      { path: 'wallet', element: <CustomerWalletPage /> },
+      { path: 'transactions', element: <CustomerTransactionsPage /> },
+      { path: 'payouts', element: <CustomerPayoutsPage /> },
+    ],
+  },
   { path: 'profile', element: <CustomerProfilePage /> },
 ];
 

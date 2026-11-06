@@ -21,6 +21,9 @@ it are placeholders; every value on screen must come from the existing Customer 
 
 Everything below assumes D1 = A-or-B (both specified), D2 = A, D3 = A.
 
+**Decided:** D1 = **B** (Transactions and Payouts as Wallet tabs; `page_structure.md` §32 updated;
+routes unchanged; nav labels Dashboard / My Orders / Wallet / Profile kept), D2 = A, D3 = A.
+
 ---
 
 ## 1. Visual language

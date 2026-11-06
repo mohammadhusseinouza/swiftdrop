@@ -8,6 +8,7 @@ export { default as CustomerDashboardPage } from './CustomerDashboardPage';
 export { default as CustomerOrdersPage } from './CustomerOrdersPage';
 export { default as CustomerOrderDetailPage } from './CustomerOrderDetailPage';
 export { default as CustomerWalletPage } from './CustomerWalletPage';
+export { default as CustomerWalletLayout } from './CustomerWalletLayout';
 export { default as CustomerTransactionsPage } from './CustomerTransactionsPage';
 export { default as CustomerPayoutsPage } from './CustomerPayoutsPage';
 export { default as CustomerProfilePage } from './CustomerProfilePage';

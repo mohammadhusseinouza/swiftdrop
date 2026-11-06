@@ -1867,11 +1867,16 @@ The Customer Portal should remain much simpler than the Management Portal.
 ```text
 Dashboard
 My Orders
-Wallet
-Transactions
-Payouts
+Wallet        (tabs: Transactions · Payouts)
 Profile
 ```
+
+Customer Portal Redesign decision D1-B (`docs/customer-portal-redesign-handoff.md` §0):
+Transactions and Payouts are tabs inside the Wallet page instead of separate navigation items.
+The routes are unchanged — `/customer/wallet`, `/customer/transactions` and `/customer/payouts`
+all render the Wallet page (balance + pending panels and a History panel). `/customer/wallet`
+and `/customer/transactions` show the Transactions tab; `/customer/payouts` shows the Payouts
+tab. The Wallet navigation item is current on all three routes.
 
 ---
 
@@ -2030,6 +2035,9 @@ Delivered-but-unreleased orders are labelled **Pending Settlement**.
 /customer/transactions
 ```
 
+Shown as the **Transactions** tab of the Wallet page (decision D1-B, §32); also the Wallet's
+default tab at `/customer/wallet`.
+
 Display wallet transaction history.
 
 Recommended columns:
@@ -2054,6 +2062,8 @@ Customers cannot edit transactions.
 ```text
 /customer/payouts
 ```
+
+Shown as the **Payouts** tab of the Wallet page (decision D1-B, §32).
 
 Display:
 
