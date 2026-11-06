@@ -13,6 +13,10 @@ export interface FieldShellProps {
   required?: boolean;
   children: ReactNode;
   className?: string;
+  /** Optional label classes; replaces the default label style (sign-in page). */
+  labelClassName?: string;
+  /** Optional hint/error text-size classes; replaces the default `text-xs`. */
+  messageClassName?: string;
 }
 
 /** The id of a field's hint/error `<p>`, for wiring `aria-describedby`. */
@@ -28,10 +32,13 @@ export function FieldShell({
   required,
   children,
   className,
+  labelClassName,
+  messageClassName,
 }: FieldShellProps) {
+  const messageSize = messageClassName ?? 'text-xs';
   return (
     <div className={cn('flex flex-col gap-1.5', className)}>
-      <label htmlFor={htmlFor} className="text-sm font-medium text-ink-secondary">
+      <label htmlFor={htmlFor} className={labelClassName ?? 'text-sm font-medium text-ink-secondary'}>
         {label}
         {required && (
           <span className="ml-0.5 text-danger-700" aria-hidden="true">
@@ -41,12 +48,12 @@ export function FieldShell({
       </label>
       {children}
       {error ? (
-        <p id={fieldMessageId(htmlFor)} className="text-xs text-danger-700">
+        <p id={fieldMessageId(htmlFor)} className={cn(messageSize, 'text-danger-700')}>
           {error}
         </p>
       ) : (
         hint && (
-          <p id={fieldMessageId(htmlFor)} className="text-xs text-ink-muted">
+          <p id={fieldMessageId(htmlFor)} className={cn(messageSize, 'text-ink-muted')}>
             {hint}
           </p>
         )

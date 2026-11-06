@@ -2,10 +2,10 @@ import { useId, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useLocation } from 'react-router-dom';
-import { Eye, EyeOff, Truck } from 'lucide-react';
+import { ArrowRight, CircleAlert, Eye, EyeOff } from 'lucide-react';
 
 import { Button } from '../../components/ui/Button';
-import { TextField, FieldShell, fieldMessageId } from '../../components/forms/Field';
+import { FieldShell, fieldMessageId } from '../../components/forms/Field';
 import { cn } from '../../components/ui/cn';
 import { useLogin } from '../../features/auth/useSession';
 import {
@@ -36,12 +36,19 @@ function toLoginErrorMessage(error: unknown): string {
   return 'Something went wrong while signing in. Please try again.';
 }
 
+const LABEL = 'text-sm font-semibold text-ink';
+/** Field style (handoff §8.2): 2px brand-600 focus outline with 1px offset; invalid border is danger-700. */
+const INPUT =
+  'h-[50px] w-full rounded-xl border bg-card text-[0.9375rem] text-ink placeholder:text-ink-muted ' +
+  'focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand-600 disabled:opacity-50';
+
 export default function LoginPage() {
   const { login, isLoading } = useLogin();
   const location = useLocation();
   const [showPassword, setShowPassword] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const formErrorId = useId();
+  const emailId = useId();
   const pwId = useId();
 
   const {
@@ -74,98 +81,96 @@ export default function LoginPage() {
   });
 
   return (
-    <div className="w-full max-w-sm">
-      <div className="mb-6 flex items-center gap-2.5">
-        <span
-          className="flex size-9 items-center justify-center rounded-control bg-brand-600 text-white"
-          aria-hidden="true"
-        >
-          <Truck className="size-5" />
-        </span>
-        <span className="text-lg font-semibold tracking-tight text-ink">
-          Spring Delivery
-        </span>
+    <div className="flex w-full max-w-[400px] flex-col gap-7">
+      <div>
+        <h1 className="text-[2.125rem] leading-[1.1] font-bold tracking-[-0.035em] text-ink">Welcome back</h1>
+        <p className="mt-2 text-[0.9375rem] text-ink-secondary">
+          Sign in with the email and password your company gave you.
+        </p>
       </div>
 
-      <div className="rounded-card border border-line bg-card p-6 shadow-card sm:p-7">
-        <h1 className="text-xl font-semibold text-ink">Sign in</h1>
-        <p className="mt-1 text-sm text-ink-muted">
-          Sign in to manage deliveries and operations.
-        </p>
+      <form onSubmit={onSubmit} noValidate className="flex flex-col gap-5">
+        {formError && (
+          <div
+            id={formErrorId}
+            role="alert"
+            className="flex items-start gap-2.5 rounded-xl border border-danger-200 bg-danger-50 px-3.5 py-3 text-sm text-danger-700"
+          >
+            <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+            {formError}
+          </div>
+        )}
 
-        <form onSubmit={onSubmit} noValidate className="mt-5 space-y-4">
-          {formError && (
-            <div
-              id={formErrorId}
-              role="alert"
-              className="flex items-start gap-2 rounded-control border border-danger-200 bg-danger-50 px-3 py-2 text-sm text-danger-700"
-            >
-              <span
-                className="mt-0.5 size-1.5 shrink-0 rounded-full bg-current"
-                aria-hidden="true"
-              />
-              {formError}
-            </div>
-          )}
-
-          <TextField
-            label="Email"
+        <FieldShell
+          label="Email"
+          htmlFor={emailId}
+          error={errors.email?.message}
+          labelClassName={LABEL}
+          messageClassName="text-[0.8125rem]"
+        >
+          <input
+            id={emailId}
             type="email"
             autoComplete="username"
             autoCapitalize="none"
             spellCheck={false}
             placeholder="you@company.com"
-            error={errors.email?.message}
+            aria-invalid={errors.email ? true : undefined}
+            aria-describedby={errors.email ? fieldMessageId(emailId) : undefined}
+            className={cn(INPUT, 'px-4', errors.email ? 'border-danger-700' : 'border-line')}
             {...register('email')}
           />
+        </FieldShell>
 
-          <FieldShell
-            label="Password"
-            htmlFor={pwId}
-            error={errors.password?.message}
-          >
-            <div className="relative">
-              <input
-                id={pwId}
-                type={showPassword ? 'text' : 'password'}
-                autoComplete="current-password"
-                aria-invalid={errors.password ? true : undefined}
-                aria-describedby={
-                  errors.password ? fieldMessageId(pwId) : undefined
-                }
-                className={cn(
-                  'h-10 w-full rounded-control border bg-card pl-3 pr-10 text-sm text-ink',
-                  'placeholder:text-ink-subtle disabled:opacity-50',
-                  errors.password ? 'border-danger-200' : 'border-line',
-                )}
-                {...register('password')}
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword((v) => !v)}
-                aria-label={showPassword ? 'Hide password' : 'Show password'}
-                aria-pressed={showPassword}
-                className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-2 text-ink-subtle hover:text-ink"
-              >
-                {showPassword ? (
-                  <EyeOff className="size-4" aria-hidden="true" />
-                ) : (
-                  <Eye className="size-4" aria-hidden="true" />
-                )}
-              </button>
-            </div>
-          </FieldShell>
+        <FieldShell
+          label="Password"
+          htmlFor={pwId}
+          error={errors.password?.message}
+          labelClassName={LABEL}
+          messageClassName="text-[0.8125rem]"
+        >
+          <div className="relative">
+            <input
+              id={pwId}
+              type={showPassword ? 'text' : 'password'}
+              autoComplete="current-password"
+              aria-invalid={errors.password ? true : undefined}
+              aria-describedby={errors.password ? fieldMessageId(pwId) : undefined}
+              className={cn(INPUT, 'pr-[52px] pl-4', errors.password ? 'border-danger-700' : 'border-line')}
+              {...register('password')}
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((v) => !v)}
+              aria-label={showPassword ? 'Hide password' : 'Show password'}
+              aria-pressed={showPassword}
+              className="absolute top-1/2 right-1 flex size-[42px] -translate-y-1/2 items-center justify-center rounded-[10px] text-ink-muted hover:bg-sunken hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand-600"
+            >
+              {showPassword ? (
+                <EyeOff className="size-[18px]" aria-hidden="true" />
+              ) : (
+                <Eye className="size-[18px]" aria-hidden="true" />
+              )}
+            </button>
+          </div>
+        </FieldShell>
 
-          <Button
-            type="submit"
-            className="w-full"
-            loading={isLoading || isSubmitting}
-            aria-describedby={formError ? formErrorId : undefined}
-          >
-            Sign in
-          </Button>
-        </form>
-      </div>
+        <Button
+          type="submit"
+          variant="ink"
+          size="lg"
+          className="mt-1 w-full focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand-600"
+          loading={isLoading || isSubmitting}
+          aria-describedby={formError ? formErrorId : undefined}
+        >
+          Sign in
+          {!(isLoading || isSubmitting) && <ArrowRight className="size-4" aria-hidden="true" />}
+        </Button>
+      </form>
+
+      <p className="border-t border-line pt-6 text-[0.8125rem] text-ink-muted">
+        No account yet, or locked out? Contact your Spring Delivery administrator.
+      </p>
     </div>
   );
 }
