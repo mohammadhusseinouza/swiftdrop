@@ -11,10 +11,14 @@ import { LoadingState } from '../../components/feedback/LoadingState';
 import { EmptyState } from '../../components/feedback/EmptyState';
 import { ErrorState } from '../../components/feedback/ErrorState';
 import { CustomerPageHeader } from '../../components/customer/CustomerPageHeader';
+import { CustomerHero } from '../../components/customer/CustomerHero';
 import { SegmentedTabs } from '../../components/customer/SegmentedTabs';
 import { CustomerPagination } from '../../components/customer/CustomerPagination';
 import { CustomerOrderCard } from '../../components/customer/CustomerOrderCard';
-import { getCustomerOrderTabCounts } from '../../components/customer/customerOrderPresentation';
+import {
+  getCustomerOrderTabCounts,
+  getCustomerOrdersHeroLead,
+} from '../../components/customer/customerOrderPresentation';
 
 const VIEW_TABS: ReadonlyArray<{ id: CustomerOrderView; label: string }> = [
   { id: 'all', label: 'All' },
@@ -56,6 +60,10 @@ function parsePage(sp: URLSearchParams): number {
  * resets `page`). Tab counts never come from the current page: Active /
  * Delivered from the cached self-scoped dashboard summary, All from the All
  * list's own `meta.total` (see getCustomerOrderTabCounts).
+ *
+ * Brand look (docs/brand-theme/brand-theme-handoff.md §4.2): the header and
+ * the tabs live in the charcoal hero band; the hero lead uses the same cached
+ * dashboard counts and is omitted until they are loaded.
  */
 export default function CustomerOrdersPage() {
   const [sp, setSp] = useSearchParams();
@@ -69,6 +77,7 @@ export default function CustomerOrdersPage() {
   const orders = query.data?.items ?? [];
   const meta = query.data?.meta;
 
+  const heroLead = getCustomerOrdersHeroLead(summary.data);
   const counts = getCustomerOrderTabCounts({
     view,
     currentTotal: query.currentData?.meta.total,
@@ -91,20 +100,25 @@ export default function CustomerOrdersPage() {
 
   return (
     <div className="flex flex-col gap-7">
-      <CustomerPageHeader
-        eyebrow="My orders"
-        title="Every parcel, at a glance."
-        lead="Follow each order from received to delivered."
-        action={
-          <SegmentedTabs
-            label="Order view"
-            panelId={panelId}
-            value={view}
-            onChange={selectView}
-            items={VIEW_TABS.map((t) => ({ value: t.id, label: t.label, count: counts[t.id] }))}
-          />
-        }
-      />
+      <CustomerHero>
+        <CustomerPageHeader
+          tone="dark"
+          eyebrow="My orders"
+          title="Every parcel,"
+          highlight="at a glance."
+          lead={heroLead ?? undefined}
+          action={
+            <SegmentedTabs
+              tone="dark"
+              label="Order view"
+              panelId={panelId}
+              value={view}
+              onChange={selectView}
+              items={VIEW_TABS.map((t) => ({ value: t.id, label: t.label, count: counts[t.id] }))}
+            />
+          }
+        />
+      </CustomerHero>
 
       <div id={panelId} role="tabpanel" aria-label={`${VIEW_TABS.find((t) => t.id === view)?.label} orders`}>
         {query.isLoading ? (
@@ -130,7 +144,7 @@ export default function CustomerOrdersPage() {
           </StatePanel>
         ) : (
           <div className="flex flex-col gap-6">
-            <ul className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,520px),1fr))] gap-5">
+            <ul className="sd-stagger grid grid-cols-[repeat(auto-fill,minmax(min(100%,520px),1fr))] gap-5">
               {orders.map((order) => (
                 <li key={order.id} className="min-w-0">
                   <CustomerOrderCard order={order} />
@@ -145,6 +159,7 @@ export default function CustomerOrdersPage() {
                 total={meta.total}
                 noun={meta.total === 1 ? 'order' : 'orders'}
                 onPageChange={setPage}
+                tone="brand"
               />
             )}
           </div>
@@ -155,5 +170,5 @@ export default function CustomerOrdersPage() {
 }
 
 function StatePanel({ children }: { children: ReactNode }) {
-  return <div className="rounded-panel border border-line bg-card">{children}</div>;
+  return <div className="rounded-2xl border border-sd-line bg-card shadow-sd-card">{children}</div>;
 }

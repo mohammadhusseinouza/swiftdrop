@@ -55,7 +55,7 @@ describe('pending bar weights (layout only)', () => {
     const wallet = strip(read('../src/pages/customer/CustomerWalletLayout.tsx'));
     assert.ok(!/Number\(|parseFloat|toFixed/.test(wallet));
     assert.ok(wallet.includes('getPendingBarWeights(breakdown)'));
-    assert.ok(wallet.includes('<div className="flex h-2.5 gap-1" aria-hidden="true">'));
+    assert.ok(wallet.includes('<div className="sd-grow flex h-2.5 gap-1" aria-hidden="true">'));
     assert.ok(wallet.includes('formatMoney(breakdown.totalPending'));
   });
 });
@@ -72,7 +72,7 @@ describe('transactions table', () => {
 
   test('balance-after second line and direction word come from the shared row view', () => {
     assert.ok(page.includes('{view.balanceAfter}'));
-    assert.ok(page.includes('{view.directionWord && <p className="text-xs text-ink-muted">{view.directionWord}</p>}'));
+    assert.ok(page.includes('{view.directionWord && <p className="text-xs text-sd-text-muted">{view.directionWord}</p>}'));
     assert.ok(page.includes('view.amountClass'));
     assert.ok(!page.includes('dir.amountClass'), 'debits are ink, not red');
   });
@@ -131,7 +131,9 @@ describe('Step 5 guardrails', () => {
 
   test('wallet under-review is a count only; PendingBreakdownCard no longer used here', () => {
     const code = strip(read('../src/pages/customer/CustomerWalletLayout.tsx'));
-    assert.ok(code.includes('{reviewCount > 0 && ('));
+    // Brand B3: the notice moved from the pending card to the page body.
+    assert.ok(code.includes('reviewCount > 0 && ('));
+    assert.ok(code.includes('pendingBreakdown(data).underReviewOrderCount'));
     assert.ok(!code.includes('PendingBreakdownCard'));
     const mgmt = read('../src/pages/management/wallets/WalletDetailPage.tsx');
     assert.ok(mgmt.includes('PendingBreakdownCard'), 'Management keeps the shared card');

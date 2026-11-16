@@ -8,10 +8,13 @@ import { formatMoney } from '../../lib/format';
 import { paths } from '../../routes/paths';
 import { pendingBreakdown, type PendingBreakdown } from '../../components/finance/financialRelease';
 
+import { cn } from '../../components/ui/cn';
 import { LoadingState } from '../../components/feedback/LoadingState';
 import { ErrorState } from '../../components/feedback/ErrorState';
 import { CustomerPageHeader } from '../../components/customer/CustomerPageHeader';
+import { CustomerHero } from '../../components/customer/CustomerHero';
 import { BalanceHeroCard, HeroMoney } from '../../components/customer/BalanceHeroCard';
+import { HeroStatTile } from '../../components/customer/HeroStatTile';
 import { ReviewNotice } from '../../components/customer/ReviewNotice';
 import { DetailPanel } from '../../components/customer/DetailPanel';
 import { SegmentedLinkTabs } from '../../components/customer/SegmentedTabs';
@@ -34,23 +37,40 @@ import { getPendingBarWeights, getWalletHistoryTab } from '../../components/cust
  * which has its own loading / error state and never blocks the balance.
  * Deliberately NO Withdraw / Request Payout control; under-review orders are a
  * COUNT only; no driver cash or company revenue.
+ *
+ * Brand look (docs/brand-theme/brand-theme-handoff.md §4.4): ONE hero for all
+ * three tabs — the red Available balance card and the translucent Pending
+ * card sit in the charcoal band. The body holds the under-review notice, the
+ * history panel with the red-active tab bar, and "About these amounts".
  */
 const PAYOUTS_PARAMS = { page: 1, limit: 1 } as const;
-const PANEL = 'rounded-panel border border-line bg-card';
+const PANEL = 'rounded-2xl border border-sd-line bg-card shadow-sd-card';
+const TILE_LABEL = 'font-sd-display text-[0.8125rem] font-semibold uppercase tracking-[0.12em]';
 
 export default function CustomerWalletLayout() {
   const query = useGetCustomerWalletQuery();
   const data = query.data;
   const { pathname } = useLocation();
   const tab = getWalletHistoryTab(pathname);
+  const reviewCount = data ? pendingBreakdown(data).underReviewOrderCount : 0;
 
   return (
-    <div className="flex flex-col gap-7">
-      <CustomerPageHeader
-        eyebrow="Wallet"
-        title="Your money, clearly accounted."
-        lead="What is available for payout now, what is still on its way, and every change to your balance."
-      />
+    <div className="flex flex-col gap-6">
+      <CustomerHero speedLines>
+        <CustomerPageHeader
+          tone="dark"
+          eyebrow="Wallet"
+          title="Your money,"
+          highlight="clearly accounted."
+          lead="What is available for payout now, what is still on its way, and every change to your balance."
+        />
+        {data && (
+          <div className="sd-stagger grid grid-cols-[repeat(auto-fit,minmax(min(100%,320px),1fr))] gap-3">
+            <AvailablePanel data={data} />
+            <PendingPanel breakdown={pendingBreakdown(data)} />
+          </div>
+        )}
+      </CustomerHero>
 
       {query.isLoading ? (
         <div className={PANEL}>
@@ -65,19 +85,24 @@ export default function CustomerWalletLayout() {
           />
         </div>
       ) : (
-        <div className="flex flex-wrap gap-5">
-          <AvailablePanel data={data} />
-          <PendingPanel breakdown={pendingBreakdown(data)} />
-        </div>
+        reviewCount > 0 && (
+          <ReviewNotice>
+            {reviewCount} delivered {reviewCount === 1 ? 'order is' : 'orders are'} being reviewed because the amount
+            collected differed from the expected amount. {reviewCount === 1 ? 'Its' : 'Their'} value is not included
+            above until the review is complete.
+          </ReviewNotice>
+        )
       )}
 
       {/* History never depends on the wallet summary query — it loads on its own. */}
       <DetailPanel
         title={tab === 'payouts' ? 'Payout history' : 'Transaction history'}
         titleStyle="title"
+        tone="brand"
         action={
           <SegmentedLinkTabs
             label="Wallet history"
+            tone="brand"
             items={[
               { to: paths.customer.transactions, label: 'Transactions', current: tab === 'transactions' },
               { to: paths.customer.payouts, label: 'Payouts', current: tab === 'payouts' },
@@ -100,19 +125,21 @@ function AvailablePanel({ data }: { data: CustomerWalletSummary }) {
   const chip = getLatestPayoutChipText(payouts.data?.items[0]);
 
   return (
-    <BalanceHeroCard className="flex min-w-0 flex-[1_1_420px] flex-col">
-      <h2 className="text-xs font-bold uppercase tracking-[0.12em] text-chrome-ink">Available balance</h2>
-      <HeroMoney value={data.availableBalance} className="mt-5" />
-      <p className="mt-4 max-w-md text-sm text-chrome-ink">
+    <BalanceHeroCard tone="red" className="flex flex-col">
+      <h2 className={cn(TILE_LABEL, 'text-sd-red-on')}>Available balance</h2>
+      <div className="mt-4 [overflow-wrap:anywhere]">
+        <HeroMoney value={data.availableBalance} tone="red" />
+      </div>
+      <p className="mt-3 max-w-md text-[0.8125rem] text-sd-red-on">
         Money from your completed eligible Delivery Only orders. Spring Delivery arranges and sends your payouts —
         there is nothing you need to request.
       </p>
 
-      <div className="mt-auto pt-7">
+      <div className="mt-auto pt-5">
         {payouts.isLoading ? (
-          <span className="text-xs text-chrome-ink-soft">Loading latest payout…</span>
+          <span className="text-xs text-sd-red-on">Loading latest payout…</span>
         ) : payouts.isError ? (
-          <span className="inline-flex flex-wrap items-center gap-x-2 text-xs text-chrome-ink">
+          <span className="inline-flex flex-wrap items-center gap-x-2 text-xs text-sd-red-on">
             Latest payout unavailable.
             <button
               type="button"
@@ -123,7 +150,7 @@ function AvailablePanel({ data }: { data: CustomerWalletSummary }) {
             </button>
           </span>
         ) : chip ? (
-          <span className="inline-flex min-h-7 max-w-full items-center rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-white">
+          <span className="inline-flex min-h-7 max-w-full items-center rounded-[6px] bg-white/18 px-3 py-1 text-xs font-semibold text-white">
             {chip}
           </span>
         ) : null}
@@ -136,53 +163,45 @@ function AvailablePanel({ data }: { data: CustomerWalletSummary }) {
 
 function PendingPanel({ breakdown }: { breakdown: PendingBreakdown }) {
   const weights = getPendingBarWeights(breakdown);
-  const reviewCount = breakdown.underReviewOrderCount;
 
   return (
-    <section aria-label="Pending amount" className={`${PANEL} flex min-w-0 flex-[1_1_420px] flex-col gap-5 p-6 sm:p-8`}>
+    <HeroStatTile className="flex flex-col gap-5">
       <div>
-        <h2 className="text-xs font-bold uppercase tracking-[0.12em] text-ink-muted">Pending · not yet withdrawable</h2>
-        <p className="mt-4 text-[2.75rem] leading-none font-bold tracking-[-0.04em] tabular-nums text-ink">
+        <h2 className={cn(TILE_LABEL, 'text-sd-on-dark')}>Pending · not yet withdrawable</h2>
+        <p className="mt-4 font-sd-display text-[2.75rem] leading-none font-bold tabular-nums text-white [overflow-wrap:anywhere]">
           {formatMoney(breakdown.totalPending, { fallback: '$0.00' })}
         </p>
       </div>
 
+      {/* Proportions are LAYOUT ONLY (getPendingBarWeights) — never shown as money. */}
       {weights && (
-        <div className="flex h-2.5 gap-1" aria-hidden="true">
+        <div className="sd-grow flex h-2.5 gap-1" aria-hidden="true">
           {weights.delivery > 0 && (
-            <span className="rounded-full bg-ink" style={{ flexGrow: weights.delivery, flexBasis: 0 }} />
+            <span className="rounded-[2px] bg-sd-steel-light" style={{ flexGrow: weights.delivery, flexBasis: 0 }} />
           )}
           {weights.settlement > 0 && (
-            <span className="rounded-full bg-brand-600" style={{ flexGrow: weights.settlement, flexBasis: 0 }} />
+            <span className="rounded-[2px] bg-sd-red-logo" style={{ flexGrow: weights.settlement, flexBasis: 0 }} />
           )}
         </div>
       )}
 
       {breakdown.hasBreakdown && (
-        <ul className="divide-y divide-line-subtle">
+        <ul className="divide-y divide-white/8">
           <LegendRow
-            swatch="bg-ink"
+            swatch="bg-sd-steel-light"
             label="Pending delivery"
             explanation="Your share of orders that are still on the way."
             value={breakdown.pendingDelivery}
           />
           <LegendRow
-            swatch="bg-brand-600"
+            swatch="bg-sd-red-logo"
             label="Pending settlement"
             explanation="Your share of delivered orders. It becomes available once the courier hands the collected cash to the company."
             value={breakdown.pendingSettlement}
           />
         </ul>
       )}
-
-      {reviewCount > 0 && (
-        <ReviewNotice compact>
-          {reviewCount} delivered {reviewCount === 1 ? 'order is' : 'orders are'} being reviewed because the amount
-          collected differed from the expected amount. {reviewCount === 1 ? 'Its' : 'Their'} value is not included
-          above until the review is complete.
-        </ReviewNotice>
-      )}
-    </section>
+    </HeroStatTile>
   );
 }
 
@@ -199,12 +218,12 @@ function LegendRow({
 }) {
   return (
     <li className="flex items-start gap-3 py-3 first:pt-0 last:pb-0">
-      <span className={`mt-1.5 size-2.5 shrink-0 rounded-full ${swatch}`} aria-hidden="true" />
+      <span className={`mt-1.5 size-2.5 shrink-0 rounded-[2px] ${swatch}`} aria-hidden="true" />
       <div className="min-w-0 flex-1">
-        <p className="text-sm font-semibold text-ink">{label}</p>
-        <p className="mt-0.5 text-[0.8125rem] text-ink-muted">{explanation}</p>
+        <p className="text-sm font-semibold text-white">{label}</p>
+        <p className="mt-0.5 text-[0.8125rem] text-sd-on-dark">{explanation}</p>
       </div>
-      <p className="shrink-0 text-sm font-bold tabular-nums text-ink">{formatMoney(value)}</p>
+      <p className="shrink-0 font-sd-display text-base font-bold tabular-nums text-white">{formatMoney(value)}</p>
     </li>
   );
 }
@@ -232,12 +251,12 @@ const DEFINITIONS = [
 
 function AboutAmounts() {
   return (
-    <DetailPanel title="About these amounts">
+    <DetailPanel title="About these amounts" tone="brand">
       <dl className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,240px),1fr))] gap-x-8 gap-y-5">
         {DEFINITIONS.map((d) => (
           <div key={d.term} className="min-w-0">
-            <dt className="text-sm font-bold text-ink">{d.term}</dt>
-            <dd className="mt-1 text-sm text-ink-muted">{d.text}</dd>
+            <dt className="font-sd-display text-base font-bold text-sd-ink">{d.term}</dt>
+            <dd className="mt-1 text-sm text-sd-text-muted">{d.text}</dd>
           </div>
         ))}
       </dl>

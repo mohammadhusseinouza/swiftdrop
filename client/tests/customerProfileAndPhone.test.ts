@@ -53,8 +53,9 @@ describe('Transactions row view (shared by table and phone rows)', () => {
   const page = strip(read('../src/pages/customer/CustomerTransactionsPage.tsx'));
 
   test('phone rows below sm, table from sm up; one implementation of the row logic', () => {
-    assert.ok(page.includes('<ul className="divide-y divide-line-subtle sm:hidden">'));
-    assert.ok(page.includes('hidden overflow-x-auto rounded-[14px] border border-line-subtle sm:block'));
+    // Brand B3: same phone / table split, brand colours.
+    assert.ok(page.includes('<ul className="divide-y divide-sd-line-subtle sm:hidden">'));
+    assert.ok(page.includes('hidden overflow-x-auto rounded-[10px] border border-sd-line sm:block'));
     assert.equal(page.match(/getTransactionRowView\(tx, formatMoney\)/g)?.length, 2);
     assert.ok(!/getDirectionPresentation|getTransactionDescription|getWalletTransactionTypeTone|getWalletTransactionTypeLabel/.test(page));
   });
@@ -62,7 +63,7 @@ describe('Transactions row view (shared by table and phone rows)', () => {
   test('phone row shows date and type badge on the second line', () => {
     const stacked = page.slice(page.indexOf('function TransactionStackedRow'));
     assert.ok(stacked.includes('<time dateTime={tx.occurredAt}>{formatDateTime(tx.occurredAt)}</time>'));
-    assert.ok(stacked.includes('<Badge tone={view.typeTone}>{view.typeLabel}</Badge>'));
+    assert.ok(stacked.includes('<BrandBadge tone={view.typeTone}>{view.typeLabel}</BrandBadge>'));
   });
 });
 

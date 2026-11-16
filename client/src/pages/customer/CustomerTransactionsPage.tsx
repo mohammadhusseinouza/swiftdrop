@@ -13,9 +13,9 @@ import type {
 import { LoadingState } from '../../components/feedback/LoadingState';
 import { EmptyState } from '../../components/feedback/EmptyState';
 import { ErrorState } from '../../components/feedback/ErrorState';
-import { Badge } from '../../components/ui/Badge';
 import { cn } from '../../components/ui/cn';
 import { FilterChips } from '../../components/customer/FilterChips';
+import { BrandBadge } from '../../components/customer/BrandBadge';
 import { CustomerPagination } from '../../components/customer/CustomerPagination';
 import { getTransactionRowView } from '../../components/customer/customerWalletPresentation';
 
@@ -46,6 +46,7 @@ function parsePage(sp: URLSearchParams): number {
  * ledger (GET /customer/me/wallet/transactions). `type` + `page` live in the
  * URL exactly as before (All drops `type`; changing the filter resets `page`).
  * Direction is given in text (Added / Deducted); debits are ink, not red.
+ * Brand look (brand theme §4.4): Saira amounts, brand badges, red pager.
  */
 export default function CustomerTransactionsPage() {
   const [sp, setSp] = useSearchParams();
@@ -73,7 +74,7 @@ export default function CustomerTransactionsPage() {
 
   return (
     <div className="flex flex-col gap-5">
-      <p className="-mt-2 text-sm text-ink-secondary">Every change to your wallet balance, newest first.</p>
+      <p className="-mt-2 text-sm text-sd-text-2">Every change to your wallet balance, newest first.</p>
         <FilterChips label="Transaction type" options={FILTERS} value={type} onChange={selectType} />
 
         {query.isLoading ? (
@@ -98,14 +99,14 @@ export default function CustomerTransactionsPage() {
         ) : (
           <>
             {/* Phone (below sm): stacked rows — no scrolling table (handoff §3.4). */}
-            <ul className="divide-y divide-line-subtle sm:hidden">
+            <ul className="divide-y divide-sd-line-subtle sm:hidden">
               {rows.map((tx) => (
                 <TransactionStackedRow key={tx.id} tx={tx} />
               ))}
             </ul>
 
             {/* sm and up: the table. */}
-            <div className="hidden overflow-x-auto rounded-[14px] border border-line-subtle sm:block">
+            <div className="hidden overflow-x-auto rounded-[10px] border border-sd-line sm:block">
               <table className="w-full min-w-[640px] table-fixed border-collapse text-left text-sm">
                 <colgroup>
                   <col className="w-[120px]" />
@@ -113,15 +114,15 @@ export default function CustomerTransactionsPage() {
                   <col className="w-[150px]" />
                   <col className="w-[150px]" />
                 </colgroup>
-                <thead className="bg-sunken">
-                  <tr className="text-xs font-bold uppercase tracking-[0.08em] text-ink-muted">
+                <thead className="bg-sd-sunken">
+                  <tr className="font-sd-display text-xs font-semibold uppercase tracking-[0.12em] text-sd-text-muted">
                     <Th>Date</Th>
                     <Th>Description</Th>
                     <Th>Type</Th>
                     <Th className="text-right">Amount</Th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-line-subtle">
+                <tbody className="divide-y divide-sd-line-subtle">
                   {rows.map((tx) => (
                     <TransactionRow key={tx.id} tx={tx} />
                   ))}
@@ -136,6 +137,7 @@ export default function CustomerTransactionsPage() {
                 total={meta.total}
                 noun={meta.total === 1 ? 'transaction' : 'transactions'}
                 onPageChange={setPage}
+                tone="brand"
               />
             )}
           </>
@@ -156,20 +158,20 @@ function TransactionRow({ tx }: { tx: CustomerWalletTransactionSummary }) {
   const view = getTransactionRowView(tx, formatMoney);
 
   return (
-    <tr className="align-top">
-      <td className="px-4 py-3.5 text-[0.8125rem] text-ink-secondary">
+    <tr className="sd-row align-top">
+      <td className="px-4 py-3.5 text-[0.8125rem] text-sd-text-2">
         <time dateTime={tx.occurredAt}>{formatDateTime(tx.occurredAt)}</time>
       </td>
       <td className="px-4 py-3.5">
-        <p className="font-semibold text-ink [overflow-wrap:anywhere]">{view.description}</p>
-        <p className="mt-0.5 text-xs text-ink-muted tabular-nums">{view.balanceAfter}</p>
+        <p className="font-semibold text-sd-ink [overflow-wrap:anywhere]">{view.description}</p>
+        <p className="mt-0.5 text-xs text-sd-text-muted tabular-nums">{view.balanceAfter}</p>
       </td>
       <td className="px-4 py-3.5">
-        <Badge tone={view.typeTone}>{view.typeLabel}</Badge>
+        <BrandBadge tone={view.typeTone}>{view.typeLabel}</BrandBadge>
       </td>
       <td className="px-4 py-3.5 text-right">
-        <p className={cn('font-bold tabular-nums', view.amountClass)}>{view.amount}</p>
-        {view.directionWord && <p className="text-xs text-ink-muted">{view.directionWord}</p>}
+        <p className={cn('font-sd-display text-[0.9375rem] font-bold tabular-nums', view.amountClass)}>{view.amount}</p>
+        {view.directionWord && <p className="text-xs text-sd-text-muted">{view.directionWord}</p>}
       </td>
     </tr>
   );
@@ -182,17 +184,17 @@ function TransactionStackedRow({ tx }: { tx: CustomerWalletTransactionSummary })
     <li className="py-3.5 first:pt-0 last:pb-0">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-sm font-semibold text-ink [overflow-wrap:anywhere]">{view.description}</p>
-          <p className="mt-0.5 text-xs text-ink-muted tabular-nums">{view.balanceAfter}</p>
+          <p className="text-sm font-semibold text-sd-ink [overflow-wrap:anywhere]">{view.description}</p>
+          <p className="mt-0.5 text-xs text-sd-text-muted tabular-nums">{view.balanceAfter}</p>
         </div>
         <div className="shrink-0 text-right">
-          <p className={cn('text-sm font-bold tabular-nums', view.amountClass)}>{view.amount}</p>
-          {view.directionWord && <p className="text-xs text-ink-muted">{view.directionWord}</p>}
+          <p className={cn('font-sd-display text-[0.9375rem] font-bold tabular-nums', view.amountClass)}>{view.amount}</p>
+          {view.directionWord && <p className="text-xs text-sd-text-muted">{view.directionWord}</p>}
         </div>
       </div>
-      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-ink-muted">
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-sd-text-muted">
         <time dateTime={tx.occurredAt}>{formatDateTime(tx.occurredAt)}</time>
-        <Badge tone={view.typeTone}>{view.typeLabel}</Badge>
+        <BrandBadge tone={view.typeTone}>{view.typeLabel}</BrandBadge>
       </div>
     </li>
   );

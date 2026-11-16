@@ -40,14 +40,16 @@ describe('field error wiring', () => {
     assert.ok(shell.includes("<p id={fieldMessageId(htmlFor)} className={cn(messageSize, 'text-danger-700')}>"));
   });
 
-  test('invalid border is danger-700; focus is a 2px brand-600 outline with 1px offset', () => {
-    assert.ok(page.includes("errors.email ? 'border-danger-700' : 'border-line'"));
-    assert.ok(page.includes("errors.password ? 'border-danger-700' : 'border-line'"));
-    // danger-200 is too faint for a field boundary — only the alert box uses it.
-    assert.equal(page.split('border-danger-200').length - 1, 1);
-    assert.ok(page.includes('border border-danger-200 bg-danger-50'));
-    const focus = 'focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand-600';
-    assert.equal(page.split(focus).length - 1, 3, 'fields, eye button and submit');
+  // Brand B4 (brand theme §6): invalid #B01A24 (sd-red-hover), red focus, brand error box.
+  test('invalid border is #B01A24; focus is a 2px sd-red outline with 1px offset', () => {
+    assert.ok(page.includes("errors.email ? 'border-sd-red-hover' : 'border-sd-line'"));
+    assert.ok(page.includes("errors.password ? 'border-sd-red-hover' : 'border-sd-line'"));
+    assert.ok(page.includes('border border-[#F6D3D5] bg-[#FDF0F0]') && page.includes('text-sd-red-hover'));
+    const focus = 'focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-sd-red';
+    // Once in the field style (both inputs) and once in FOCUS (eye button + submit).
+    assert.equal(page.split(focus).length - 1, 2);
+    assert.ok(page.includes('FOCUS,') && page.includes("cn('sd-press mt-1 w-full', FOCUS)"));
+    assert.ok(!page.includes('outline-brand-600'));
   });
 
   test('validation messages are exactly the schema messages', () => {
@@ -106,7 +108,10 @@ describe('behaviour unchanged', () => {
     const btn = read('../src/components/ui/Button.tsx');
     assert.ok(btn.includes("sm: 'h-8 px-3 text-xs gap-1.5 rounded-control',"));
     assert.ok(btn.includes("md: 'h-10 px-4 text-sm gap-2 rounded-control',"));
-    assert.ok(btn.includes("size === 'lg' ? null : 'font-medium'"));
+    assert.ok(btn.includes("size === 'lg' || size === 'brand' ? null : 'font-medium'"));
+    // The brand variant / size are additive; the other variants keep their classes.
+    assert.ok(btn.includes("'bg-brand-600 text-white hover:bg-brand-700 disabled:bg-brand-600/50',"));
+    assert.ok(btn.includes("brand: 'bg-sd-red text-white hover:bg-sd-red-hover hover:shadow-sd-red disabled:bg-sd-red/60',"));
   });
 });
 
@@ -122,11 +127,12 @@ describe('guardrails', () => {
     assert.ok(layout.includes('<section\n        aria-label="Spring Delivery"'));
     assert.ok(layout.includes('<h2'));
     assert.ok(!layout.includes('<h1'));
-    assert.ok(layout.includes('-z-10 size-[30rem]" aria-hidden="true"'));
+    // Brand B4: decoration comes from HeroDecor (aria-hidden, tested there).
+    assert.ok(layout.includes('<OrbitRing') && layout.includes('<RedArc') && layout.includes('<SpeedLines variant="signin"'));
     const chips = layout.slice(layout.indexOf('ROLE_LABELS.map'));
     assert.ok(chips.includes('<li'));
     assert.ok(!/<a |<Link|<button|onClick|href=/.test(layout));
-    assert.ok(layout.includes('font-customer'), 'D4-A');
+    assert.ok(layout.includes('font-sd-body'), 'B-D3 A: brand fonts on the AuthLayout root');
     assert.ok(page.includes('<h1'));
   });
 });

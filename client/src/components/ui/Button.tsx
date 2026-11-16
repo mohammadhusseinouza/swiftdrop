@@ -2,8 +2,8 @@ import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import { Loader2 } from 'lucide-react';
 import { cn } from './cn';
 
-export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'ink';
-export type ButtonSize = 'sm' | 'md' | 'lg';
+export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'ink' | 'brand';
+export type ButtonSize = 'sm' | 'md' | 'lg' | 'brand';
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
@@ -25,6 +25,8 @@ const VARIANTS: Record<ButtonVariant, string> = {
     'bg-danger-700 text-white hover:bg-danger-700/90 disabled:bg-danger-700/50',
   // Dark primary (sign-in page). Additive — no existing caller uses it.
   ink: 'bg-ink text-white hover:bg-chrome disabled:bg-ink/60',
+  // Brand red primary (brand theme §6, sign-in). Additive — no other caller.
+  brand: 'bg-sd-red text-white hover:bg-sd-red-hover hover:shadow-sd-red disabled:bg-sd-red/60',
 };
 
 // The radius lives with the size (cn is clsx — no class merging), so `lg` can
@@ -33,6 +35,8 @@ const SIZES: Record<ButtonSize, string> = {
   sm: 'h-8 px-3 text-xs gap-1.5 rounded-control',
   md: 'h-10 px-4 text-sm gap-2 rounded-control',
   lg: 'h-[52px] px-5 text-[0.9375rem] gap-2 rounded-xl font-semibold',
+  // Brand sign-in button: Saira 17 / 700, 0.02em (brand theme §1.3). Additive.
+  brand: 'h-[52px] px-5 gap-2 rounded-[10px] font-sd-display text-[1.0625rem] font-bold tracking-[0.02em]',
 };
 
 /**
@@ -51,7 +55,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       aria-busy={loading || undefined}
       className={cn(
         'inline-flex items-center justify-center',
-        size === 'lg' ? null : 'font-medium',
+        size === 'lg' || size === 'brand' ? null : 'font-medium',
         'transition-colors disabled:cursor-not-allowed',
         VARIANTS[variant],
         SIZES[size],

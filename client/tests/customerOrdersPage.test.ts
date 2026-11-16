@@ -65,8 +65,9 @@ describe('CustomerOrderCard', () => {
   const code = strip(card);
 
   test('uses the canonical customer status components, no second mapping', () => {
-    assert.ok(code.includes('<StatusPill status={order.status} />'));
-    assert.ok(code.includes('<StageProgress status={order.status} variant="labelled" />'));
+    // Brand B2: the brand look on white cards (same components, same mapping).
+    assert.ok(code.includes('<StatusPill status={order.status} tone="brand" />'));
+    assert.ok(code.includes('<StageProgress status={order.status} variant="labelled" tone="brand" />'));
     assert.ok(!/getOrderStatusPresentation|'FAILED_DELIVERY'|'RESCHEDULED'|'CANCELLED'/.test(code));
   });
 

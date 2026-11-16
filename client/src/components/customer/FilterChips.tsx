@@ -15,8 +15,9 @@ export interface FilterChipsProps<T extends string> {
 }
 
 /**
- * Single-select filter chips (handoff §2). Each chip is a toggle button with
- * `aria-pressed`; the selected state is also shown by weight + fill.
+ * Single-select filter chips (handoff §2; brand look §4.4 — active `sd-ink`).
+ * Each chip is a toggle button with `aria-pressed`; the selected state is also
+ * shown by weight + fill.
  */
 export function FilterChips<T extends string>({
   options,
@@ -36,10 +37,10 @@ export function FilterChips<T extends string>({
             aria-pressed={on}
             onClick={() => onChange(option.value)}
             className={cn(
-              'inline-flex h-[34px] items-center whitespace-nowrap rounded-full border px-3.5 text-[0.8125rem] transition-colors',
+              'sd-press inline-flex h-[34px] items-center whitespace-nowrap rounded-[8px] border px-3.5 text-[0.8125rem]',
               on
-                ? 'border-ink bg-ink font-semibold text-white'
-                : 'border-line bg-card font-medium text-ink-secondary hover:border-line-strong hover:text-ink',
+                ? 'border-sd-ink bg-sd-ink font-semibold text-white'
+                : 'border-sd-line bg-card font-medium text-sd-text-2 hover:border-sd-ink hover:text-sd-ink',
             )}
           >
             {option.label}

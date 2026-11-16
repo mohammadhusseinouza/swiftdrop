@@ -24,6 +24,12 @@ export interface UserMenuProps {
   subtitle?: string | null;
   /** Optional avatar size + text-size classes; replaces `size-8 text-xs`. */
   avatarClassName?: string;
+  /**
+   * Trigger colours. `light` (default) renders exactly as before for every
+   * portal; `dark` is for the Customer brand hero band (brand theme §3.1).
+   * The menu itself, its behaviour and its errors are identical.
+   */
+  tone?: 'light' | 'dark';
 }
 
 export function UserMenu({
@@ -35,7 +41,9 @@ export function UserMenu({
   signOutError = null,
   subtitle = null,
   avatarClassName,
+  tone = 'light',
 }: UserMenuProps) {
+  const dark = tone === 'dark';
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -76,11 +84,17 @@ export function UserMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={menuId}
-        className="flex items-center gap-2 rounded-control py-1 pr-1.5 pl-1 text-sm hover:bg-neutral-50"
+        className={
+          dark
+            ? 'sd-press flex items-center gap-2 rounded-control py-1 pr-1.5 pl-1 text-sm hover:bg-white/8'
+            : 'flex items-center gap-2 rounded-control py-1 pr-1.5 pl-1 text-sm hover:bg-neutral-50'
+        }
       >
         <span
           className={cn(
-            'flex items-center justify-center rounded-full bg-brand-50 font-semibold text-brand-700',
+            dark
+              ? 'flex items-center justify-center rounded-full bg-sd-charcoal-raised font-semibold text-white'
+              : 'flex items-center justify-center rounded-full bg-brand-50 font-semibold text-brand-700',
             // Replaces the default size/text classes (cn is clsx — no merge).
             avatarClassName ?? 'size-8 text-xs',
           )}
@@ -90,15 +104,15 @@ export function UserMenu({
         </span>
         {subtitle ? (
           <span className="hidden min-w-0 max-w-[12rem] text-left leading-tight sm:block">
-            <span className="block truncate font-semibold text-ink">{name}</span>
-            <span className="block truncate text-xs text-ink-muted">{subtitle}</span>
+            <span className={dark ? 'block truncate font-semibold text-white' : 'block truncate font-semibold text-ink'}>{name}</span>
+            <span className={dark ? 'block truncate text-xs text-sd-on-dark' : 'block truncate text-xs text-ink-muted'}>{subtitle}</span>
           </span>
         ) : (
-          <span className="hidden max-w-[10rem] truncate font-medium text-ink sm:block">
+          <span className={dark ? 'hidden max-w-[10rem] truncate font-medium text-white sm:block' : 'hidden max-w-[10rem] truncate font-medium text-ink sm:block'}>
             {name}
           </span>
         )}
-        <ChevronDown className="size-4 text-ink-subtle" aria-hidden="true" />
+        <ChevronDown className={dark ? 'size-4 text-sd-on-dark' : 'size-4 text-ink-subtle'} aria-hidden="true" />
       </button>
 
       {open && (

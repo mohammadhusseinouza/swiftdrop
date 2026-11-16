@@ -10,7 +10,7 @@ import type { CustomerPayoutSummary } from '../../services/domain.types';
 import { LoadingState } from '../../components/feedback/LoadingState';
 import { EmptyState } from '../../components/feedback/EmptyState';
 import { ErrorState } from '../../components/feedback/ErrorState';
-import { Badge } from '../../components/ui/Badge';
+import { BrandBadge } from '../../components/customer/BrandBadge';
 import { CustomerPagination } from '../../components/customer/CustomerPagination';
 import {
   getPayoutStatusLabel,
@@ -50,7 +50,7 @@ export default function CustomerPayoutsPage() {
 
   return (
     <div className="flex flex-col gap-5">
-      <p className="-mt-2 text-sm text-ink-secondary">Payouts Spring Delivery has made to you.</p>
+      <p className="-mt-2 text-sm text-sd-text-2">Payouts Spring Delivery has made to you.</p>
 
       {query.isLoading ? (
         <StatePanel>
@@ -75,7 +75,7 @@ export default function CustomerPayoutsPage() {
         </StatePanel>
       ) : (
         <div className="flex flex-col gap-6">
-          <ul className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,340px),1fr))] gap-5">
+          <ul className="sd-stagger grid grid-cols-[repeat(auto-fill,minmax(min(100%,340px),1fr))] gap-5">
             {rows.map((payout) => (
               <li key={payout.id} className="min-w-0">
                 <PayoutCard payout={payout} />
@@ -89,6 +89,7 @@ export default function CustomerPayoutsPage() {
               total={meta.total}
               noun={meta.total === 1 ? 'payout' : 'payouts'}
               onPageChange={setPage}
+              tone="brand"
             />
           )}
         </div>
@@ -106,18 +107,18 @@ function PayoutCard({ payout }: { payout: CustomerPayoutSummary }) {
   return (
     <article
       aria-label={`Payout ${payout.payoutNumber}`}
-      className="flex h-full flex-col gap-4 rounded-[18px] border border-line bg-sunken p-5"
+      className="sd-lift flex h-full flex-col gap-4 rounded-[14px] border border-sd-line bg-sd-sunken p-5"
     >
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <p className="min-w-0 text-sm font-bold text-ink [overflow-wrap:anywhere]">{payout.payoutNumber}</p>
-        <Badge tone={getPayoutStatusTone(payout.status)} dot>
+        <p className="min-w-0 text-sm font-bold text-sd-ink [overflow-wrap:anywhere]">{payout.payoutNumber}</p>
+        <BrandBadge tone={getPayoutStatusTone(payout.status)} dot>
           {getPayoutStatusLabel(payout.status)}
-        </Badge>
+        </BrandBadge>
       </div>
-      <p className="text-[1.875rem] leading-none font-bold tracking-[-0.035em] tabular-nums text-ink">
+      <p className="font-sd-display text-[1.875rem] leading-none font-bold tabular-nums text-sd-ink">
         {formatMoney(payout.amount, { fallback: '$0.00' })}
       </p>
-      <p className="mt-auto text-[0.8125rem] text-ink-muted">
+      <p className="mt-auto text-[0.8125rem] text-sd-text-muted">
         {formatDate(payout.createdAt)} · {payout.paymentMethod.name}
       </p>
     </article>

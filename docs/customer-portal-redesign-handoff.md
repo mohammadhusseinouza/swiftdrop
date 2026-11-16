@@ -292,3 +292,69 @@ Data: unchanged `CustomerProfile`. Read-only.
 1. Tokens + font + `CustomerShell` + shared components (§1–2).
 2. Overview. 3. My Orders. 4. Order Detail. 5. Wallet / Transactions / Payouts. 6. Profile.
 7. Regression: existing customer-portal tests, typecheck, build, responsive check at 390 / 768 / 1280px.
+
+---
+
+## 8. Sign-in page — `/auth/login` (artboard "Sign in")
+
+Status: **design proposal, pending approval**. Frontend only:
+`client/src/pages/auth/LoginPage.tsx`, `client/src/layouts/AuthLayout.tsx`. No auth, API, token,
+redirect or validation change.
+
+This page is **shared by every role** (Management, Driver, Customer). Its copy must stay
+role-neutral, and nothing on it may reveal which accounts or roles exist.
+
+### 8.0 Decision needed
+
+| # | Decision | Options |
+|---|----------|---------|
+| D4 | **Font on the sign-in page.** D2-A scoped Plus Jakarta Sans to the Customer shell. The sign-in page sits outside every portal. | **A** apply `font-customer` on the `AuthLayout` root too (recommended: the sign-in page is the brand's front door and matches the canvas). **B** keep Inter on the sign-in page. |
+
+### 8.1 Layout
+
+`AuthLayout` becomes a full-height two-panel row: `flex min-h-screen flex-wrap bg-canvas`.
+
+| Panel | Size | Content |
+|---|---|---|
+| **Brand panel** (left) | `flex-[1_1_520px]`, `bg-chrome text-white`, `px-14 py-12`, `relative overflow-hidden` | Logo tile (40px, `rounded-[12px]`, `bg-brand-600`, white `Package` icon) + "Spring Delivery" 18/700. Middle: eyebrow "Delivery management" (`chrome-ink`), headline "Every parcel, accounted for." (48px, 700, `-0.04em`, leading 1.06, line break after the comma), lead "One sign-in for the whole team. Management, drivers and customers each land in their own portal." (16px, `chrome-ink`). Bottom: three label chips (`bg-white/7`, `rounded-full`, `h-[34px]`) Management (`LayoutDashboard`), Drivers (`Truck`), Customers (`User`). These are labels, not links. Decorative concentric rings at the bottom-right (four bordered circles, one in `brand-600` at 60% opacity), `aria-hidden`. Use `<section aria-label="Spring Delivery">` (its headline is an `h2`, so the form keeps the page's `h1`). |
+| **Form panel** (right) | `flex-[1_1_480px]`, centred, `px-6 py-12`; inner column `max-w-[400px] w-full` with `gap-7` | H1 "Welcome back" (34px, 700, `-0.035em`), lead "Sign in with the email and password your company gave you." (15px, `ink-secondary`). Form (below). Footer, separated by a `line` top border: "No account yet, or locked out? Contact your Spring Delivery administrator." (13px, `ink-muted`). Plain text, not a link. |
+
+**Phone (below `md`).** The brand panel stacks on top and is compact: `px-6 py-8`, logo row and
+headline at 32px only. Hide the lead and the role chips, keep the rings, and use no fixed
+min-height. The form follows directly beneath it. No horizontal scroll at 390px.
+
+`BootstrapLoading` / `BootstrapError` are not part of this step; leave them unchanged.
+
+### 8.2 Form
+
+Keep **all** current behaviour of `LoginPage.tsx`: `useLogin`, the `redirectTo` handling from
+`location.state.from`, `loginSchema` (React Hook Form + Zod, `mode: 'onTouched'`), the
+`toLoginErrorMessage` mapping (one generic "Invalid email or password." for unknown email, wrong
+password and inactive account), `noValidate`, and the loading state. Restyle only.
+
+| Element | Spec |
+|---|---|
+| Form-level error | Above the fields, `role="alert"`: `bg-danger-50 border border-danger-200 rounded-xl px-3.5 py-3 text-sm text-danger-700`, with a `CircleAlert` icon. The submit button keeps `aria-describedby` pointing to it. |
+| Labels | 14px, 600, `ink`, always visible (no placeholder-only labels). |
+| Email | `h-[50px] rounded-xl border border-line bg-card px-4 text-[15px]`; `type="email"`, `autoComplete="username"`, `autoCapitalize="none"`, `spellCheck={false}`, placeholder "you@company.com". |
+| Password | Same field style with `pr-[52px]`; `autoComplete="current-password"`. Show/hide button inside, at the right: 42×42, `rounded-[10px]`, `text-ink-muted`, `Eye` / `EyeOff`, `aria-label` "Show password" / "Hide password", `aria-pressed`. The password is never trimmed. |
+| Invalid field | Border `border-danger-700` (danger-200 is too faint for a 3:1 field boundary), `aria-invalid`, message under the field in 13px `text-danger-700`, linked with `aria-describedby` (the existing `FieldShell` / `fieldMessageId` behaviour). Messages stay exactly as in `login.schema.ts`. |
+| Focus | 2px `brand-600` outline with 1px offset on fields, the eye button and submit. |
+| Submit | Full width, `h-[52px] rounded-xl bg-ink text-white text-[15px] font-semibold`, label "Sign in" + `ArrowRight` icon. While submitting, use the existing `Button` `loading` state (spinner, disabled, label kept for screen readers). |
+
+### 8.3 Must not change
+
+- No "Forgot password", "Remember me", sign-up or social login. None of these exist in V1.
+- No role picker. The backend decides the portal; the brand-panel chips are decoration only.
+- Error wording stays generic: never hint whether an email exists or an account is inactive.
+- `GuestOnly` / `AuthBootstrapBoundary` routing and the `/auth` → `/auth/login` redirect stay
+  unchanged.
+
+### 8.4 Checks
+
+Client typecheck + build and all client tests (existing login / auth tests must pass unchanged).
+Add tests for: the show/hide toggle label and `aria-pressed`, the field error wiring, the
+form-error alert, and a guardrail that no forgot-password / sign-up / role-picker text exists.
+Run a headless visual check at 390 / 768 / 1280px covering the empty form, field-validation errors
+(submit empty) and the invalid-credentials alert, then sign in once with a dev test account to
+confirm the redirect still works.

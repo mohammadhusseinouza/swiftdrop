@@ -16,10 +16,29 @@ export function getGreeting(now: Date): string {
   return 'Good evening';
 }
 
+export interface OverviewTitleParts {
+  /** Plain part of the H1 — "Good evening," or the fallback "Welcome back.". */
+  title: string;
+  /** The first name rendered as the red italic highlight ("Nour."); null for the fallback. */
+  highlight: string | null;
+}
+
+/**
+ * Brand hero H1 (brand theme §4.1): "Good evening, *Nour.*" — the first name
+ * token is the highlight. Blank / missing name → "Welcome back." with no
+ * highlight.
+ */
+export function getOverviewTitleParts(customerName: string | null | undefined, now: Date): OverviewTitleParts {
+  const first = (customerName ?? '').trim().split(/\s+/)[0];
+  return first
+    ? { title: `${getGreeting(now)},`, highlight: `${first}.` }
+    : { title: 'Welcome back.', highlight: null };
+}
+
 /** "Good evening, Nour." from the customer name's first token; "Welcome back." when blank. */
 export function getOverviewTitle(customerName: string | null | undefined, now: Date): string {
-  const first = (customerName ?? '').trim().split(/\s+/)[0];
-  return first ? `${getGreeting(now)}, ${first}.` : 'Welcome back.';
+  const { title, highlight } = getOverviewTitleParts(customerName, now);
+  return highlight ? `${title} ${highlight}` : title;
 }
 
 /** Eyebrow date — weekday + day + month in the viewer's locale ("Friday, 6 November"). */

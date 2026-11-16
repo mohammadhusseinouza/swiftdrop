@@ -36,11 +36,15 @@ function toLoginErrorMessage(error: unknown): string {
   return 'Something went wrong while signing in. Please try again.';
 }
 
-const LABEL = 'text-sm font-semibold text-ink';
-/** Field style (handoff §8.2): 2px brand-600 focus outline with 1px offset; invalid border is danger-700. */
+const LABEL = 'text-sm font-semibold text-sd-ink';
+/**
+ * Field style (brand theme §6): 50 px, 10 px radius, 2px `sd-red` focus
+ * outline with 1px offset; the invalid border is `#B01A24` (`sd-red-hover`).
+ */
 const INPUT =
-  'h-[50px] w-full rounded-xl border bg-card text-[0.9375rem] text-ink placeholder:text-ink-muted ' +
-  'focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand-600 disabled:opacity-50';
+  'h-[50px] w-full rounded-[10px] border bg-card text-[0.9375rem] text-sd-ink placeholder:text-sd-text-muted ' +
+  'focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-sd-red disabled:opacity-50';
+const FOCUS = 'focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-sd-red';
 
 export default function LoginPage() {
   const { login, isLoading } = useLogin();
@@ -83,8 +87,10 @@ export default function LoginPage() {
   return (
     <div className="flex w-full max-w-[400px] flex-col gap-7">
       <div>
-        <h1 className="text-[2.125rem] leading-[1.1] font-bold tracking-[-0.035em] text-ink">Welcome back</h1>
-        <p className="mt-2 text-[0.9375rem] text-ink-secondary">
+        <h1 className="font-sd-display text-[2.25rem] leading-[1.05] font-bold tracking-[-0.02em] text-sd-ink">
+          Welcome back
+        </h1>
+        <p className="mt-2 text-[0.9375rem] text-sd-text-2">
           Sign in with the email and password your company gave you.
         </p>
       </div>
@@ -94,7 +100,7 @@ export default function LoginPage() {
           <div
             id={formErrorId}
             role="alert"
-            className="flex items-start gap-2.5 rounded-xl border border-danger-200 bg-danger-50 px-3.5 py-3 text-sm text-danger-700"
+            className="flex items-start gap-2.5 rounded-[10px] border border-[#F6D3D5] bg-[#FDF0F0] px-3.5 py-3 text-sm text-sd-red-hover"
           >
             <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
             {formError}
@@ -117,7 +123,7 @@ export default function LoginPage() {
             placeholder="you@company.com"
             aria-invalid={errors.email ? true : undefined}
             aria-describedby={errors.email ? fieldMessageId(emailId) : undefined}
-            className={cn(INPUT, 'px-4', errors.email ? 'border-danger-700' : 'border-line')}
+            className={cn(INPUT, 'px-4', errors.email ? 'border-sd-red-hover' : 'border-sd-line')}
             {...register('email')}
           />
         </FieldShell>
@@ -136,7 +142,7 @@ export default function LoginPage() {
               autoComplete="current-password"
               aria-invalid={errors.password ? true : undefined}
               aria-describedby={errors.password ? fieldMessageId(pwId) : undefined}
-              className={cn(INPUT, 'pr-[52px] pl-4', errors.password ? 'border-danger-700' : 'border-line')}
+              className={cn(INPUT, 'pr-[52px] pl-4', errors.password ? 'border-sd-red-hover' : 'border-sd-line')}
               {...register('password')}
             />
             <button
@@ -144,7 +150,10 @@ export default function LoginPage() {
               onClick={() => setShowPassword((v) => !v)}
               aria-label={showPassword ? 'Hide password' : 'Show password'}
               aria-pressed={showPassword}
-              className="absolute top-1/2 right-1 flex size-[42px] -translate-y-1/2 items-center justify-center rounded-[10px] text-ink-muted hover:bg-sunken hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand-600"
+              className={cn(
+                'absolute top-1/2 right-1 flex size-[42px] -translate-y-1/2 items-center justify-center rounded-[8px] text-sd-text-muted hover:bg-sd-sunken hover:text-sd-ink',
+                FOCUS,
+              )}
             >
               {showPassword ? (
                 <EyeOff className="size-[18px]" aria-hidden="true" />
@@ -157,9 +166,9 @@ export default function LoginPage() {
 
         <Button
           type="submit"
-          variant="ink"
-          size="lg"
-          className="mt-1 w-full focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand-600"
+          variant="brand"
+          size="brand"
+          className={cn('sd-press mt-1 w-full', FOCUS)}
           loading={isLoading || isSubmitting}
           aria-describedby={formError ? formErrorId : undefined}
         >
@@ -168,7 +177,7 @@ export default function LoginPage() {
         </Button>
       </form>
 
-      <p className="border-t border-line pt-6 text-[0.8125rem] text-ink-muted">
+      <p className="border-t border-sd-line pt-6 text-[0.8125rem] text-sd-text-muted">
         No account yet, or locked out? Contact your Spring Delivery administrator.
       </p>
     </div>

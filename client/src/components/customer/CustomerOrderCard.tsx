@@ -13,7 +13,8 @@ import { formatDate, formatMoney } from '../../lib/format';
 import type { CustomerOrderSummary } from '../../services/domain.types';
 
 /**
- * One Customer "My Orders" card (Customer Portal Redesign Step 3, handoff §3.2).
+ * One Customer "My Orders" card (Customer Portal Redesign Step 3, handoff §3.2;
+ * brand look per docs/brand-theme/brand-theme-handoff.md §4.2).
  *
  * READ-ONLY. "View order" links to Customer Order Detail for every owned
  * order. Status wording + stage come from the canonical customer-safe mapping
@@ -28,35 +29,35 @@ export function CustomerOrderCard({ order }: { order: CustomerOrderSummary }) {
 
   return (
     <article
-      className="flex h-full flex-col gap-5 rounded-panel border border-line bg-card p-5 sm:p-6"
+      className="sd-lift flex h-full flex-col gap-5 rounded-2xl border border-sd-line bg-card p-5 shadow-sd-card sm:p-6"
       aria-label={`Order ${order.orderNumber}`}
     >
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
         <div className="min-w-0 flex-[1_1_200px]">
-          <h2 className="truncate text-lg font-bold tracking-[-0.02em] text-ink">{order.receiverName}</h2>
+          <h2 className="truncate font-sd-display text-xl leading-tight font-bold text-sd-ink">{order.receiverName}</h2>
           {/* Wraps between the two parts first; a single over-long code may still break. */}
-          <p className="mt-0.5 text-[0.8125rem] text-ink-muted [overflow-wrap:anywhere]">
+          <p className="mt-0.5 text-[0.8125rem] text-sd-text-muted [overflow-wrap:anywhere]">
             <span className="inline-block max-w-full">{order.orderNumber} ·</span>{' '}
             <span className="inline-block max-w-full">Tracking {order.trackingCode}</span>
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-1.5">
-          <span className="inline-flex h-[26px] items-center whitespace-nowrap rounded-full bg-canvas px-2.5 text-xs font-semibold text-ink-secondary">
+          <span className="inline-flex h-[26px] items-center whitespace-nowrap rounded-[6px] bg-sd-line-subtle px-2.5 text-xs font-semibold text-sd-text-2">
             {getOrderTypeLabel(order.orderType)}
           </span>
-          <StatusPill status={order.status} />
+          <StatusPill status={order.status} tone="brand" />
         </div>
       </div>
 
-      <StageProgress status={order.status} variant="labelled" />
+      <StageProgress status={order.status} variant="labelled" tone="brand" />
 
-      <dl className="grid grid-cols-3 divide-x divide-line rounded-[14px] bg-sunken py-3.5">
+      <dl className="grid grid-cols-3 divide-x divide-sd-line rounded-[10px] bg-sd-sunken py-3.5">
         <AmountCell label="Order amount" value={formatMoney(order.orderAmount)} />
         <AmountCell label="Delivery fee" value={formatMoney(order.deliveryFee)} />
         <AmountCell label="To collect" value={formatMoney(order.amountToCollect)} strong />
       </dl>
 
-      <div className="mt-auto flex flex-wrap items-center gap-x-4 gap-y-2.5 border-t border-line-subtle pt-4 text-[0.8125rem] text-ink-muted">
+      <div className="mt-auto flex flex-wrap items-center gap-x-4 gap-y-2.5 border-t border-sd-line-subtle pt-4 text-[0.8125rem] text-sd-text-muted">
         <span className="inline-flex min-w-0 items-center gap-1.5">
           <MapPin className="size-3.5 shrink-0" aria-hidden="true" />
           <span className="sr-only">Area:</span>
@@ -81,7 +82,7 @@ export function CustomerOrderCard({ order }: { order: CustomerOrderSummary }) {
         )}
         <Link
           to={paths.customer.orderDetail(order.id)}
-          className="ml-auto inline-flex h-9 shrink-0 items-center gap-1 rounded-control border border-line bg-card px-3.5 text-[0.8125rem] font-semibold text-ink transition-colors hover:border-line-strong"
+          className="sd-press ml-auto inline-flex h-9 shrink-0 items-center gap-1 rounded-[8px] border border-sd-line bg-card px-3.5 text-[0.8125rem] font-semibold text-sd-ink hover:border-sd-red hover:text-sd-red-text"
           aria-label={`View order ${order.orderNumber}`}
         >
           View order
@@ -95,12 +96,12 @@ export function CustomerOrderCard({ order }: { order: CustomerOrderSummary }) {
 function AmountCell({ label, value, strong = false }: { label: string; value: string; strong?: boolean }) {
   return (
     <div className="min-w-0 px-3 sm:px-4">
-      <dt className="truncate text-xs text-ink-muted">{label}</dt>
+      <dt className="truncate text-xs text-sd-text-muted">{label}</dt>
       <dd
         className={
           strong
-            ? 'mt-1 truncate text-[0.9375rem] font-bold tabular-nums text-ink'
-            : 'mt-1 truncate text-[0.9375rem] font-semibold tabular-nums text-ink-secondary'
+            ? 'mt-1 truncate font-sd-display text-base font-bold tabular-nums text-sd-red-text'
+            : 'mt-1 truncate font-sd-display text-base font-semibold tabular-nums text-sd-text-2'
         }
       >
         {value}

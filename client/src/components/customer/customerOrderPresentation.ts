@@ -66,3 +66,15 @@ export function getCustomerOrderTabCounts({
     delivered: summary ? summary.deliveredOrders : null,
   };
 }
+
+/**
+ * My Orders hero lead (brand theme §4.2): "{active} on the way · {delivered}
+ * delivered" from the server dashboard counts. `null` (line omitted) while the
+ * summary is not loaded or failed — never computed from the current page.
+ */
+export function getCustomerOrdersHeroLead(
+  summary: { activeOrders: number; deliveredOrders: number } | undefined,
+): string | null {
+  if (!summary) return null;
+  return `${summary.activeOrders} on the way · ${summary.deliveredOrders} delivered`;
+}

@@ -7,6 +7,38 @@ const SEGMENT = 'inline-flex h-10 shrink-0 items-center gap-2 whitespace-nowrap 
 const SEGMENT_ON = 'bg-card font-semibold text-ink shadow-[0_1px_2px_rgba(15,20,34,.08),0_0_0_1px_rgba(15,20,34,.04)]';
 const SEGMENT_OFF = 'font-medium text-ink-secondary hover:text-ink';
 
+/*
+ * `tone="dark"` (brand theme §3.3): the same control on the charcoal hero band.
+ * Extends the light look above, which stays exactly as it was.
+ */
+const DARK_TRACK = 'inline-flex max-w-full gap-1 overflow-x-auto rounded-[10px] bg-white/8 p-1';
+const DARK_SEGMENT = 'sd-press inline-flex h-10 shrink-0 items-center gap-2 whitespace-nowrap rounded-[7px] px-4 text-sm';
+const DARK_SEGMENT_ON = 'bg-sd-red font-semibold text-white';
+const DARK_SEGMENT_OFF = 'font-medium text-sd-on-dark hover:bg-white/8 hover:text-white';
+
+/*
+ * `tone="brand"` (brand theme §4.4): the light track on a white card with the
+ * active segment in `sd-red` — e.g. the Wallet history tabs.
+ */
+const BRAND_TRACK = 'inline-flex max-w-full gap-1 overflow-x-auto rounded-[10px] bg-sd-line-subtle p-1';
+const BRAND_SEGMENT = 'sd-press inline-flex h-10 shrink-0 items-center gap-2 whitespace-nowrap rounded-[7px] px-4 text-sm';
+const BRAND_SEGMENT_ON = 'bg-sd-red font-semibold text-white';
+const BRAND_SEGMENT_OFF = 'font-medium text-sd-text-2 hover:bg-white hover:text-sd-ink';
+
+export type SegmentedTone = 'light' | 'dark' | 'brand';
+
+const LOOK = {
+  light: { track: TRACK, segment: SEGMENT, on: SEGMENT_ON, off: SEGMENT_OFF },
+  dark: { track: DARK_TRACK, segment: DARK_SEGMENT, on: DARK_SEGMENT_ON, off: DARK_SEGMENT_OFF },
+  brand: { track: BRAND_TRACK, segment: BRAND_SEGMENT, on: BRAND_SEGMENT_ON, off: BRAND_SEGMENT_OFF },
+} as const;
+
+const COUNT_TONE = {
+  light: { on: 'bg-ink text-white', off: 'bg-line-strong text-ink-secondary' },
+  dark: { on: 'bg-black/22 text-white', off: 'bg-white/12 text-sd-on-dark-strong' },
+  brand: { on: 'bg-black/22 text-white', off: 'bg-sd-line text-sd-text-2' },
+} as const;
+
 export interface SegmentedTabItem<T extends string> {
   value: T;
   label: string;
@@ -25,6 +57,8 @@ export interface SegmentedTabsProps<T extends string> {
   label: string;
   /** Optional id of the tab panel the tabs control. */
   panelId?: string;
+  /** `light` (default) or `dark` for the charcoal hero band. */
+  tone?: SegmentedTone;
   className?: string;
 }
 
@@ -38,8 +72,10 @@ export function SegmentedTabs<T extends string>({
   onChange,
   label,
   panelId,
+  tone = 'light',
   className,
 }: SegmentedTabsProps<T>) {
+  const look = LOOK[tone];
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
 
   const focusAndSelect = (index: number) => {
@@ -63,7 +99,7 @@ export function SegmentedTabs<T extends string>({
     <div
       role="tablist"
       aria-label={label}
-      className={cn(TRACK, className)}
+      className={cn(look.track, className)}
     >
       {items.map((item, index) => {
         const selected = item.value === value;
@@ -80,14 +116,14 @@ export function SegmentedTabs<T extends string>({
             tabIndex={selected ? 0 : -1}
             onClick={() => onChange(item.value)}
             onKeyDown={(e) => onKeyDown(e, index)}
-            className={cn(SEGMENT, selected ? SEGMENT_ON : SEGMENT_OFF)}
+            className={cn(look.segment, selected ? look.on : look.off)}
           >
             {item.label}
             {item.count != null && (
               <span
                 className={cn(
                   'inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[0.6875rem] font-bold tabular-nums',
-                  selected ? 'bg-ink text-white' : 'bg-line-strong text-ink-secondary',
+                  selected ? COUNT_TONE[tone].on : COUNT_TONE[tone].off,
                 )}
               >
                 {item.count}
@@ -116,21 +152,25 @@ export interface SegmentedLinkItem {
 export function SegmentedLinkTabs({
   items,
   label,
+  tone = 'light',
   className,
 }: {
   items: readonly SegmentedLinkItem[];
   /** Accessible name of the nav landmark. */
   label: string;
+  /** `light` (default), `dark` for the charcoal hero band, `brand` on a white card. */
+  tone?: SegmentedTone;
   className?: string;
 }) {
+  const look = LOOK[tone];
   return (
-    <nav aria-label={label} className={cn(TRACK, className)}>
+    <nav aria-label={label} className={cn(look.track, className)}>
       {items.map((item) => (
         <Link
           key={item.to}
           to={item.to}
           aria-current={item.current ? 'page' : undefined}
-          className={cn(SEGMENT, item.current ? SEGMENT_ON : SEGMENT_OFF)}
+          className={cn(look.segment, item.current ? look.on : look.off)}
         >
           {item.label}
         </Link>

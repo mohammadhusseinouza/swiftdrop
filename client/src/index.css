@@ -89,6 +89,40 @@
   --shadow-card: 0 1px 3px rgba(16, 19, 25, 0.06), 0 1px 2px rgba(16, 19, 25, 0.04);
   --shadow-raised: 0 8px 24px rgba(16, 19, 25, 0.1);
   --shadow-overlay: 0 16px 40px rgba(16, 19, 25, 0.18);
+
+  /*
+   * Brand theme (docs/brand-theme/brand-theme-handoff.md §1.1, decision B-D2 A).
+   * ADDITIVE ONLY: used by Customer / auth code. The cobalt brand-* tokens
+   * above stay untouched so Management and Driver look exactly as before.
+   */
+  --font-sd-display: 'Saira', 'Inter Variable', system-ui, sans-serif;
+  --font-sd-body:
+    'Inter Variable', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica,
+    Arial, sans-serif;
+
+  --color-sd-red: #d11f2a;
+  --color-sd-red-hover: #b01a24;
+  --color-sd-red-text: #c41c26;
+  --color-sd-red-logo: #ef313f; /* decoration only — never small text on white */
+  --color-sd-red-50: #fdeeef;
+  --color-sd-red-on: #ffe4e6;
+  --color-sd-ink: #0e0f12;
+  --color-sd-charcoal: #121418;
+  --color-sd-charcoal-raised: #262a31;
+  --color-sd-on-dark: #b4bac2;
+  --color-sd-on-dark-strong: #e4e7eb;
+  --color-sd-steel: #46535f;
+  --color-sd-steel-light: #cfd8dc;
+  --color-sd-page: #f4f5f7;
+  --color-sd-line: #e6e8eb;
+  --color-sd-line-subtle: #f0f1f3;
+  --color-sd-sunken: #f7f8f9;
+  --color-sd-text-2: #4a5059;
+  --color-sd-text-muted: #5a6069;
+
+  --shadow-sd-card: 0 8px 24px rgba(14, 15, 18, 0.06);
+  --shadow-sd-red: 0 14px 30px rgba(209, 31, 42, 0.25);
+  --shadow-sd-lift: 0 16px 32px rgba(14, 15, 18, 0.1);
 }
 
 :root {
@@ -114,4 +148,181 @@ body {
   outline: 2px solid var(--color-brand-600);
   outline-offset: 2px;
   border-radius: 4px;
+}
+
+/*
+ * Brand theme: keyboard focus on the charcoal hero band. The default cobalt
+ * outline is too faint on #121418, so anything inside `.sd-on-dark` uses a
+ * light outline instead (scoped — no other surface changes).
+ */
+.sd-on-dark :where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline-color: var(--color-sd-on-dark-strong);
+}
+
+/*
+ * Brand theme: sign-in form focus is a 2px `sd-red` outline with a 1px offset
+ * (handoff §6). The unlayered global rule above would otherwise override the
+ * form's focus utilities and square its 10px corners; `revert-layer` hands the
+ * radius back to the element's own utility. Scoped to `.sd-focus-red` (the
+ * sign-in form area) — no other surface changes.
+ */
+.sd-focus-red :where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline-color: var(--color-sd-red);
+  outline-offset: 1px;
+  border-radius: revert-layer;
+}
+
+/*
+ * Brand theme motion (handoff §5). CSS keyframes + transitions only, on
+ * transform / opacity. Every class below is switched off under
+ * prefers-reduced-motion at the end of this block — a new motion class MUST be
+ * added to that list too (tests/brandThemeFoundation.test.ts checks it).
+ */
+@keyframes sd-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes sd-grow {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes sd-pulse {
+  from {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(3);
+  }
+}
+
+@keyframes sd-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes sd-speed {
+  from {
+    opacity: 0;
+    transform: translateX(60px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@layer components {
+  /* Stagger fade-up: one element. Set --sd-i (0, 1, 2…) for its position. */
+  .sd-rise {
+    animation: sd-rise 0.7s cubic-bezier(0.22, 0.8, 0.24, 1) both;
+    animation-delay: min(calc(var(--sd-i, 0) * 60ms), 360ms);
+  }
+
+  /* Stagger fade-up: every direct child, 60 ms apart, capped at 360 ms. */
+  .sd-stagger > * {
+    animation: sd-rise 0.7s cubic-bezier(0.22, 0.8, 0.24, 1) both;
+  }
+  .sd-stagger > :nth-child(2) { animation-delay: 60ms; }
+  .sd-stagger > :nth-child(3) { animation-delay: 120ms; }
+  .sd-stagger > :nth-child(4) { animation-delay: 180ms; }
+  .sd-stagger > :nth-child(5) { animation-delay: 240ms; }
+  .sd-stagger > :nth-child(6) { animation-delay: 300ms; }
+  .sd-stagger > :nth-child(n + 7) { animation-delay: 360ms; }
+
+  /* Bars grow from the left. */
+  .sd-grow {
+    transform-origin: left center;
+    animation: sd-grow 1s cubic-bezier(0.22, 0.8, 0.24, 1) 0.35s both;
+  }
+
+  /* Live pulse: an expanding ring behind a dot (the dot keeps its colour). */
+  .sd-pulse {
+    position: relative;
+  }
+  .sd-pulse::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 9999px;
+    background: currentColor;
+    animation: sd-pulse 2s ease-out infinite;
+  }
+
+  /* Slowly turning orbit ring (60 s). */
+  .sd-orbit {
+    animation: sd-orbit 60s linear infinite;
+  }
+
+  /* Speed lines slide in from +60 px with a fade (delay set per line). */
+  .sd-speed-line {
+    animation: sd-speed 1.1s cubic-bezier(0.22, 0.8, 0.24, 1) both;
+  }
+
+  /* Hover: cards rise 3 px with a deeper shadow; press scales down. */
+  .sd-lift {
+    transition:
+      transform 0.2s ease,
+      box-shadow 0.2s ease;
+  }
+  .sd-lift:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--shadow-sd-lift);
+  }
+
+  /* List rows tint on hover. */
+  .sd-row {
+    transition: background-color 0.2s ease;
+  }
+  .sd-row:hover {
+    background-color: var(--color-sd-sunken);
+  }
+
+  /* Buttons / links: colour transition + press. */
+  .sd-press {
+    transition:
+      color 0.2s ease,
+      background-color 0.2s ease,
+      border-color 0.2s ease,
+      transform 0.2s ease;
+  }
+  .sd-press:active {
+    transform: scale(0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sd-rise,
+  .sd-stagger > *,
+  .sd-grow,
+  .sd-pulse::after,
+  .sd-orbit,
+  .sd-speed-line,
+  .sd-lift,
+  .sd-row,
+  .sd-press {
+    animation: none !important;
+    transition: none !important;
+  }
+  .sd-pulse::after {
+    content: none;
+  }
+  .sd-lift:hover,
+  .sd-press:active {
+    transform: none;
+  }
 }
